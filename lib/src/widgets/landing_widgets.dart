@@ -290,78 +290,88 @@ class CircularSensorGauge extends StatelessWidget {
       child: Semantics(
         label: '$title sensor, $value $unit, $status',
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
+          padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
             color: colors.surface,
             borderRadius: BorderRadius.circular(24),
             border: Border.all(color: colors.border),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+          child: Row(
             children: [
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final diameter = math.min(constraints.maxWidth, 118.0);
-                  return SizedBox(
-                    width: diameter,
-                    height: diameter,
-                    child: CustomPaint(
-                      painter: _SensorRingPainter(
-                        progress: progress.clamp(0.0, 1.0),
-                        color: ringColor,
-                        track: ringColor.withValues(alpha: 0.14),
-                      ),
-                      child: Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              value,
-                              maxLines: 1,
-                              style: TextStyle(
-                                color: colors.text,
-                                fontSize: diameter < 96 ? 18 : 22,
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: -0.4,
-                              ),
-                            ),
-                            Text(
-                              unit,
-                              style: TextStyle(
-                                color: colors.mutedText,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ],
+              SizedBox(
+                width: 88,
+                height: 88,
+                child: CustomPaint(
+                  painter: _SensorRingPainter(
+                    progress: progress.clamp(0.0, 1.0),
+                    color: ringColor,
+                    track: ringColor.withValues(alpha: 0.14),
+                  ),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          value,
+                          maxLines: 1,
+                          style: TextStyle(
+                            color: colors.text,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -0.4,
+                          ),
                         ),
-                      ),
+                        Text(
+                          unit,
+                          style: TextStyle(
+                            color: colors.mutedText,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
                     ),
-                  );
-                },
+                  ),
+                ),
               ),
-              const SizedBox(height: 10),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(icon, size: 14, color: colors.mutedText),
-                  const SizedBox(width: 5),
-                  Flexible(
-                    child: Text(
-                      title,
-                      maxLines: 1,
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(icon, size: 15, color: colors.mutedText),
+                        const SizedBox(width: 5),
+                        Expanded(
+                          child: Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: colors.mutedText,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        SensorLevelTag(level: level, compact: true),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      status,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: colors.mutedText,
                         fontSize: 12,
-                        fontWeight: FontWeight.w800,
+                        height: 1.35,
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-              const SizedBox(height: 8),
-              SensorLevelTag(level: level, compact: true),
             ],
           ),
         ),
