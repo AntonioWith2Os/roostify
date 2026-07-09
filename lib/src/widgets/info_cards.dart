@@ -188,7 +188,7 @@ class GuidelineCard extends StatelessWidget {
         children: [
           CircleAvatar(
             backgroundColor: colors.accentSurface,
-            foregroundColor: const Color(0xFFFF5B6E),
+            foregroundColor: _appAccent,
             child: Icon(item.icon),
           ),
           const SizedBox(width: 14),
@@ -231,7 +231,7 @@ class EmptyCard extends StatelessWidget {
         children: [
           const Icon(
             Icons.mark_chat_read_outlined,
-            color: Color(0xFFFF5B6E),
+            color: _appAccent,
             size: 34,
           ),
           const SizedBox(height: 12),
@@ -260,7 +260,7 @@ class ChatBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.appColors;
-    final bubbleColor = mine ? const Color(0xFFFF5B6E) : colors.surfaceRaised;
+    final bubbleColor = mine ? _appAccent : colors.surfaceRaised;
     final textColor = mine ? Colors.white : colors.text;
 
     return Align(
@@ -324,7 +324,7 @@ class ProfileInfoCard extends StatelessWidget {
         children: [
           CircleAvatar(
             backgroundColor: colors.accentSurface,
-            foregroundColor: const Color(0xFFFF5B6E),
+            foregroundColor: _appAccent,
             child: Icon(icon),
           ),
           const SizedBox(width: 14),
@@ -373,7 +373,7 @@ class ThemePreferenceCard extends StatelessWidget {
                 children: [
                   CircleAvatar(
                     backgroundColor: colors.accentSurface,
-                    foregroundColor: const Color(0xFFFF5B6E),
+                    foregroundColor: _appAccent,
                     child: const Icon(Icons.palette_outlined),
                   ),
                   const SizedBox(width: 14),

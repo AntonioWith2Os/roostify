@@ -19,7 +19,7 @@ extension SensorWarningLevelDetails on SensorWarningLevel {
     SensorWarningLevel.normal => const Color(0xFF26C281),
     SensorWarningLevel.caution => const Color(0xFFE6B452),
     SensorWarningLevel.warning => const Color(0xFFF08F3A),
-    SensorWarningLevel.danger => const Color(0xFFFF5B6E),
+    SensorWarningLevel.danger => _appAccent,
     SensorWarningLevel.critical => const Color(0xFFB92D49),
   };
 }

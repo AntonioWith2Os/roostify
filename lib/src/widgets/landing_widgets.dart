@@ -100,7 +100,7 @@ class AppPill extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 18, color: const Color(0xFFFF5B6E)),
+          Icon(icon, size: 18, color: _appAccent),
           const SizedBox(width: 8),
           Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
         ],
@@ -121,7 +121,7 @@ class _GlassCard extends StatelessWidget {
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: colors.surface,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(24),
         border: Border.all(color: colors.border),
       ),
       child: child,
@@ -148,59 +148,6 @@ class SectionHeader extends StatelessWidget {
         const SizedBox(height: 6),
         Text(subtitle, style: TextStyle(color: colors.mutedText, height: 1.5)),
       ],
-    );
-  }
-}
-
-class _HeroStatusCard extends StatelessWidget {
-  const _HeroStatusCard({required this.user});
-
-  final AppUser user;
-
-  @override
-  Widget build(BuildContext context) {
-    final alerts = user.monitor.alerts.length;
-    final colors = context.appColors;
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [colors.heroGradientStart, colors.heroGradientEnd],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: colors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Monitor the farm, evaluate rooster condition, and react to dangerous readings before they affect the flock.',
-            style: TextStyle(color: colors.mutedText, height: 1.5),
-          ),
-          const SizedBox(height: 18),
-          Row(
-            children: [
-              Expanded(
-                child: SummaryMiniCard(
-                  title: 'Connected CCTVs',
-                  value: '${user.cctvs.length}',
-                  dark: true,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: SummaryMiniCard(
-                  title: 'Alerts',
-                  value: '$alerts active',
-                  dark: true,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
     );
   }
 }
@@ -307,6 +254,167 @@ class Esp32SensorConnectionCard extends StatelessWidget {
         );
       },
     );
+  }
+}
+
+/// Circular ring gauge for one ESP32 reading, in the style of a fitness
+/// progress ring: colored arc for the reading, value in the middle, and the
+/// warning level underneath.
+class CircularSensorGauge extends StatelessWidget {
+  const CircularSensorGauge({
+    super.key,
+    required this.title,
+    required this.value,
+    required this.unit,
+    required this.progress,
+    required this.icon,
+    required this.status,
+    required this.level,
+  });
+
+  final String title;
+  final String value;
+  final String unit;
+  final double progress;
+  final IconData icon;
+  final String status;
+  final SensorWarningLevel level;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    final ringColor = level.color;
+
+    return Tooltip(
+      message: '$title: $value $unit - $status',
+      child: Semantics(
+        label: '$title sensor, $value $unit, $status',
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: colors.border),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final diameter = math.min(constraints.maxWidth, 118.0);
+                  return SizedBox(
+                    width: diameter,
+                    height: diameter,
+                    child: CustomPaint(
+                      painter: _SensorRingPainter(
+                        progress: progress.clamp(0.0, 1.0),
+                        color: ringColor,
+                        track: ringColor.withValues(alpha: 0.14),
+                      ),
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              value,
+                              maxLines: 1,
+                              style: TextStyle(
+                                color: colors.text,
+                                fontSize: diameter < 96 ? 18 : 22,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: -0.4,
+                              ),
+                            ),
+                            Text(
+                              unit,
+                              style: TextStyle(
+                                color: colors.mutedText,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 10),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(icon, size: 14, color: colors.mutedText),
+                  const SizedBox(width: 5),
+                  Flexible(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: colors.mutedText,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SensorLevelTag(level: level, compact: true),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SensorRingPainter extends CustomPainter {
+  const _SensorRingPainter({
+    required this.progress,
+    required this.color,
+    required this.track,
+  });
+
+  final double progress;
+  final Color color;
+  final Color track;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final strokeWidth = size.shortestSide * 0.105;
+    final rect = Offset.zero & size;
+    final arcRect = rect.deflate(strokeWidth / 2 + 1);
+
+    final trackPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..color = track;
+    canvas.drawArc(arcRect, 0, math.pi * 2, false, trackPaint);
+
+    if (progress <= 0) {
+      return;
+    }
+    final progressPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round
+      ..color = color;
+    canvas.drawArc(
+      arcRect,
+      -math.pi / 2,
+      math.pi * 2 * progress,
+      false,
+      progressPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _SensorRingPainter oldDelegate) {
+    return oldDelegate.progress != progress ||
+        oldDelegate.color != color ||
+        oldDelegate.track != track;
   }
 }
 

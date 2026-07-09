@@ -273,7 +273,7 @@ class _LoginPageState extends State<LoginPage> {
                   'Demo account',
                   style: TextStyle(
                     fontWeight: FontWeight.w800,
-                    color: Color(0xFFFF5B6E),
+                    color: _appAccent,
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -323,7 +323,7 @@ class _LoginPageState extends State<LoginPage> {
           const SizedBox(height: 22),
           FilledButton(
             style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFFFF5B6E),
+              backgroundColor: _appAccent,
               padding: const EdgeInsets.symmetric(vertical: 18),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(22),
@@ -477,7 +477,7 @@ class _SupportChatBubble extends StatelessWidget {
           heroTag: 'support-chat-bubble',
           tooltip: 'Chat admin',
           shape: const CircleBorder(),
-          backgroundColor: const Color(0xFFFF5B6E),
+          backgroundColor: _appAccent,
           foregroundColor: Colors.white,
           onPressed: () {
             Navigator.of(context).push(
@@ -551,95 +551,127 @@ class UserDashboardPage extends StatelessWidget {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-        children: [
-          _HeroStatusCard(user: user),
-          const SizedBox(height: 18),
-          const SectionHeader(
-            title: 'Real-Time Farm Environment',
-            subtitle:
-                'Temperature, humidity, and air pollution are checked continuously so the user can react quickly when conditions are unsafe.',
-          ),
-          const SizedBox(height: 12),
-          Esp32SensorConnectionCard(
-            controller: controller,
-            username: user.username,
-          ),
-          const SizedBox(height: 12),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              const sensorSpacing = 10.0;
-              final columns = constraints.maxWidth >= 720
-                  ? 3
-                  : constraints.maxWidth >= 460
-                  ? 2
-                  : 1;
-              final sensorWidth =
-                  (constraints.maxWidth - sensorSpacing * (columns - 1)) /
-                  columns;
-
-              Widget sensorTile({
-                required String title,
-                required String value,
-                required IconData icon,
-                required Color accent,
-                required String status,
-                required SensorWarningLevel level,
-              }) {
-                return SizedBox(
-                  width: sensorWidth,
-                  child: SensorCard(
-                    title: title,
-                    value: value,
-                    icon: icon,
-                    accent: accent,
-                    status: status,
-                    level: level,
-                  ),
-                );
-              }
-
-              return Wrap(
-                spacing: sensorSpacing,
-                runSpacing: sensorSpacing,
-                children: [
-                  sensorTile(
-                    title: 'Temperature',
-                    value: '${monitor.temperature.toStringAsFixed(1)} °C',
+      body: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Esp32SensorConnectionCard(
+              controller: controller,
+              username: user.username,
+            ),
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: CircularSensorGauge(
+                    title: 'Temp',
+                    value: monitor.temperature.toStringAsFixed(1),
+                    unit: '°C',
+                    progress: monitor.temperature / 45,
                     icon: Icons.thermostat_outlined,
-                    accent: const Color(0xFFE0673C),
                     status: monitor.temperatureStatus,
                     level: monitor.temperatureLevel,
                   ),
-                  sensorTile(
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: CircularSensorGauge(
                     title: 'Humidity',
-                    value: '${monitor.humidity.toStringAsFixed(0)}%',
+                    value: monitor.humidity.toStringAsFixed(0),
+                    unit: '%',
+                    progress: monitor.humidity / 100,
                     icon: Icons.water_drop_outlined,
-                    accent: const Color(0xFF4DA1FF),
                     status: monitor.humidityStatus,
                     level: monitor.humidityLevel,
                   ),
-                  sensorTile(
-                    title: 'Air Pollution',
-                    value: '${monitor.airPpm} ppm',
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: CircularSensorGauge(
+                    title: 'Air',
+                    value: '${monitor.airPpm}',
+                    unit: 'ppm',
+                    progress: monitor.airPpm / 50,
                     icon: Icons.air_outlined,
-                    accent: const Color(0xFFE6B452),
                     status: monitor.airStatus,
                     level: monitor.airLevel,
                   ),
-                ],
-              );
-            },
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Active Warnings',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                  ),
+                ),
+                SeverityTag(
+                  label: monitor.alerts.isEmpty
+                      ? 'ALL CLEAR'
+                      : '${monitor.alerts.length} ACTIVE',
+                  color: monitor.alerts.isEmpty
+                      ? const Color(0xFF26C281)
+                      : _appAccent,
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Expanded(
+              child: monitor.alerts.isEmpty
+                  ? const _AllClearCard()
+                  : ListView(
+                      padding: EdgeInsets.zero,
+                      children: [
+                        ...monitor.alerts.map(
+                          (alert) => AlertCard(alert: alert),
+                        ),
+                      ],
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AllClearCard extends StatelessWidget {
+  const _AllClearCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Container(
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(
+            Icons.verified_outlined,
+            color: Color(0xFF26C281),
+            size: 40,
           ),
-          const SizedBox(height: 22),
-          const SectionHeader(
-            title: 'Active Warnings',
-            subtitle:
-                'The system shows alerts when readings are not safe or healthy for the roosters.',
+          const SizedBox(height: 10),
+          const Text(
+            'Farm conditions look safe',
+            style: TextStyle(fontWeight: FontWeight.w900),
           ),
-          const SizedBox(height: 12),
-          ...monitor.alerts.map((alert) => AlertCard(alert: alert)),
+          const SizedBox(height: 4),
+          Text(
+            'Alerts will appear here when a reading becomes unsafe.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: colors.mutedText),
+          ),
         ],
       ),
     );
@@ -929,7 +961,7 @@ class _SupportChatPageState extends State<SupportChatPage> {
                       const SizedBox(width: 12),
                       FilledButton(
                         style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFFFF5B6E),
+                          backgroundColor: _appAccent,
                           padding: const EdgeInsets.symmetric(
                             horizontal: 18,
                             vertical: 18,
@@ -981,15 +1013,22 @@ class ProfilePage extends StatelessWidget {
           _GlassCard(
             child: Column(
               children: [
-                CircleAvatar(
-                  radius: 38,
-                  backgroundColor: colors.accentSurface,
-                  child: Icon(
-                    session.user.isAdmin
-                        ? Icons.admin_panel_settings_outlined
-                        : Icons.person_outline,
-                    color: const Color(0xFFFF5B6E),
-                    size: 36,
+                Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: _appAccent, width: 3),
+                  ),
+                  child: CircleAvatar(
+                    radius: 38,
+                    backgroundColor: colors.accentSurface,
+                    child: Icon(
+                      session.user.isAdmin
+                          ? Icons.admin_panel_settings_outlined
+                          : Icons.person_outline,
+                      color: _appAccent,
+                      size: 36,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 14),
@@ -998,6 +1037,7 @@ class ProfilePage extends StatelessWidget {
                   style: const TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.w900,
+                    letterSpacing: -0.3,
                   ),
                 ),
                 const SizedBox(height: 6),
@@ -1006,6 +1046,33 @@ class ProfilePage extends StatelessWidget {
                       ? 'Admin supervisor account'
                       : 'Backyard rooster farm user account',
                   style: TextStyle(color: colors.mutedText),
+                ),
+                const SizedBox(height: 18),
+                IntrinsicHeight(
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _ProfileStat(
+                          value: user.isAdmin ? 'Admin' : 'User',
+                          label: 'Role',
+                        ),
+                      ),
+                      VerticalDivider(color: colors.border, width: 1),
+                      Expanded(
+                        child: _ProfileStat(
+                          value: '${user.cctvs.length}',
+                          label: 'CCTVs',
+                        ),
+                      ),
+                      VerticalDivider(color: colors.border, width: 1),
+                      Expanded(
+                        child: _ProfileStat(
+                          value: '${user.monitor.alerts.length}',
+                          label: 'Alerts',
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -1036,7 +1103,7 @@ class ProfilePage extends StatelessWidget {
           ),
           ThemePreferenceCard(controller: controller),
           const SizedBox(height: 18),
-          OutlinedButton.icon(
+          FilledButton.icon(
             onPressed: () {
               controller.signOut();
               Navigator.of(context).pushAndRemoveUntil(
@@ -1051,6 +1118,35 @@ class ProfilePage extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ProfileStat extends StatelessWidget {
+  const _ProfileStat({required this.value, required this.label});
+
+  final String value;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Column(
+      children: [
+        Text(
+          value,
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          label,
+          style: TextStyle(
+            color: colors.mutedText,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1100,7 +1196,7 @@ class AdminOverviewPage extends StatelessWidget {
                     title: 'Registered Users',
                     value: '${controller.farmUsers.length}',
                     note: 'Active farm accounts',
-                    accent: const Color(0xFFFF5B6E),
+                    accent: _appAccent,
                   ),
                   SummaryPanel(
                     title: 'Camera Access Enabled',
@@ -1215,7 +1311,7 @@ class _AdminUsersPageState extends State<AdminUsersPage> {
                     const SizedBox(height: 14),
                     FilledButton(
                       style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFFFF5B6E),
+                        backgroundColor: _appAccent,
                       ),
                       onPressed: _addUser,
                       child: const Text('Create User'),
@@ -1395,7 +1491,7 @@ class _AdminThreadPageState extends State<AdminThreadPage> {
                       const SizedBox(width: 12),
                       FilledButton(
                         style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFFFF5B6E),
+                          backgroundColor: _appAccent,
                         ),
                         onPressed: () {
                           widget.controller.sendAdminSupportMessage(
