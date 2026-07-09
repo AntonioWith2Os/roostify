@@ -39,26 +39,19 @@ class OnDeviceYoloDetector {
   _YoloDetectionWorker? _worker;
   Future<_YoloDetectionWorker>? _loadingWorker;
 
+  // No main-isolate fallback: rerunning decode plus inference on the UI
+  // isolate freezes the app for the whole inference, which is worse than a
+  // dropped detection. Worker failures propagate to the capture-error handler.
   Future<CctvInspectionResult> inspectFrame(Uint8List frameBytes) async {
-    try {
-      final worker = await _workerForInference();
-      final detections = await worker.inspectFrame(frameBytes);
-      return CctvInspectionResult.fromDetections(detections);
-    } catch (_) {
-      final detections = await _inspectFrameDetections(frameBytes);
-      return CctvInspectionResult.fromDetections(detections);
-    }
+    final worker = await _workerForInference();
+    final detections = await worker.inspectFrame(frameBytes);
+    return CctvInspectionResult.fromDetections(detections);
   }
 
   Future<CctvInspectionResult> inspectCameraFrame(LiveCameraFrame frame) async {
-    try {
-      final worker = await _workerForInference();
-      final detections = await worker.inspectCameraFrame(frame);
-      return CctvInspectionResult.fromDetections(detections);
-    } catch (_) {
-      final detections = await _inspectCameraFrameDetections(frame);
-      return CctvInspectionResult.fromDetections(detections);
-    }
+    final worker = await _workerForInference();
+    final detections = await worker.inspectCameraFrame(frame);
+    return CctvInspectionResult.fromDetections(detections);
   }
 
   Future<_YoloDetectionWorker> _workerForInference() async {
@@ -315,11 +308,29 @@ class OnDeviceYoloDetector {
   }
 
   Future<tfl.Interpreter> _loadInterpreter() async {
-    final options = tfl.InterpreterOptions()..threads = _interpreterThreads;
-    final interpreter = await tfl.Interpreter.fromAsset(
-      _modelAsset,
-      options: options,
-    );
+    tfl.Interpreter interpreter;
+    try {
+      // XNNPACK speeds up float32 CPU inference several-fold, which shortens
+      // the window in which inference competes with video decode for cores.
+      final options = tfl.InterpreterOptions()
+        ..threads = _interpreterThreads
+        ..addDelegate(
+          tfl.XNNPackDelegate(
+            options: tfl.XNNPackDelegateOptions(
+              numThreads: _interpreterThreads,
+            ),
+          ),
+        );
+      interpreter = await tfl.Interpreter.fromAsset(
+        _modelAsset,
+        options: options,
+      );
+    } catch (_) {
+      interpreter = await tfl.Interpreter.fromAsset(
+        _modelAsset,
+        options: tfl.InterpreterOptions()..threads = _interpreterThreads,
+      );
+    }
     interpreter.allocateTensors();
     return interpreter;
   }
