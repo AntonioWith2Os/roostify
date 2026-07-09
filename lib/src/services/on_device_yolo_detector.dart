@@ -1,6 +1,12 @@
 part of '../../main.dart';
 
 class OnDeviceYoloDetector {
+  OnDeviceYoloDetector({
+    String modelAsset = _localYoloModelAsset,
+    int interpreterThreads = 2,
+  }) : _modelAsset = modelAsset,
+       _interpreterThreads = interpreterThreads;
+
   static const double _confidenceThreshold = 0.58;
   static const double _abnormalConfidenceThreshold = 0.48;
   static const double _abnormalPriorityRatio = 0.90;
@@ -22,13 +28,67 @@ class OnDeviceYoloDetector {
     HealthState.abnormal,
   ];
 
+  final String _modelAsset;
+  final int _interpreterThreads;
+
   tfl.Interpreter? _interpreter;
   Future<tfl.Interpreter>? _loadingInterpreter;
   _YoloModelMetadata? _modelMetadata;
   Float32List? _inputBuffer;
   Float32List? _outputBuffer;
+  _YoloDetectionWorker? _worker;
+  Future<_YoloDetectionWorker>? _loadingWorker;
 
   Future<CctvInspectionResult> inspectFrame(Uint8List frameBytes) async {
+    try {
+      final worker = await _workerForInference();
+      final detections = await worker.inspectFrame(frameBytes);
+      return CctvInspectionResult.fromDetections(detections);
+    } catch (_) {
+      final detections = await _inspectFrameDetections(frameBytes);
+      return CctvInspectionResult.fromDetections(detections);
+    }
+  }
+
+  Future<CctvInspectionResult> inspectCameraFrame(LiveCameraFrame frame) async {
+    try {
+      final worker = await _workerForInference();
+      final detections = await worker.inspectCameraFrame(frame);
+      return CctvInspectionResult.fromDetections(detections);
+    } catch (_) {
+      final detections = await _inspectCameraFrameDetections(frame);
+      return CctvInspectionResult.fromDetections(detections);
+    }
+  }
+
+  Future<_YoloDetectionWorker> _workerForInference() async {
+    final existing = _worker;
+    if (existing != null) {
+      return existing;
+    }
+
+    final loading = _loadingWorker;
+    if (loading != null) {
+      return loading;
+    }
+
+    final future = _YoloDetectionWorker.start(
+      modelAsset: _modelAsset,
+      threads: _interpreterThreads,
+    );
+    _loadingWorker = future;
+    try {
+      final worker = await future;
+      _worker = worker;
+      return worker;
+    } finally {
+      _loadingWorker = null;
+    }
+  }
+
+  Future<List<ChickenDetection>> _inspectFrameDetections(
+    Uint8List frameBytes,
+  ) async {
     final decodedFrame = img.decodeImage(frameBytes);
     if (decodedFrame == null) {
       throw const FormatException('The captured frame could not be decoded.');
@@ -37,20 +97,20 @@ class OnDeviceYoloDetector {
     return _inspectImage(img.bakeOrientation(decodedFrame));
   }
 
-  Future<CctvInspectionResult> inspectCameraFrame(LiveCameraFrame frame) async {
+  Future<List<ChickenDetection>> _inspectCameraFrameDetections(
+    LiveCameraFrame frame,
+  ) async {
     return _inspectImage(_imageFromCameraFrame(frame));
   }
 
-  Future<CctvInspectionResult> _inspectImage(img.Image frame) async {
+  Future<List<ChickenDetection>> _inspectImage(img.Image frame) async {
     final interpreter = await _interpreterForInference();
     final metadata = _metadataForInterpreter(interpreter);
     final preprocessed = _preprocessFrame(frame, metadata: metadata);
 
     final outputValues = _outputBufferForSize(metadata.outputElementCount);
     interpreter.run(preprocessed.input.buffer, outputValues.buffer);
-    final detections = _parseDetections(outputValues, metadata, preprocessed);
-
-    return CctvInspectionResult.fromDetections(detections);
+    return _parseDetections(outputValues, metadata, preprocessed);
   }
 
   img.Image _imageFromCameraFrame(LiveCameraFrame frame) {
@@ -255,9 +315,9 @@ class OnDeviceYoloDetector {
   }
 
   Future<tfl.Interpreter> _loadInterpreter() async {
-    final options = tfl.InterpreterOptions()..threads = 2;
+    final options = tfl.InterpreterOptions()..threads = _interpreterThreads;
     final interpreter = await tfl.Interpreter.fromAsset(
-      _localYoloModelAsset,
+      _modelAsset,
       options: options,
     );
     interpreter.allocateTensors();
@@ -624,7 +684,305 @@ class OnDeviceYoloDetector {
     _modelMetadata = null;
     _inputBuffer = null;
     _outputBuffer = null;
+    _worker?.close();
+    _worker = null;
+    _loadingWorker = null;
   }
+}
+
+void _yoloDetectionWorkerMain(Map<String, Object?> bootstrap) {
+  final replyPort = bootstrap['replyPort'] as SendPort;
+  final rootToken = bootstrap['rootToken'] as RootIsolateToken?;
+  if (rootToken == null) {
+    replyPort.send(<String, Object?>{
+      'type': 'startupError',
+      'message': 'Missing root isolate token for YOLO worker initialization.',
+    });
+    return;
+  }
+
+  BackgroundIsolateBinaryMessenger.ensureInitialized(rootToken);
+
+  final commandPort = ReceivePort();
+  replyPort.send(commandPort.sendPort);
+
+  final detector = OnDeviceYoloDetector(
+    modelAsset: bootstrap['modelAsset'] as String? ?? _localYoloModelAsset,
+    interpreterThreads: bootstrap['threads'] as int? ?? 2,
+  );
+  commandPort.listen((message) {
+    if (message is! Map<String, Object?>) {
+      return;
+    }
+
+    unawaited(() async {
+      final id = message['id'] as int?;
+      final command = message['command'] as String?;
+      if (id == null || command == null) {
+        return;
+      }
+
+      try {
+        final detections = switch (command) {
+          'inspectFrame' => await detector._inspectFrameDetections(
+            message['frameBytes'] as Uint8List,
+          ),
+          'inspectCameraFrame' => await detector._inspectCameraFrameDetections(
+            _liveCameraFrameFromMessage(
+              message['frame'] as Map<String, Object?>,
+            ),
+          ),
+          _ => throw StateError('Unsupported YOLO command: $command'),
+        };
+
+        replyPort.send(<String, Object?>{
+          'id': id,
+          'detections': _serializeDetections(detections),
+        });
+      } catch (error, stackTrace) {
+        replyPort.send(<String, Object?>{
+          'id': id,
+          'error': error.toString(),
+          'stackTrace': stackTrace.toString(),
+        });
+      }
+    }());
+  });
+}
+
+LiveCameraFrame _liveCameraFrameFromMessage(Map<String, Object?> message) {
+  final planeMessages = (message['planes'] as List?)
+          ?.whereType<Map<String, Object?>>()
+          .toList(growable: false) ??
+      const [];
+
+  return LiveCameraFrame(
+    width: message['width'] as int,
+    height: message['height'] as int,
+    formatGroup: ImageFormatGroup.values.firstWhere(
+      (value) => value.name == message['formatGroup'],
+      orElse: () => ImageFormatGroup.unknown,
+    ),
+    planes: planeMessages
+        .map(
+          (plane) => LiveCameraPlane(
+            bytes: plane['bytes'] as Uint8List,
+            bytesPerRow: plane['bytesPerRow'] as int,
+            bytesPerPixel: plane['bytesPerPixel'] as int?,
+            width: plane['width'] as int?,
+            height: plane['height'] as int?,
+          ),
+        )
+        .toList(growable: false),
+    rotationDegrees: message['rotationDegrees'] as int,
+  );
+}
+
+List<Map<String, Object?>> _serializeDetections(
+  List<ChickenDetection> detections,
+) {
+  return detections
+      .map(
+        (detection) => <String, Object?>{
+          'left': detection.box.left,
+          'top': detection.box.top,
+          'right': detection.box.right,
+          'bottom': detection.box.bottom,
+          'label': detection.label,
+          'confidence': detection.confidence,
+          'condition': detection.condition.name,
+        },
+      )
+      .toList(growable: false);
+}
+
+List<ChickenDetection> _deserializeDetections(
+  List<Map<String, Object?>> detectionMaps,
+) {
+  return detectionMaps
+      .map(
+        (detection) => ChickenDetection(
+          box: Rect.fromLTRB(
+            (detection['left'] as num).toDouble(),
+            (detection['top'] as num).toDouble(),
+            (detection['right'] as num).toDouble(),
+            (detection['bottom'] as num).toDouble(),
+          ),
+          label: detection['label']?.toString() ?? 'rooster',
+          confidence: (detection['confidence'] as num).toDouble(),
+          condition: _healthStateFromName(detection['condition']?.toString()),
+        ),
+      )
+      .toList(growable: false);
+}
+
+HealthState _healthStateFromName(String? value) {
+  if (value != null) {
+    for (final condition in HealthState.values) {
+      if (condition.name == value) {
+        return condition;
+      }
+    }
+  }
+
+  return HealthState.normal;
+}
+
+class _YoloDetectionWorker {
+  _YoloDetectionWorker._(
+    this._isolate,
+    this._replyPort,
+    this._subscription,
+    this._sendPort,
+  );
+
+  final Isolate _isolate;
+  final ReceivePort _replyPort;
+  final StreamSubscription<dynamic> _subscription;
+  final SendPort _sendPort;
+  final Map<int, Completer<List<ChickenDetection>>> _pending = {};
+  int _nextRequestId = 0;
+
+  static Future<_YoloDetectionWorker> start({
+    required String modelAsset,
+    required int threads,
+  }) async {
+    final replyPort = ReceivePort();
+    final sendPortCompleter = Completer<SendPort>();
+    late final _YoloDetectionWorker worker;
+
+    late final StreamSubscription<dynamic> subscription;
+    subscription = replyPort.listen((message) {
+      if (message is SendPort) {
+        if (!sendPortCompleter.isCompleted) {
+          sendPortCompleter.complete(message);
+        }
+        return;
+      }
+
+      if (message is Map<String, Object?> &&
+          message['type'] == 'startupError' &&
+          !sendPortCompleter.isCompleted) {
+        sendPortCompleter.completeError(
+          StateError(message['message']?.toString() ?? 'The YOLO worker failed to start.'),
+        );
+        return;
+      }
+
+      if (message is! Map<String, Object?>) {
+        return;
+      }
+
+      final requestId = message['id'] as int?;
+      if (requestId == null) {
+        return;
+      }
+
+      final completer = worker._pending.remove(requestId);
+      if (completer == null || completer.isCompleted) {
+        return;
+      }
+
+      final errorMessage = message['error']?.toString();
+      if (errorMessage != null) {
+        completer.completeError(StateError(errorMessage));
+        return;
+      }
+
+      final detectionsData = (message['detections'] as List?)
+              ?.whereType<Map<String, Object?>>()
+              .toList(growable: false) ??
+          const [];
+      completer.complete(_deserializeDetections(detectionsData));
+    });
+
+    final isolate = await Isolate.spawn(
+      _yoloDetectionWorkerMain,
+      <String, Object?>{
+        'replyPort': replyPort.sendPort,
+        'rootToken': RootIsolateToken.instance,
+        'modelAsset': modelAsset,
+        'threads': threads,
+      },
+      errorsAreFatal: true,
+    );
+
+    final sendPort = await sendPortCompleter.future;
+    worker = _YoloDetectionWorker._(
+      isolate,
+      replyPort,
+      subscription,
+      sendPort,
+    );
+    return worker;
+  }
+
+  Future<List<ChickenDetection>> inspectFrame(Uint8List frameBytes) {
+    return _sendRequest(
+      'inspectFrame',
+      <String, Object?>{'frameBytes': frameBytes},
+    );
+  }
+
+  Future<List<ChickenDetection>> inspectCameraFrame(LiveCameraFrame frame) {
+    return _sendRequest(
+      'inspectCameraFrame',
+      <String, Object?>{'frame': _liveCameraFrameToMessage(frame)},
+    );
+  }
+
+  Future<List<ChickenDetection>> _sendRequest(
+    String command,
+    Map<String, Object?> payload,
+  ) {
+    final requestId = _nextRequestId += 1;
+    final completer = Completer<List<ChickenDetection>>();
+    _pending[requestId] = completer;
+    _sendPort.send(<String, Object?>{
+      'id': requestId,
+      'command': command,
+      ...payload,
+    });
+
+    return completer.future.whenComplete(() {
+      _pending.remove(requestId);
+    });
+  }
+
+  void close() {
+    for (final completer in _pending.values) {
+      if (!completer.isCompleted) {
+        completer.completeError(
+          StateError('The YOLO worker was closed before the request finished.'),
+        );
+      }
+    }
+
+    _pending.clear();
+    unawaited(_subscription.cancel());
+    _replyPort.close();
+    _isolate.kill(priority: Isolate.immediate);
+  }
+}
+
+Map<String, Object?> _liveCameraFrameToMessage(LiveCameraFrame frame) {
+  return <String, Object?>{
+    'width': frame.width,
+    'height': frame.height,
+    'formatGroup': frame.formatGroup.name,
+    'rotationDegrees': frame.rotationDegrees,
+    'planes': frame.planes
+        .map(
+          (plane) => <String, Object?>{
+            'bytes': plane.bytes,
+            'bytesPerRow': plane.bytesPerRow,
+            'bytesPerPixel': plane.bytesPerPixel,
+            'width': plane.width,
+            'height': plane.height,
+          },
+        )
+        .toList(growable: false),
+  };
 }
 
 class _YoloModelMetadata {
