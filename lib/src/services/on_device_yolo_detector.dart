@@ -3,9 +3,9 @@ part of '../../main.dart';
 class OnDeviceYoloDetector {
   OnDeviceYoloDetector({
     String modelAsset = _localYoloModelAsset,
-    int interpreterThreads = 2,
+    int? interpreterThreads,
   }) : _modelAsset = modelAsset,
-       _interpreterThreads = interpreterThreads;
+       _interpreterThreads = interpreterThreads ?? _defaultInterpreterThreads();
 
   static const double _confidenceThreshold = 0.58;
   static const double _abnormalConfidenceThreshold = 0.48;
@@ -708,7 +708,7 @@ void _yoloDetectionWorkerMain(Map<String, Object?> bootstrap) {
 
   final detector = OnDeviceYoloDetector(
     modelAsset: bootstrap['modelAsset'] as String? ?? _localYoloModelAsset,
-    interpreterThreads: bootstrap['threads'] as int? ?? 2,
+    interpreterThreads: bootstrap['threads'] as int?,
   );
   commandPort.listen((message) {
     if (message is! Map<String, Object?>) {

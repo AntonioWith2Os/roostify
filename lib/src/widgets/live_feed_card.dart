@@ -5,6 +5,7 @@ class LiveFeedCard extends StatefulWidget {
     super.key,
     required this.streamUrl,
     this.detections = const [],
+    this.inspectionInterval,
     this.onFrameCaptureStarted,
     this.onFrameReady,
     this.onFrameCaptureFailed,
@@ -12,6 +13,9 @@ class LiveFeedCard extends StatefulWidget {
 
   final String streamUrl;
   final List<ChickenDetection> detections;
+
+  /// Minimum time between frame captures; defaults to a device-scaled cadence.
+  final Duration? inspectionInterval;
   final VoidCallback? onFrameCaptureStarted;
   final Future<void> Function(Uint8List frameBytes)? onFrameReady;
   final ValueChanged<String>? onFrameCaptureFailed;
@@ -101,7 +105,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   Timer? _inspectionTimer;
 
   static const _streamCachingMs = 2000;
-  static const _inspectionInterval = Duration(seconds: 1);
+  static const _maxInspectionInterval = Duration(seconds: 8);
   static const _slowStartDiagnosticDelay = Duration(seconds: 8);
   static const _startupRecoveryDelay = Duration(seconds: 14);
   static const _errorRecoveryDelay = Duration(seconds: 3);
@@ -120,6 +124,10 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   int _automaticRecoveryAttempt = 0;
   bool _hasPlayedCurrentController = false;
   bool _inspectionRunning = false;
+  Duration _lastInspectionCost = Duration.zero;
+
+  Duration get _baseInspectionInterval =>
+      widget.inspectionInterval ?? _defaultInspectionInterval();
 
   bool get _supportsFijkPlayer {
     if (kIsWeb) {
@@ -278,16 +286,29 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     }
 
     unawaited(_captureInspectionFrame(controller, generation));
-    _inspectionTimer = Timer.periodic(_inspectionInterval, (_) {
+    _scheduleNextInspection(controller, generation);
+  }
+
+  void _scheduleNextInspection(FijkPlayer controller, int generation) {
+    _inspectionTimer = Timer(_nextInspectionDelay(), () {
       if (!_isCurrentController(controller, generation)) {
-        _inspectionTimer?.cancel();
         return;
       }
-      final value = controller.value;
-      if (_isPlaying(value)) {
+      if (_isPlaying(controller.value)) {
         unawaited(_captureInspectionFrame(controller, generation));
       }
+      _scheduleNextInspection(controller, generation);
     });
+  }
+
+  Duration _nextInspectionDelay() {
+    // Back off when capture plus inference is the bottleneck, so weak devices
+    // never queue inspections faster than they can process them.
+    final backoff = _lastInspectionCost * 2;
+    if (backoff <= _baseInspectionInterval) {
+      return _baseInspectionInterval;
+    }
+    return backoff > _maxInspectionInterval ? _maxInspectionInterval : backoff;
   }
 
   Future<void> _captureInspectionFrame(
@@ -305,6 +326,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
         return;
       }
 
+      final stopwatch = Stopwatch()..start();
       final frameBytes = await controller.takeSnapShot().timeout(
         const Duration(seconds: 5),
       );
@@ -317,6 +339,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
 
       widget.onFrameCaptureStarted?.call();
       await widget.onFrameReady?.call(frameBytes);
+      _lastInspectionCost = stopwatch.elapsed;
     } catch (error) {
       if (!_isCurrentController(controller, generation)) {
         return;
