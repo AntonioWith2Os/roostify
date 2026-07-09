@@ -551,117 +551,124 @@ class UserDashboardPage extends StatelessWidget {
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Esp32SensorConnectionCard(
-              controller: controller,
-              username: user.username,
-            ),
-            const SizedBox(height: 12),
-            CircularSensorGauge(
-              title: 'Temperature',
-              value: monitor.temperature.toStringAsFixed(1),
-              unit: '°C',
-              progress: monitor.temperature / 45,
-              icon: Icons.thermostat_outlined,
-              status: monitor.temperatureStatus,
-              level: monitor.temperatureLevel,
-            ),
-            const SizedBox(height: 10),
-            CircularSensorGauge(
-              title: 'Humidity',
-              value: monitor.humidity.toStringAsFixed(0),
-              unit: '%',
-              progress: monitor.humidity / 100,
-              icon: Icons.water_drop_outlined,
-              status: monitor.humidityStatus,
-              level: monitor.humidityLevel,
-            ),
-            const SizedBox(height: 10),
-            CircularSensorGauge(
-              title: 'Air Pollution',
-              value: '${monitor.airPpm}',
-              unit: 'ppm',
-              progress: monitor.airPpm / 50,
-              icon: Icons.air_outlined,
-              status: monitor.airStatus,
-              level: monitor.airLevel,
-            ),
-            const SizedBox(height: 16),
-            Row(
+      body: Builder(
+        builder: (context) {
+          final temperatureAlerts = monitor.alerts
+              .where(
+                (alert) =>
+                    alert.category == 'Temperature' ||
+                    alert.category == 'Environment',
+              )
+              .toList();
+          final humidityAlerts = monitor.alerts
+              .where(
+                (alert) =>
+                    alert.category == 'Humidity' ||
+                    alert.category == 'Environment',
+              )
+              .toList();
+          final airAlerts = monitor.alerts
+              .where(
+                (alert) =>
+                    alert.category == 'Air Pollution' ||
+                    alert.category == 'Air Quality',
+              )
+              .toList();
+          // Count each alert once even when it shows on two cards (the
+          // combined heat-and-humidity warning appears on both).
+          final activeWarnings = monitor.alerts
+              .where((alert) => alert.severity != AlertSeverity.info)
+              .length;
+
+          return SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Expanded(
-                  child: Text(
-                    'Active Warnings',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
-                  ),
+                Esp32SensorConnectionCard(
+                  controller: controller,
+                  username: user.username,
                 ),
-                SeverityTag(
-                  label: monitor.alerts.isEmpty
-                      ? 'ALL CLEAR'
-                      : '${monitor.alerts.length} ACTIVE',
-                  color: monitor.alerts.isEmpty
-                      ? const Color(0xFF26C281)
-                      : _appAccent,
+                const SizedBox(height: 12),
+                CircularSensorGauge(
+                  title: 'Temperature',
+                  value: monitor.temperature.toStringAsFixed(1),
+                  unit: '°C',
+                  progress: monitor.temperature / 45,
+                  icon: Icons.thermostat_outlined,
+                  status: monitor.temperatureStatus,
+                  level: monitor.temperatureLevel,
+                  alerts: temperatureAlerts,
+                ),
+                const SizedBox(height: 10),
+                CircularSensorGauge(
+                  title: 'Humidity',
+                  value: monitor.humidity.toStringAsFixed(0),
+                  unit: '%',
+                  progress: monitor.humidity / 100,
+                  icon: Icons.water_drop_outlined,
+                  status: monitor.humidityStatus,
+                  level: monitor.humidityLevel,
+                  alerts: humidityAlerts,
+                ),
+                const SizedBox(height: 10),
+                CircularSensorGauge(
+                  title: 'Air Pollution',
+                  value: '${monitor.airPpm}',
+                  unit: 'ppm',
+                  progress: monitor.airPpm / 50,
+                  icon: Icons.air_outlined,
+                  status: monitor.airStatus,
+                  level: monitor.airLevel,
+                  alerts: airAlerts,
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: context.appColors.surface,
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(color: context.appColors.border),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        activeWarnings == 0
+                            ? Icons.verified_outlined
+                            : Icons.warning_amber_outlined,
+                        color: activeWarnings == 0
+                            ? const Color(0xFF26C281)
+                            : _appAccent,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          activeWarnings == 0
+                              ? 'Farm conditions look safe. Tap a sensor card to see its details.'
+                              : 'Tap a sensor card with a badge to see its warnings. The Guides tab explains each warning.',
+                          style: TextStyle(
+                            color: context.appColors.mutedText,
+                            fontSize: 12,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      SeverityTag(
+                        label: activeWarnings == 0
+                            ? 'ALL CLEAR'
+                            : '$activeWarnings ACTIVE',
+                        color: activeWarnings == 0
+                            ? const Color(0xFF26C281)
+                            : _appAccent,
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 10),
-            Expanded(
-              child: monitor.alerts.isEmpty
-                  ? const _AllClearCard()
-                  : ListView(
-                      padding: EdgeInsets.zero,
-                      children: [
-                        ...monitor.alerts.map(
-                          (alert) => AlertCard(alert: alert),
-                        ),
-                      ],
-                    ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _AllClearCard extends StatelessWidget {
-  const _AllClearCard();
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.appColors;
-    return Container(
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: colors.border),
-      ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(
-            Icons.verified_outlined,
-            color: Color(0xFF26C281),
-            size: 40,
-          ),
-          const SizedBox(height: 10),
-          const Text(
-            'Farm conditions look safe',
-            style: TextStyle(fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Alerts will appear here when a reading becomes unsafe.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: colors.mutedText),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
@@ -858,6 +865,183 @@ class UserGuidelinesPage extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           ...guides.map((guide) => GuidelineCard(item: guide)),
+          const SizedBox(height: 8),
+          const Text(
+            'Sensor Warning Explanations',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'These are the same warnings that pop up on the dashboard sensor cards: what each level means and what to do.',
+            style: TextStyle(color: colors.mutedText, height: 1.5),
+          ),
+          const SizedBox(height: 12),
+          ..._sensorWarningGuides.map(
+            (guide) => _SensorWarningGuideCard(guide: guide),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SensorWarningGuide {
+  const _SensorWarningGuide({
+    required this.title,
+    required this.icon,
+    required this.entries,
+  });
+
+  final String title;
+  final IconData icon;
+  final List<(SensorWarningLevel, String, String)> entries;
+}
+
+const _sensorWarningGuides = [
+  _SensorWarningGuide(
+    title: 'Temperature (°C)',
+    icon: Icons.thermostat_outlined,
+    entries: [
+      (SensorWarningLevel.normal, '18 - 27 °C', 'Comfortable range for roosters.'),
+      (
+        SensorWarningLevel.caution,
+        '27 - 30 °C or 10 - 18 °C',
+        'Start prevention: shade, fresh water, and airflow when warm; add safe warmth when cool.',
+      ),
+      (
+        SensorWarningLevel.warning,
+        '30 - 32 °C',
+        'Heat stress is likely, especially when humid. Cool the pen and watch the birds.',
+      ),
+      (
+        SensorWarningLevel.danger,
+        '32 - 35 °C or 5 - 10 °C',
+        'Dangerous heat needs strong cooling now; cold this low risks cold stress, so warm the area.',
+      ),
+      (
+        SensorWarningLevel.critical,
+        'Above 35 °C or below 5 °C',
+        'Emergency condition. Act immediately to cool or warm the coop and check every bird.',
+      ),
+    ],
+  ),
+  _SensorWarningGuide(
+    title: 'Humidity (%)',
+    icon: Icons.water_drop_outlined,
+    entries: [
+      (SensorWarningLevel.normal, '45 - 71%', 'Good range for comfort and dust control.'),
+      (
+        SensorWarningLevel.caution,
+        '71 - 80% or below 45%',
+        'Watch closely and improve ventilation; very dry air raises dust risk.',
+      ),
+      (
+        SensorWarningLevel.warning,
+        '80 - 90%',
+        'Risky, especially in heat. Improve airflow so the birds can cool themselves.',
+      ),
+      (
+        SensorWarningLevel.danger,
+        'Above 90%, or above 80% with 30 °C+ heat',
+        'Cooling barely works in this humidity. Ventilate aggressively and cool the pen.',
+      ),
+    ],
+  ),
+  _SensorWarningGuide(
+    title: 'Air Pollution (ppm)',
+    icon: Icons.air_outlined,
+    entries: [
+      (SensorWarningLevel.normal, 'Below 10 ppm', 'Good air.'),
+      (
+        SensorWarningLevel.caution,
+        '10 - 20 ppm',
+        'Improve ventilation and check litter or manure buildup.',
+      ),
+      (
+        SensorWarningLevel.warning,
+        '20 - 25 ppm',
+        'Air quality is becoming unsafe; clean and ventilate soon.',
+      ),
+      (
+        SensorWarningLevel.danger,
+        '25 - 50 ppm',
+        'Ventilate and clean immediately; ammonia at this level harms the flock.',
+      ),
+      (
+        SensorWarningLevel.critical,
+        'Above 50 ppm',
+        'Emergency. Remove the birds from the coop if possible while it airs out.',
+      ),
+    ],
+  ),
+];
+
+class _SensorWarningGuideCard extends StatelessWidget {
+  const _SensorWarningGuideCard({required this.guide});
+
+  final _SensorWarningGuide guide;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(guide.icon, color: _appAccent),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  guide.title,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          for (final (level, range, advice) in guide.entries)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SensorLevelTag(level: level, compact: true),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          range,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          advice,
+                          style: TextStyle(
+                            color: colors.mutedText,
+                            fontSize: 12,
+                            height: 1.4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );

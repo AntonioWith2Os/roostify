@@ -270,6 +270,7 @@ class CircularSensorGauge extends StatelessWidget {
     required this.icon,
     required this.status,
     required this.level,
+    this.alerts = const [],
   });
 
   final String title;
@@ -280,6 +281,71 @@ class CircularSensorGauge extends StatelessWidget {
   final String status;
   final SensorWarningLevel level;
 
+  /// Active warnings that belong to this sensor; shown as a badge on the
+  /// ring and in a pop-up when the card is tapped.
+  final List<AlertItem> alerts;
+
+  void _showWarnings(BuildContext context) {
+    final colors = context.appColors;
+    showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: colors.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          title: Row(
+            children: [
+              Icon(icon, color: level.color),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '$title Warnings',
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: 360,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (alerts.isEmpty)
+                    Text(
+                      'No active warnings. $status.',
+                      style: TextStyle(color: colors.mutedText, height: 1.45),
+                    )
+                  else
+                    ...alerts.map((alert) => AlertCard(alert: alert)),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Open the Guides tab for what each warning level means '
+                    'and what to do about it.',
+                    style: TextStyle(
+                      color: colors.subtleText,
+                      fontSize: 12,
+                      height: 1.4,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.appColors;
@@ -289,90 +355,135 @@ class CircularSensorGauge extends StatelessWidget {
       message: '$title: $value $unit - $status',
       child: Semantics(
         label: '$title sensor, $value $unit, $status',
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: colors.surface,
+        child: Material(
+          color: colors.surface,
+          borderRadius: BorderRadius.circular(24),
+          child: InkWell(
             borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: colors.border),
-          ),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 88,
-                height: 88,
-                child: CustomPaint(
-                  painter: _SensorRingPainter(
-                    progress: progress.clamp(0.0, 1.0),
-                    color: ringColor,
-                    track: ringColor.withValues(alpha: 0.14),
-                  ),
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          value,
-                          maxLines: 1,
-                          style: TextStyle(
-                            color: colors.text,
-                            fontSize: 18,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: -0.4,
-                          ),
-                        ),
-                        Text(
-                          unit,
-                          style: TextStyle(
-                            color: colors.mutedText,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+            onTap: () => _showWarnings(context),
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: colors.border),
               ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 88,
+                    height: 88,
+                    child: Stack(
+                      clipBehavior: Clip.none,
                       children: [
-                        Icon(icon, size: 15, color: colors.mutedText),
-                        const SizedBox(width: 5),
-                        Expanded(
-                          child: Text(
-                            title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: colors.mutedText,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w800,
+                        Positioned.fill(
+                          child: CustomPaint(
+                            painter: _SensorRingPainter(
+                              progress: progress.clamp(0.0, 1.0),
+                              color: ringColor,
+                              track: ringColor.withValues(alpha: 0.14),
+                            ),
+                            child: Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    value,
+                                    maxLines: 1,
+                                    style: TextStyle(
+                                      color: colors.text,
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w900,
+                                      letterSpacing: -0.4,
+                                    ),
+                                  ),
+                                  Text(
+                                    unit,
+                                    style: TextStyle(
+                                      color: colors.mutedText,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
-                        SensorLevelTag(level: level, compact: true),
+                        if (alerts.isNotEmpty)
+                          Positioned(
+                            top: -4,
+                            right: -4,
+                            child: Container(
+                              constraints: const BoxConstraints(
+                                minWidth: 24,
+                                minHeight: 24,
+                              ),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                              ),
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: level.color,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: colors.surface,
+                                  width: 2,
+                                ),
+                              ),
+                              child: Text(
+                                '${alerts.length}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
+                          ),
                       ],
                     ),
-                    const SizedBox(height: 6),
-                    Text(
-                      status,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: colors.mutedText,
-                        fontSize: 12,
-                        height: 1.35,
-                      ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(icon, size: 15, color: colors.mutedText),
+                            const SizedBox(width: 5),
+                            Expanded(
+                              child: Text(
+                                title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: colors.mutedText,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                            SensorLevelTag(level: level, compact: true),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          status,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: colors.mutedText,
+                            fontSize: 12,
+                            height: 1.35,
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),
