@@ -4,8 +4,10 @@ class OnDeviceYoloDetector {
   OnDeviceYoloDetector({
     String modelAsset = _localYoloModelAsset,
     int? interpreterThreads,
+    Uint8List? modelBytes,
   }) : _modelAsset = modelAsset,
-       _interpreterThreads = interpreterThreads ?? _defaultInterpreterThreads();
+       _interpreterThreads = interpreterThreads ?? _defaultInterpreterThreads(),
+       _modelBytes = modelBytes;
 
   static const double _confidenceThreshold = 0.58;
   static const double _abnormalConfidenceThreshold = 0.48;
@@ -30,6 +32,7 @@ class OnDeviceYoloDetector {
 
   final String _modelAsset;
   final int _interpreterThreads;
+  Uint8List? _modelBytes;
 
   tfl.Interpreter? _interpreter;
   Future<tfl.Interpreter>? _loadingInterpreter;
@@ -39,19 +42,49 @@ class OnDeviceYoloDetector {
   _YoloDetectionWorker? _worker;
   Future<_YoloDetectionWorker>? _loadingWorker;
 
+  static const _workerRequestTimeout = Duration(seconds: 20);
+
   // No main-isolate fallback: rerunning decode plus inference on the UI
   // isolate freezes the app for the whole inference, which is worse than a
-  // dropped detection. Worker failures propagate to the capture-error handler.
+  // dropped detection. Worker failures propagate to the capture-error handler
+  // and a dead or hung worker is discarded so the next frame respawns it.
   Future<CctvInspectionResult> inspectFrame(Uint8List frameBytes) async {
-    final worker = await _workerForInference();
-    final detections = await worker.inspectFrame(frameBytes);
+    final detections = await _runOnWorker(
+      (worker) => worker.inspectFrame(frameBytes),
+    );
     return CctvInspectionResult.fromDetections(detections);
   }
 
   Future<CctvInspectionResult> inspectCameraFrame(LiveCameraFrame frame) async {
-    final worker = await _workerForInference();
-    final detections = await worker.inspectCameraFrame(frame);
+    final detections = await _runOnWorker(
+      (worker) => worker.inspectCameraFrame(frame),
+    );
     return CctvInspectionResult.fromDetections(detections);
+  }
+
+  Future<List<ChickenDetection>> _runOnWorker(
+    Future<List<ChickenDetection>> Function(_YoloDetectionWorker worker)
+    request,
+  ) async {
+    final worker = await _workerForInference();
+    try {
+      return await request(worker).timeout(_workerRequestTimeout);
+    } on TimeoutException {
+      _discardWorker(worker);
+      rethrow;
+    } catch (_) {
+      if (worker.isDead) {
+        _discardWorker(worker);
+      }
+      rethrow;
+    }
+  }
+
+  void _discardWorker(_YoloDetectionWorker worker) {
+    if (identical(_worker, worker)) {
+      _worker = null;
+    }
+    worker.close();
   }
 
   Future<_YoloDetectionWorker> _workerForInference() async {
@@ -65,9 +98,14 @@ class OnDeviceYoloDetector {
       return loading;
     }
 
-    final future = _YoloDetectionWorker.start(
-      modelAsset: _modelAsset,
-      threads: _interpreterThreads,
+    // Asset loading only works on the root isolate (rootBundle needs
+    // ServicesBinding), so read the model here and hand the bytes to the
+    // worker instead of letting it call Interpreter.fromAsset.
+    final future = _loadModelBytes().then(
+      (modelBytes) => _YoloDetectionWorker.start(
+        modelBytes: modelBytes,
+        threads: _interpreterThreads,
+      ),
     );
     _loadingWorker = future;
     try {
@@ -307,30 +345,26 @@ class OnDeviceYoloDetector {
     return metadata;
   }
 
-  Future<tfl.Interpreter> _loadInterpreter() async {
-    tfl.Interpreter interpreter;
-    try {
-      // XNNPACK speeds up float32 CPU inference several-fold, which shortens
-      // the window in which inference competes with video decode for cores.
-      final options = tfl.InterpreterOptions()
-        ..threads = _interpreterThreads
-        ..addDelegate(
-          tfl.XNNPackDelegate(
-            options: tfl.XNNPackDelegateOptions(
-              numThreads: _interpreterThreads,
-            ),
-          ),
-        );
-      interpreter = await tfl.Interpreter.fromAsset(
-        _modelAsset,
-        options: options,
-      );
-    } catch (_) {
-      interpreter = await tfl.Interpreter.fromAsset(
-        _modelAsset,
-        options: tfl.InterpreterOptions()..threads = _interpreterThreads,
-      );
+  Future<Uint8List> _loadModelBytes() async {
+    final existing = _modelBytes;
+    if (existing != null) {
+      return existing;
     }
+
+    final data = await rootBundle.load(_modelAsset);
+    final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+    _modelBytes = bytes;
+    return bytes;
+  }
+
+  Future<tfl.Interpreter> _loadInterpreter() async {
+    // No XNNPACK delegate: a delegate failure aborts natively (uncatchable
+    // from Dart) and crashed the app on the first frame of some devices.
+    final options = tfl.InterpreterOptions()..threads = _interpreterThreads;
+    final interpreter = tfl.Interpreter.fromBuffer(
+      await _loadModelBytes(),
+      options: options,
+    );
     interpreter.allocateTensors();
     return interpreter;
   }
@@ -718,7 +752,7 @@ void _yoloDetectionWorkerMain(Map<String, Object?> bootstrap) {
   replyPort.send(commandPort.sendPort);
 
   final detector = OnDeviceYoloDetector(
-    modelAsset: bootstrap['modelAsset'] as String? ?? _localYoloModelAsset,
+    modelBytes: bootstrap['modelBytes'] as Uint8List?,
     interpreterThreads: bootstrap['threads'] as int?,
   );
   commandPort.listen((message) {
@@ -853,14 +887,28 @@ class _YoloDetectionWorker {
   final SendPort _sendPort;
   final Map<int, Completer<List<ChickenDetection>>> _pending = {};
   int _nextRequestId = 0;
+  bool _dead = false;
+
+  bool get isDead => _dead;
+
+  void _markDead(String reason) {
+    _dead = true;
+    final pending = _pending.values.toList(growable: false);
+    _pending.clear();
+    for (final completer in pending) {
+      if (!completer.isCompleted) {
+        completer.completeError(StateError(reason));
+      }
+    }
+  }
 
   static Future<_YoloDetectionWorker> start({
-    required String modelAsset,
+    required Uint8List modelBytes,
     required int threads,
   }) async {
     final replyPort = ReceivePort();
     final sendPortCompleter = Completer<SendPort>();
-    late final _YoloDetectionWorker worker;
+    _YoloDetectionWorker? worker;
 
     late final StreamSubscription<dynamic> subscription;
     subscription = replyPort.listen((message) {
@@ -868,6 +916,19 @@ class _YoloDetectionWorker {
         if (!sendPortCompleter.isCompleted) {
           sendPortCompleter.complete(message);
         }
+        return;
+      }
+
+      // onExit delivers null, onError delivers [error, stackTrace]. Fail all
+      // pending requests instead of letting them hang forever.
+      if (message == null || message is List) {
+        final reason = message is List && message.isNotEmpty
+            ? 'The YOLO worker crashed: ${message.first}'
+            : 'The YOLO worker exited unexpectedly.';
+        if (!sendPortCompleter.isCompleted) {
+          sendPortCompleter.completeError(StateError(reason));
+        }
+        worker?._markDead(reason);
         return;
       }
 
@@ -889,7 +950,7 @@ class _YoloDetectionWorker {
         return;
       }
 
-      final completer = worker._pending.remove(requestId);
+      final completer = worker?._pending.remove(requestId);
       if (completer == null || completer.isCompleted) {
         return;
       }
@@ -912,20 +973,29 @@ class _YoloDetectionWorker {
       <String, Object?>{
         'replyPort': replyPort.sendPort,
         'rootToken': RootIsolateToken.instance,
-        'modelAsset': modelAsset,
+        'modelBytes': modelBytes,
         'threads': threads,
       },
       errorsAreFatal: true,
+      onError: replyPort.sendPort,
+      onExit: replyPort.sendPort,
     );
 
-    final sendPort = await sendPortCompleter.future;
-    worker = _YoloDetectionWorker._(
-      isolate,
-      replyPort,
-      subscription,
-      sendPort,
-    );
-    return worker;
+    try {
+      final sendPort = await sendPortCompleter.future;
+      worker = _YoloDetectionWorker._(
+        isolate,
+        replyPort,
+        subscription,
+        sendPort,
+      );
+      return worker;
+    } catch (_) {
+      unawaited(subscription.cancel());
+      replyPort.close();
+      isolate.kill(priority: Isolate.immediate);
+      rethrow;
+    }
   }
 
   Future<List<ChickenDetection>> inspectFrame(Uint8List frameBytes) {
@@ -946,6 +1016,12 @@ class _YoloDetectionWorker {
     String command,
     Map<String, Object?> payload,
   ) {
+    if (_dead) {
+      return Future.error(
+        StateError('The YOLO worker is no longer running.'),
+      );
+    }
+
     final requestId = _nextRequestId += 1;
     final completer = Completer<List<ChickenDetection>>();
     _pending[requestId] = completer;
@@ -961,6 +1037,7 @@ class _YoloDetectionWorker {
   }
 
   void close() {
+    _dead = true;
     for (final completer in _pending.values) {
       if (!completer.isCompleted) {
         completer.completeError(

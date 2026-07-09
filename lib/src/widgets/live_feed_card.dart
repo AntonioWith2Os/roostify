@@ -105,7 +105,8 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   Timer? _inspectionTimer;
 
   static const _streamCachingMs = 2000;
-  static const _maxInspectionInterval = Duration(seconds: 8);
+  static const _maxInspectionInterval = Duration(seconds: 4);
+  static const _captureFailuresBeforePlayerRestart = 3;
   static const _slowStartDiagnosticDelay = Duration(seconds: 8);
   static const _startupRecoveryDelay = Duration(seconds: 14);
   static const _errorRecoveryDelay = Duration(seconds: 3);
@@ -125,6 +126,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   bool _hasPlayedCurrentController = false;
   bool _inspectionRunning = false;
   Duration _lastInspectionCost = Duration.zero;
+  int _consecutiveCaptureFailures = 0;
 
   Duration get _baseInspectionInterval =>
       widget.inspectionInterval ?? _defaultInspectionInterval();
@@ -166,6 +168,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     }
     _hasPlayedCurrentController = false;
     _inspectionRunning = false;
+    _consecutiveCaptureFailures = 0;
     _controllerGeneration += 1;
     final generation = _controllerGeneration;
 
@@ -340,12 +343,21 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
       widget.onFrameCaptureStarted?.call();
       await widget.onFrameReady?.call(frameBytes);
       _lastInspectionCost = stopwatch.elapsed;
+      _consecutiveCaptureFailures = 0;
     } catch (error) {
       if (!_isCurrentController(controller, generation)) {
         return;
       }
 
       widget.onFrameCaptureFailed?.call('Could not capture CCTV frame: $error');
+
+      // fijkplayer keeps a single pending snapshot completer internally; if
+      // one native reply is lost, every later takeSnapShot fails with "last
+      // snapShot is not finished" until the player is rebuilt.
+      _consecutiveCaptureFailures += 1;
+      if (_consecutiveCaptureFailures >= _captureFailuresBeforePlayerRestart) {
+        _replaceController();
+      }
     } finally {
       _inspectionRunning = false;
     }

@@ -633,25 +633,11 @@ bool _sameDetectedRooster(
   if (previousDetection == null || nextDetection == null) {
     return false;
   }
-  if (previousDetection.condition != nextDetection.condition) {
-    return false;
-  }
-  return _detectionBoxOverlap(previousDetection.box, nextDetection.box) >= 0.25;
-}
-
-double _detectionBoxOverlap(Rect a, Rect b) {
-  final left = math.max(a.left, b.left);
-  final top = math.max(a.top, b.top);
-  final right = math.min(a.right, b.right);
-  final bottom = math.min(a.bottom, b.bottom);
-  final width = math.max(0.0, right - left);
-  final height = math.max(0.0, bottom - top);
-  final intersection = width * height;
-  if (intersection <= 0) {
-    return 0;
-  }
-  final union = a.width * a.height + b.width * b.height - intersection;
-  return union <= 0 ? 0 : intersection / union;
+  // No box-overlap requirement: captures can be several seconds apart on
+  // slow devices, so a live bird moves too far for IoU matching and the
+  // confirmation would starve. Two consecutive frames agreeing on the health
+  // state is the debounce signal.
+  return previousDetection.condition == nextDetection.condition;
 }
 
 class CctvInspectionResult {
