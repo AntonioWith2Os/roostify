@@ -55,9 +55,13 @@ class AppUser {
 }
 
 class Session {
-  const Session({required this.user});
+  const Session({required this.user, this.email, this.photoUrl});
 
   final AppUser user;
+  // Google profile metadata is optional so existing local/demo sessions still
+  // work with the same Session model.
+  final String? email;
+  final String? photoUrl;
 }
 
 class MonitorSnapshot {

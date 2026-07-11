@@ -201,37 +201,27 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  late final TextEditingController _usernameController;
-  late final TextEditingController _passwordController;
   String? _error;
+  bool _signingIn = false;
 
-  @override
-  void initState() {
-    super.initState();
-    _usernameController = TextEditingController(
-      text: widget.expectedRole == UserRole.admin ? 'admin' : 'farmer1',
-    );
-    _passwordController = TextEditingController(
-      text: widget.expectedRole == UserRole.admin ? 'admin123' : 'farm123',
-    );
-  }
+  Future<void> _signInWithGoogle() async {
+    // Disable the button while the native Google account chooser is open.
+    setState(() {
+      _error = null;
+      _signingIn = true;
+    });
 
-  @override
-  void dispose() {
-    _usernameController.dispose();
-    _passwordController.dispose();
-    super.dispose();
-  }
-
-  void _signIn() {
-    final session = widget.controller.signIn(
-      username: _usernameController.text,
-      password: _passwordController.text,
+    final session = await widget.controller.signInWithGoogle(
       expectedRole: widget.expectedRole,
     );
 
+    if (!mounted) return;
+
     if (session == null) {
-      setState(() => _error = widget.controller.lastError);
+      setState(() {
+        _error = widget.controller.lastError;
+        _signingIn = false;
+      });
       return;
     }
 
@@ -270,7 +260,7 @@ class _LoginPageState extends State<LoginPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Demo account',
+                  'Google sign-in',
                   style: TextStyle(
                     fontWeight: FontWeight.w800,
                     color: _appAccent,
@@ -279,28 +269,11 @@ class _LoginPageState extends State<LoginPage> {
                 const SizedBox(height: 8),
                 Text(
                   isAdmin
-                      ? 'Username: admin\nPassword: admin123'
-                      : 'Username: farmer1\nPassword: farm123',
+                      ? 'Use your Google account to continue into the admin workspace.'
+                      : 'Use your Google account to continue into the monitoring dashboard.',
                   style: TextStyle(color: colors.mutedText, height: 1.5),
                 ),
               ],
-            ),
-          ),
-          const SizedBox(height: 18),
-          TextField(
-            controller: _usernameController,
-            decoration: const InputDecoration(
-              labelText: 'Username',
-              prefixIcon: Icon(Icons.person_outline),
-            ),
-          ),
-          const SizedBox(height: 14),
-          TextField(
-            controller: _passwordController,
-            obscureText: true,
-            decoration: const InputDecoration(
-              labelText: 'Password',
-              prefixIcon: Icon(Icons.lock_outline),
             ),
           ),
           if (_error != null) ...[
@@ -321,16 +294,30 @@ class _LoginPageState extends State<LoginPage> {
             ),
           ],
           const SizedBox(height: 22),
-          FilledButton(
+          FilledButton.icon(
             style: FilledButton.styleFrom(
-              backgroundColor: _appAccent,
+              backgroundColor: colors.surfaceRaised,
+              foregroundColor: colors.text,
               padding: const EdgeInsets.symmetric(vertical: 18),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(22),
+                side: BorderSide(color: colors.border),
               ),
             ),
-            onPressed: _signIn,
-            child: Text(isAdmin ? 'Login as Admin' : 'Login as User'),
+            onPressed: _signingIn ? null : _signInWithGoogle,
+            icon: _signingIn
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.g_mobiledata_rounded, size: 28),
+            label: Text(
+              _signingIn
+                  ? 'Opening Google...'
+                  : isAdmin
+                  ? 'Continue as Admin with Google'
+                  : 'Continue with Google',
+            ),
           ),
         ],
       ),
@@ -902,7 +889,11 @@ const _sensorWarningGuides = [
     title: 'Temperature (°C)',
     icon: Icons.thermostat_outlined,
     entries: [
-      (SensorWarningLevel.normal, '18 - 27 °C', 'Comfortable range for roosters.'),
+      (
+        SensorWarningLevel.normal,
+        '18 - 27 °C',
+        'Comfortable range for roosters.',
+      ),
       (
         SensorWarningLevel.caution,
         '27 - 30 °C or 10 - 18 °C',
@@ -929,7 +920,11 @@ const _sensorWarningGuides = [
     title: 'Humidity (%)',
     icon: Icons.water_drop_outlined,
     entries: [
-      (SensorWarningLevel.normal, '45 - 71%', 'Good range for comfort and dust control.'),
+      (
+        SensorWarningLevel.normal,
+        '45 - 71%',
+        'Good range for comfort and dust control.',
+      ),
       (
         SensorWarningLevel.caution,
         '71 - 80% or below 45%',
@@ -1195,13 +1190,18 @@ class ProfilePage extends StatelessWidget {
                   child: CircleAvatar(
                     radius: 38,
                     backgroundColor: colors.accentSurface,
-                    child: Icon(
-                      session.user.isAdmin
-                          ? Icons.admin_panel_settings_outlined
-                          : Icons.person_outline,
-                      color: _appAccent,
-                      size: 36,
-                    ),
+                    backgroundImage: session.photoUrl == null
+                        ? null
+                        : NetworkImage(session.photoUrl!),
+                    child: session.photoUrl == null
+                        ? Icon(
+                            session.user.isAdmin
+                                ? Icons.admin_panel_settings_outlined
+                                : Icons.person_outline,
+                            color: _appAccent,
+                            size: 36,
+                          )
+                        : null,
                   ),
                 ),
                 const SizedBox(height: 14),
@@ -1210,14 +1210,14 @@ class ProfilePage extends StatelessWidget {
                   style: const TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.w900,
-                    letterSpacing: -0.3,
                   ),
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  user.isAdmin
-                      ? 'Admin supervisor account'
-                      : 'Backyard rooster farm user account',
+                  session.email ??
+                      (user.isAdmin
+                          ? 'Admin supervisor account'
+                          : 'Backyard rooster farm user account'),
                   style: TextStyle(color: colors.mutedText),
                 ),
                 const SizedBox(height: 18),
@@ -1277,8 +1277,9 @@ class ProfilePage extends StatelessWidget {
           ThemePreferenceCard(controller: controller),
           const SizedBox(height: 18),
           FilledButton.icon(
-            onPressed: () {
-              controller.signOut();
+            onPressed: () async {
+              await controller.signOut();
+              if (!context.mounted) return;
               Navigator.of(context).pushAndRemoveUntil(
                 MaterialPageRoute<void>(
                   builder: (_) => LandingPage(controller: controller),

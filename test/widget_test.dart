@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('app opens landing and reaches user dashboard', (tester) async {
+  testWidgets('app opens landing and shows Google sign-in', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.linux;
     try {
       await tester.pumpWidget(const RoosterWatchApp(cameras: []));
@@ -20,36 +20,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('User access'), findsOneWidget);
-      expect(find.text('Demo account'), findsOneWidget);
-      expect(find.text('Login as User'), findsOneWidget);
-
-      await tester.ensureVisible(find.text('Login as User'));
-      await tester.tap(find.text('Login as User'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('User Dashboard'), findsOneWidget);
-      await tester.scrollUntilVisible(
-        find.text('Real-Time Farm Environment'),
-        300,
-        scrollable: find.byType(Scrollable).first,
-      );
-      expect(find.text('Real-Time Farm Environment'), findsOneWidget);
-      await tester.scrollUntilVisible(
-        find.text('Temperature'),
-        300,
-        scrollable: find.byType(Scrollable).first,
-      );
-      expect(find.text('Temperature'), findsOneWidget);
-      await tester.tap(find.text('CCTV'));
-      await tester.pump(const Duration(milliseconds: 300));
-
-      expect(find.text('CCTV Rooster Inspection'), findsOneWidget);
-      await tester.scrollUntilVisible(
-        find.text('Rooster inspection'),
-        300,
-        scrollable: find.byType(Scrollable).first,
-      );
-      expect(find.text('Rooster inspection'), findsOneWidget);
+      expect(find.text('Google sign-in'), findsOneWidget);
+      expect(find.text('Continue with Google'), findsOneWidget);
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }

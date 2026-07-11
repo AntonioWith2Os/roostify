@@ -87,6 +87,11 @@ class AppController extends ChangeNotifier {
   final List<SupportThread> _supportThreads;
   final Esp32SensorClient _sensorClient = Esp32SensorClient();
   final OnDeviceYoloDetector _yoloDetector = OnDeviceYoloDetector();
+  final GoogleSignIn _googleSignIn = GoogleSignIn(
+    scopes: const ['email', 'profile'],
+    serverClientId:
+        '402884110739-fsm2ontv9tajkin1seajgphs6d08e3ug.apps.googleusercontent.com',
+  );
   final Map<String, CctvInspectionResult> _cctvCandidates = {};
   final Map<String, int> _cctvCandidateHits = {};
   final Map<String, int> _cctvEmptyFrames = {};
@@ -188,9 +193,98 @@ class AppController extends ChangeNotifier {
     return _session;
   }
 
-  void signOut() {
+  Future<Session?> signInWithGoogle({required UserRole expectedRole}) async {
+    try {
+      final googleAccount = await _googleSignIn.signIn();
+
+      if (googleAccount == null) {
+        lastError = 'Google sign-in was cancelled.';
+        notifyListeners();
+        return null;
+      }
+
+      // Google provides identity; the selected landing button still decides
+      // which existing app workspace the user enters.
+      final user = _userForGoogleAccount(googleAccount, expectedRole);
+
+      lastError = null;
+      _session = Session(
+        user: user,
+        email: googleAccount.email,
+        photoUrl: googleAccount.photoUrl,
+      );
+      notifyListeners();
+      return _session;
+    } catch (_) {
+      lastError =
+          'Unable to sign in with Google. Check the Google OAuth setup for this app.';
+      notifyListeners();
+      return null;
+    }
+  }
+
+  Future<void> signOut() async {
+    await _googleSignIn.signOut();
     _session = null;
     notifyListeners();
+  }
+
+  AppUser _userForGoogleAccount(
+    GoogleSignInAccount account,
+    UserRole expectedRole,
+  ) {
+    if (expectedRole == UserRole.admin) {
+      return _users.firstWhere((user) => user.isAdmin);
+    }
+
+    final baseUsername = _googleUsernameBase(account.email);
+    final existingUser = userByUsername(baseUsername);
+    if (existingUser != null) {
+      return existingUser;
+    }
+
+    final username = _availableGoogleUsername(baseUsername);
+    final displayName = account.displayName?.trim();
+    final resolvedDisplayName = displayName == null || displayName.isEmpty
+        ? account.email
+        : displayName;
+    final user = AppUser(
+      username: username,
+      password: '',
+      displayName: resolvedDisplayName,
+      role: UserRole.user,
+      cameraAccessEnabled: true,
+      monitor: MonitorSnapshot.newUser(resolvedDisplayName),
+      cctvs: const [
+        CctvFeed(
+          name: 'Camera A',
+          location: 'New Coop',
+          status: HealthState.normal,
+          online: false,
+          note: 'Waiting for the first live feed connection.',
+        ),
+      ],
+    );
+    _users.add(user);
+    return user;
+  }
+
+  String _googleUsernameBase(String email) {
+    final localPart = email.split('@').first.toLowerCase();
+    final sanitized = localPart.replaceAll(RegExp(r'[^a-z0-9._-]'), '_');
+    return sanitized.isEmpty ? 'google_user' : sanitized;
+  }
+
+  String _availableGoogleUsername(String baseUsername) {
+    var username = baseUsername;
+    var suffix = 2;
+
+    while (_users.any((user) => user.username == username)) {
+      username = '$baseUsername$suffix';
+      suffix += 1;
+    }
+
+    return username;
   }
 
   AppUser? userByUsername(String username) {
