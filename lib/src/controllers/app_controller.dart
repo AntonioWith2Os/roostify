@@ -57,6 +57,24 @@ class AppController extends ChangeNotifier {
             ),
           ],
         ),
+        AppUser(
+          username: 'user1',
+          password: '123456',
+          displayName: 'User One',
+          role: UserRole.user,
+          cameraAccessEnabled: true,
+          monitor: MonitorSnapshot.sampleOne(),
+          cctvs: const [],
+        ),
+        AppUser(
+          username: 'user2',
+          password: '123456',
+          displayName: 'User Two',
+          role: UserRole.user,
+          cameraAccessEnabled: true,
+          monitor: MonitorSnapshot.sampleTwo(),
+          cctvs: const [],
+        ),
       ],
       _supportThreads = [
         SupportThread(

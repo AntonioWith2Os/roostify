@@ -5,21 +5,32 @@ class _LandingBrand extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.appColors;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        CircleAvatar(
-          radius: 20,
-          backgroundColor: colors.accentSurface,
-          backgroundImage: const AssetImage('assets/app_icon_square.png'),
+    return const Text(
+      'Roostify',
+      style: TextStyle(
+        color: Color(0xFF17191E),
+        fontWeight: FontWeight.w900,
+        fontSize: 28,
+      ),
+    );
+  }
+}
+
+class _AuthImageBackground extends StatelessWidget {
+  const _AuthImageBackground({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        image: DecorationImage(
+          image: const AssetImage('assets/app_icon.jpeg'),
+          fit: BoxFit.cover,
         ),
-        const SizedBox(width: 10),
-        const Text(
-          'Roostify',
-          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
-        ),
-      ],
+      ),
+      child: child,
     );
   }
 }
@@ -29,53 +40,75 @@ class _LandingLoginPanel extends StatelessWidget {
 
   final VoidCallback onUserTap;
   final VoidCallback onAdminTap;
+  static const _loginOrange = Color(0xFFF08F3A);
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.appColors;
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: colors.surface,
+        color: Colors.white,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: colors.border),
+        border: Border.all(color: const Color(0xFFE8E5E0)),
         boxShadow: [
           BoxShadow(
-            color: colors.text.withValues(alpha: 0.08),
+            color: Colors.black.withValues(alpha: 0.12),
             blurRadius: 18,
             offset: const Offset(0, 10),
           ),
         ],
       ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final compact = constraints.maxWidth < 420;
-          final userButton = FilledButton.icon(
-            onPressed: onUserTap,
-            icon: const Icon(Icons.person_outline_rounded),
-            label: const Text('User Login'),
-          );
-          final adminButton = OutlinedButton.icon(
-            onPressed: onAdminTap,
-            icon: const Icon(Icons.admin_panel_settings_outlined),
-            label: const Text('Admin'),
-          );
+      child: Column(
+        children: [
+          const _LandingBrand(),
+          const SizedBox(height: 18),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 420;
+              final orangeButtonStyle = ButtonStyle(
+                backgroundColor: WidgetStateProperty.all(_loginOrange),
+                foregroundColor: WidgetStateProperty.all(Colors.white),
+                side: WidgetStateProperty.all(
+                  const BorderSide(color: _loginOrange, width: 1.2),
+                ),
+                overlayColor: WidgetStateProperty.all(
+                  Colors.white.withValues(alpha: 0.14),
+                ),
+              );
+              final userButton = FilledButton.icon(
+                style: orangeButtonStyle,
+                onPressed: onUserTap,
+                icon: const Icon(Icons.person_outline_rounded),
+                label: const Text('User Login'),
+              );
+              final adminButton = OutlinedButton.icon(
+                style: orangeButtonStyle,
+                onPressed: onAdminTap,
+                icon: const Icon(Icons.admin_panel_settings_outlined),
+                label: const Text('Admin'),
+              );
 
-          if (compact) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [userButton, const SizedBox(height: 10), adminButton],
-            );
-          }
+              if (compact) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    userButton,
+                    const SizedBox(height: 10),
+                    adminButton,
+                  ],
+                );
+              }
 
-          return Row(
-            children: [
-              Expanded(child: userButton),
-              const SizedBox(width: 12),
-              Expanded(child: adminButton),
-            ],
-          );
-        },
+              return Row(
+                children: [
+                  Expanded(child: userButton),
+                  const SizedBox(width: 12),
+                  Expanded(child: adminButton),
+                ],
+              );
+            },
+          ),
+        ],
       ),
     );
   }
