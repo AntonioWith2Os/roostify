@@ -33,35 +33,68 @@ class AppUser {
     required this.cameraAccessEnabled,
     required this.monitor,
     required this.cctvs,
-    this.liveCctvStreamUrl,
-    CctvInspectionResult? cctvInspection,
-  }) : cctvInspection =
-           cctvInspection ??
-           (liveCctvStreamUrl == null
-               ? CctvInspectionResult.idle()
-               : CctvInspectionResult.waitingForFrame());
+    this.contactNumber = '',
+    this.address = '',
+    this.facebookContact = '',
+    List<LiveCctvStream>? liveCctvStreams,
+  }) : liveCctvStreams = liveCctvStreams ?? [];
 
-  final String username;
-  final String password;
-  final String displayName;
+  String username;
+  String password;
+  String displayName;
+  String contactNumber;
+  String address;
+  String facebookContact;
   final UserRole role;
   bool cameraAccessEnabled;
   MonitorSnapshot monitor;
   final List<CctvFeed> cctvs;
-  String? liveCctvStreamUrl;
-  CctvInspectionResult cctvInspection;
+  final List<LiveCctvStream> liveCctvStreams;
 
   bool get isAdmin => role == UserRole.admin;
 }
 
+/// A single connected live RTSP camera. A user can connect several of these
+/// at once; each runs its own playback, recording, and YOLOv8 inspection
+/// independently of the others.
+class LiveCctvStream {
+  LiveCctvStream({
+    required this.id,
+    required this.streamUrl,
+    required this.label,
+    CctvInspectionResult? inspection,
+  }) : inspection = inspection ?? CctvInspectionResult.waitingForFrame();
+
+  final String id;
+  final String streamUrl;
+  String label;
+  CctvInspectionResult inspection;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'streamUrl': streamUrl,
+    'label': label,
+  };
+
+  factory LiveCctvStream.fromJson(Map<String, dynamic> json) {
+    return LiveCctvStream(
+      id: json['id'] as String,
+      streamUrl: json['streamUrl'] as String,
+      label: json['label'] as String,
+    );
+  }
+}
+
 class Session {
-  const Session({required this.user, this.email, this.photoUrl});
+  Session({required this.user, this.email, this.photoUrl});
 
   final AppUser user;
   // Google profile metadata is optional so existing local/demo sessions still
-  // work with the same Session model.
-  final String? email;
-  final String? photoUrl;
+  // work with the same Session model. Mutable so linking a Google account
+  // after sign-in can update the same Session instance already held by the
+  // active AppShell, without threading a new object through the widget tree.
+  String? email;
+  String? photoUrl;
 }
 
 class MonitorSnapshot {
@@ -489,7 +522,7 @@ class SupportThread {
   });
 
   final String id;
-  final String username;
+  String username;
   final List<SupportMessage> messages;
   bool resolved;
 }

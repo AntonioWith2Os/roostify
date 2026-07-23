@@ -3,6 +3,7 @@ part of '../../main.dart';
 class AppController extends ChangeNotifier {
   static const _requiredCctvHits = 2;
   static const _emptyCctvFramesBeforeClear = 2;
+  static const maxLiveCctvStreams = 4;
 
   AppController({required this.cameras})
     : _users = [
@@ -38,7 +39,13 @@ class AppController extends ChangeNotifier {
               note: 'Chicks visible and resting normally.',
             ),
           ],
-          liveCctvStreamUrl: _testRtspStreamUrl,
+          liveCctvStreams: [
+            LiveCctvStream(
+              id: 'seed-camera-1',
+              streamUrl: _testRtspStreamUrl,
+              label: 'Camera 1',
+            ),
+          ],
         ),
         AppUser(
           username: 'farmer2',
@@ -116,6 +123,7 @@ class AppController extends ChangeNotifier {
   AppThemePreference _themePreference = AppThemePreference.light;
   String? lastError;
   Session? _session;
+  int _streamIdCounter = 0;
 
   List<AppUser> get farmUsers =>
       List.unmodifiable(_users.where((user) => !user.isAdmin));
@@ -247,6 +255,133 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Links the currently signed-in local/demo account to a Google account,
+  /// so its email and photo show up on the Profile tab. Mutates the active
+  /// [Session] in place (rather than replacing it) so the AppShell already
+  /// holding that Session reflects the change immediately.
+  Future<bool> linkGoogleAccount() async {
+    final session = _session;
+    if (session == null) {
+      lastError = 'Sign in before connecting a Google account.';
+      notifyListeners();
+      return false;
+    }
+
+    try {
+      final googleAccount = await _googleSignIn.signIn();
+      if (googleAccount == null) {
+        lastError = 'Google sign-in was cancelled.';
+        notifyListeners();
+        return false;
+      }
+
+      session.email = googleAccount.email;
+      session.photoUrl = googleAccount.photoUrl;
+      lastError = null;
+      notifyListeners();
+      return true;
+    } catch (_) {
+      lastError =
+          'Unable to connect Google. Check the Google OAuth setup for this app.';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Updates [username]'s profile fields in one pass. Batching every field
+  /// into a single notifyListeners() call (instead of one call per field)
+  /// keeps the Profiles page's save action to one rebuild of the app shell
+  /// rather than several back-to-back ones.
+  void updateProfileDetails(
+    String username, {
+    required String displayName,
+    required String contactNumber,
+    required String address,
+    required String facebookContact,
+  }) {
+    final user = userByUsername(username);
+    if (user == null) return;
+
+    final cleanDisplayName = displayName.trim();
+    if (cleanDisplayName.isNotEmpty) {
+      user.displayName = cleanDisplayName;
+    }
+    user.contactNumber = contactNumber.trim();
+    user.address = address.trim();
+    user.facebookContact = facebookContact.trim();
+
+    notifyListeners();
+  }
+
+  /// Changes [username]'s username and/or password after verifying
+  /// [currentPassword]. Pass a null/blank [newUsername] or [newPassword] to
+  /// leave that field unchanged. Returns null on success, or an error
+  /// message to show the user.
+  String? updateCredentials(
+    String username, {
+    String? newUsername,
+    String? newPassword,
+    required String currentPassword,
+  }) {
+    final user = userByUsername(username);
+    if (user == null) {
+      return 'Account not found.';
+    }
+
+    if (user.password != currentPassword) {
+      return 'Current password is incorrect.';
+    }
+
+    final cleanUsername = newUsername?.trim();
+    final cleanPassword = newPassword?.trim();
+    final wantsUsernameChange =
+        cleanUsername != null &&
+        cleanUsername.isNotEmpty &&
+        cleanUsername != user.username;
+    final wantsPasswordChange = cleanPassword != null && cleanPassword.isNotEmpty;
+
+    if (!wantsUsernameChange && !wantsPasswordChange) {
+      return 'Enter a new username or password to update.';
+    }
+
+    if (wantsUsernameChange &&
+        _users.any((other) => other.username == cleanUsername)) {
+      return 'That username is already taken.';
+    }
+
+    if (wantsUsernameChange) {
+      final oldUsername = user.username;
+      user.username = cleanUsername;
+      for (final thread in _supportThreads) {
+        if (thread.username == oldUsername) {
+          thread.username = cleanUsername;
+        }
+      }
+      _clearCctvFiltersForUser(oldUsername);
+      unawaited(_migratePersistedLiveCctvStreams(oldUsername, cleanUsername));
+    }
+
+    if (wantsPasswordChange) {
+      user.password = cleanPassword;
+    }
+
+    notifyListeners();
+    return null;
+  }
+
+  Future<void> _migratePersistedLiveCctvStreams(
+    String oldUsername,
+    String newUsername,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final oldKey = _liveCctvStreamsPrefKey(oldUsername);
+    final raw = prefs.getString(oldKey);
+    if (raw == null) return;
+
+    await prefs.setString(_liveCctvStreamsPrefKey(newUsername), raw);
+    await prefs.remove(oldKey);
+  }
+
   AppUser _userForGoogleAccount(
     GoogleSignInAccount account,
     UserRole expectedRole,
@@ -359,6 +494,11 @@ class AppController extends ChangeNotifier {
     _supportThreads.removeWhere((thread) => thread.username == username);
     _clearCctvFiltersForUser(username);
     notifyListeners();
+    unawaited(
+      SharedPreferences.getInstance().then(
+        (prefs) => prefs.remove(_liveCctvStreamsPrefKey(username)),
+      ),
+    );
   }
 
   void toggleCameraAccess(String username) {
@@ -368,82 +508,183 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setLiveCctvStreamUrl(String username, String? streamUrl) {
+  LiveCctvStream? _liveStreamById(AppUser user, String streamId) {
+    for (final stream in user.liveCctvStreams) {
+      if (stream.id == streamId) {
+        return stream;
+      }
+    }
+    return null;
+  }
+
+  String _generateStreamId() {
+    _streamIdCounter += 1;
+    return 'stream-${DateTime.now().microsecondsSinceEpoch}-$_streamIdCounter';
+  }
+
+  /// Connects a new live camera for [username], in addition to any cameras
+  /// already connected. Returns false (and sets [lastError]) if the URL is
+  /// invalid, already connected, or the [maxLiveCctvStreams] cap is reached.
+  bool addLiveCctvStream(String username, String streamUrl) {
+    final user = userByUsername(username);
+    if (user == null || user.isAdmin) return false;
+
+    final cleanStreamUrl = streamUrl.trim();
+    if (cleanStreamUrl.isEmpty) {
+      lastError = 'Enter a valid RTSP stream URL.';
+      notifyListeners();
+      return false;
+    }
+
+    if (user.liveCctvStreams.any(
+      (stream) => stream.streamUrl == cleanStreamUrl,
+    )) {
+      lastError = 'That camera stream is already connected.';
+      notifyListeners();
+      return false;
+    }
+
+    if (user.liveCctvStreams.length >= maxLiveCctvStreams) {
+      lastError =
+          'Up to $maxLiveCctvStreams live cameras can be connected at once. Remove one to add another.';
+      notifyListeners();
+      return false;
+    }
+
+    user.liveCctvStreams.add(
+      LiveCctvStream(
+        id: _generateStreamId(),
+        streamUrl: cleanStreamUrl,
+        label: 'Camera ${user.liveCctvStreams.length + 1}',
+      ),
+    );
+    lastError = null;
+    notifyListeners();
+    unawaited(_persistLiveCctvStreams(user));
+    return true;
+  }
+
+  void removeLiveCctvStream(String username, String streamId) {
     final user = userByUsername(username);
     if (user == null || user.isAdmin) return;
 
-    final previousStreamUrl = user.liveCctvStreamUrl;
-    if (previousStreamUrl != null) {
-      _clearCctvFilter(username, previousStreamUrl);
-    }
-
-    final cleanStreamUrl = streamUrl?.trim();
-    user.liveCctvStreamUrl = cleanStreamUrl == null || cleanStreamUrl.isEmpty
-        ? null
-        : cleanStreamUrl;
-    user.cctvInspection = user.liveCctvStreamUrl == null
-        ? CctvInspectionResult.idle()
-        : CctvInspectionResult.waitingForFrame();
+    user.liveCctvStreams.removeWhere((stream) => stream.id == streamId);
+    _clearCctvFilter(username, streamId);
     notifyListeners();
+    unawaited(_persistLiveCctvStreams(user));
   }
 
-  void markCctvInspectionCapturing(String username, String streamUrl) {
+  static String _liveCctvStreamsPrefKey(String username) =>
+      'roostify.cctv_streams.$username';
+
+  /// Persists [user]'s connected RTSP URLs so they survive an app restart.
+  ///
+  /// Always writes, even when the list is empty: an explicit `[]` records
+  /// that the user cleared their cameras, distinct from "never touched",
+  /// which would otherwise fall back to the built-in demo seed camera again.
+  Future<void> _persistLiveCctvStreams(AppUser user) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _liveCctvStreamsPrefKey(user.username),
+      jsonEncode(user.liveCctvStreams.map((stream) => stream.toJson()).toList()),
+    );
+  }
+
+  /// Restores every user's saved RTSP URLs from the previous app session.
+  /// Call once after the controller is created; safe to await or fire-and-forget.
+  Future<void> loadPersistedLiveCctvStreams() async {
+    final prefs = await SharedPreferences.getInstance();
+    var restoredAny = false;
+
+    for (final user in _users) {
+      if (user.isAdmin) continue;
+
+      final raw = prefs.getString(_liveCctvStreamsPrefKey(user.username));
+      if (raw == null) continue;
+
+      try {
+        final decoded = jsonDecode(raw) as List<dynamic>;
+        final streams = decoded
+            .map(
+              (item) =>
+                  LiveCctvStream.fromJson(item as Map<String, dynamic>),
+            )
+            .toList();
+        user.liveCctvStreams
+          ..clear()
+          ..addAll(streams);
+        restoredAny = true;
+      } catch (_) {
+        // Ignore corrupted persisted data for this user.
+      }
+    }
+
+    if (restoredAny) {
+      notifyListeners();
+    }
+  }
+
+  void markCctvInspectionCapturing(String username, String streamId) {
     final user = userByUsername(username);
-    if (user == null || user.isAdmin || user.liveCctvStreamUrl != streamUrl) {
+    final stream = user == null ? null : _liveStreamById(user, streamId);
+    if (user == null || user.isAdmin || stream == null) {
       return;
     }
 
-    user.cctvInspection = CctvInspectionResult.capturing();
+    stream.inspection = CctvInspectionResult.capturing();
     notifyListeners();
   }
 
   void markCctvInspectionError(
     String username,
-    String streamUrl,
+    String streamId,
     String message,
   ) {
     final user = userByUsername(username);
-    if (user == null || user.isAdmin || user.liveCctvStreamUrl != streamUrl) {
+    final stream = user == null ? null : _liveStreamById(user, streamId);
+    if (user == null || user.isAdmin || stream == null) {
       return;
     }
 
-    user.cctvInspection = CctvInspectionResult.error(message);
+    stream.inspection = CctvInspectionResult.error(message);
     notifyListeners();
   }
 
   Future<void> inspectCctvFrame(
     String username,
-    String streamUrl,
+    String streamId,
     Uint8List frameBytes,
   ) async {
     final user = userByUsername(username);
-    if (user == null || user.isAdmin || user.liveCctvStreamUrl != streamUrl) {
+    final stream = user == null ? null : _liveStreamById(user, streamId);
+    if (user == null || user.isAdmin || stream == null) {
       return;
     }
 
-    user.cctvInspection = CctvInspectionResult.inspecting();
+    stream.inspection = CctvInspectionResult.inspecting();
     notifyListeners();
 
     try {
       final rawResult = await _yoloDetector.inspectFrame(frameBytes);
       final result = _confirmedCctvInspectionResult(
         username,
-        streamUrl,
+        streamId,
         rawResult,
       );
       final currentUser = userByUsername(username);
-      if (currentUser == null ||
-          currentUser.isAdmin ||
-          currentUser.liveCctvStreamUrl != streamUrl) {
+      final currentStream = currentUser == null
+          ? null
+          : _liveStreamById(currentUser, streamId);
+      if (currentUser == null || currentUser.isAdmin || currentStream == null) {
         return;
       }
 
-      currentUser.cctvInspection = result;
+      currentStream.inspection = result;
       notifyListeners();
     } catch (error) {
       markCctvInspectionError(
         username,
-        streamUrl,
+        streamId,
         'Could not inspect the CCTV frame: $error',
       );
     }
@@ -451,10 +692,10 @@ class AppController extends ChangeNotifier {
 
   CctvInspectionResult _confirmedCctvInspectionResult(
     String username,
-    String streamUrl,
+    String streamId,
     CctvInspectionResult result,
   ) {
-    final key = '$username::$streamUrl';
+    final key = '$username::$streamId';
     if (!result.detected) {
       _cctvCandidates.remove(key);
       _cctvCandidateHits.remove(key);
@@ -463,7 +704,9 @@ class AppController extends ChangeNotifier {
       if (emptyFrames >= _emptyCctvFramesBeforeClear) {
         return result;
       }
-      return userByUsername(username)?.cctvInspection ?? result;
+      final user = userByUsername(username);
+      final stream = user == null ? null : _liveStreamById(user, streamId);
+      return stream?.inspection ?? result;
     }
 
     _cctvEmptyFrames[key] = 0;
@@ -481,8 +724,8 @@ class AppController extends ChangeNotifier {
         : CctvInspectionResult.inspecting();
   }
 
-  void _clearCctvFilter(String username, String streamUrl) {
-    final key = '$username::$streamUrl';
+  void _clearCctvFilter(String username, String streamId) {
+    final key = '$username::$streamId';
     _cctvCandidates.remove(key);
     _cctvCandidateHits.remove(key);
     _cctvEmptyFrames.remove(key);
@@ -621,16 +864,17 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  ManualScanResult generateManualScan(String username) {
-    final user = userByUsername(username);
-    final monitor = user?.monitor ?? MonitorSnapshot.sampleOne();
-    return ManualScanResult(
-      condition: monitor.cctvStatus,
-      breed: monitor.detectedBreed,
-      movement: monitor.movementLabel,
-      detectionCount: monitor.cctvStatus == HealthState.abnormal ? 1 : 0,
+  /// Fallback result shown when the phone camera preview isn't available
+  /// (e.g. on an emulator), so the Scan tab has something to display without
+  /// fabricating breed/movement values that were never actually observed.
+  ManualScanResult generateManualScan() {
+    return const ManualScanResult(
+      condition: HealthState.normal,
+      breed: '-',
+      movement: '-',
+      detectionCount: 0,
       note:
-          'Camera preview is unavailable, so the app is showing the latest farm monitoring estimate for ${monitor.detectedBreed}.',
+          'Camera preview is unavailable on this device, so a live scan could not run.',
     );
   }
 

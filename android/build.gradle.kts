@@ -24,12 +24,24 @@ subprojects {
         afterEvaluate {
             extensions.findByType(com.android.build.gradle.BaseExtension::class.java)
                 ?.let { androidExt ->
+                    // Raise every library module to the app's compileSdk.
                     val appCompileSdk = project(":app")
                         .extensions
                         .getByType(com.android.build.gradle.BaseExtension::class.java)
                         .compileSdkVersion
                     if (appCompileSdk != null) {
                         androidExt.compileSdkVersion(appCompileSdk)
+                    }
+                    // Force Kotlin JVM target to match Java target compatibility.
+                    // Fixes "Inconsistent JVM-target compatibility" errors in plugins like tflite_flutter.
+                    androidExt.compileOptions.apply {
+                        sourceCompatibility = JavaVersion.VERSION_17
+                        targetCompatibility = JavaVersion.VERSION_17
+                    }
+                    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+                        compilerOptions {
+                            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+                        }
                     }
                 }
         }

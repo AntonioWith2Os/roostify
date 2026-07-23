@@ -1,9 +1,14 @@
 part of '../../main.dart';
 
 class CctvInspectionResultCard extends StatelessWidget {
-  const CctvInspectionResultCard({super.key, required this.result});
+  const CctvInspectionResultCard({
+    super.key,
+    required this.result,
+    this.title = 'Rooster inspection',
+  });
 
   final CctvInspectionResult result;
+  final String title;
 
   @override
   Widget build(BuildContext context) {
@@ -14,10 +19,13 @@ class CctvInspectionResultCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'Rooster inspection',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+                  title,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
               ),
               SeverityTag(label: result.state.label, color: result.state.color),

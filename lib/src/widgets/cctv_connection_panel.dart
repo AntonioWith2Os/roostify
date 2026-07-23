@@ -32,22 +32,6 @@ class _CctvConnectionPanelState extends State<CctvConnectionPanel> {
   String? _manualError;
 
   @override
-  void initState() {
-    super.initState();
-    _manualUrlController.text = widget.user.liveCctvStreamUrl ?? '';
-  }
-
-  @override
-  void didUpdateWidget(covariant CctvConnectionPanel oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    final selectedUrl = widget.user.liveCctvStreamUrl ?? '';
-    if (selectedUrl != oldWidget.user.liveCctvStreamUrl &&
-        selectedUrl != _manualUrlController.text) {
-      _manualUrlController.text = selectedUrl;
-    }
-  }
-
-  @override
   void dispose() {
     _activeScanner?.cancel();
     _manualUrlController.dispose();
@@ -115,14 +99,19 @@ class _CctvConnectionPanelState extends State<CctvConnectionPanel> {
   }
 
   void _selectCamera(RtspCameraCandidate candidate) {
-    widget.controller.setLiveCctvStreamUrl(
+    final added = widget.controller.addLiveCctvStream(
       widget.user.username,
       candidate.streamUrl,
     );
     setState(() {
-      _manualUrlController.text = candidate.streamUrl;
-      _manualError = null;
-      _showManualEntry = false;
+      if (added) {
+        _manualError = null;
+        _showManualEntry = false;
+        _scanMessage = 'Added ${candidate.endpoint} as a live camera.';
+      } else {
+        _scanMessage =
+            widget.controller.lastError ?? 'Could not add that camera.';
+      }
     });
   }
 
@@ -135,21 +124,27 @@ class _CctvConnectionPanelState extends State<CctvConnectionPanel> {
       return;
     }
 
-    widget.controller.setLiveCctvStreamUrl(widget.user.username, normalizedUrl);
+    final added = widget.controller.addLiveCctvStream(
+      widget.user.username,
+      normalizedUrl,
+    );
+    if (!added) {
+      setState(() {
+        _manualError =
+            widget.controller.lastError ?? 'Could not add that camera.';
+      });
+      return;
+    }
+
     setState(() {
-      _manualUrlController.text = normalizedUrl;
+      _manualUrlController.clear();
       _manualError = null;
       _showManualEntry = false;
     });
   }
 
-  void _clearSelectedCamera() {
-    widget.controller.setLiveCctvStreamUrl(widget.user.username, null);
-    setState(() {
-      _manualUrlController.clear();
-      _showManualEntry = true;
-      _manualError = null;
-    });
+  void _removeStream(LiveCctvStream stream) {
+    widget.controller.removeLiveCctvStream(widget.user.username, stream.id);
   }
 
   String? _normalizeRtspUrl(String rawValue) {
@@ -172,47 +167,32 @@ class _CctvConnectionPanelState extends State<CctvConnectionPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final selectedStreamUrl = widget.user.liveCctvStreamUrl;
+    final streams = widget.user.liveCctvStreams;
+    final atLimit = streams.length >= AppController.maxLiveCctvStreams;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const _LocalYoloModelStatus(),
         const SizedBox(height: 12),
-        if (selectedStreamUrl == null)
+        if (streams.isEmpty)
           const _NoSelectedCctvState()
         else
-          LiveFeedCard(
-            key: ValueKey(selectedStreamUrl),
-            streamUrl: selectedStreamUrl,
-            detections: widget.user.cctvInspection.detections,
-            onFrameCaptureStarted: () {
-              widget.controller.markCctvInspectionCapturing(
-                widget.user.username,
-                selectedStreamUrl,
-              );
-            },
-            onFrameReady: (frameBytes) {
-              return widget.controller.inspectCctvFrame(
-                widget.user.username,
-                selectedStreamUrl,
-                frameBytes,
-              );
-            },
-            onFrameCaptureFailed: (message) {
-              widget.controller.markCctvInspectionError(
-                widget.user.username,
-                selectedStreamUrl,
-                message,
-              );
-            },
-          ),
-        if (selectedStreamUrl != null) ...[
-          const SizedBox(height: 12),
-          V380PtzControlPanel(streamUrl: selectedStreamUrl),
-        ],
+          for (var i = 0; i < streams.length; i++) ...[
+            if (i > 0) const SizedBox(height: 20),
+            _CctvStreamPanel(
+              controller: widget.controller,
+              user: widget.user,
+              stream: streams[i],
+              onRemove: () => _removeStream(streams[i]),
+            ),
+          ],
         const SizedBox(height: 12),
-        _buildActionButtons(selectedStreamUrl),
+        _buildActionButtons(atLimit),
+        if (atLimit) ...[
+          const SizedBox(height: 10),
+          _buildLimitNotice(),
+        ],
         if (_showScanOptions) ...[
           const SizedBox(height: 12),
           _buildScanOptions(),
@@ -233,13 +213,28 @@ class _CctvConnectionPanelState extends State<CctvConnectionPanel> {
     );
   }
 
-  Widget _buildActionButtons(String? selectedStreamUrl) {
+  Widget _buildLimitNotice() {
+    final colors = context.appColors;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colors.surfaceRaised,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Text(
+        'Up to ${AppController.maxLiveCctvStreams} live cameras can be connected at once. Remove one to add another.',
+        style: TextStyle(color: colors.mutedText, height: 1.4),
+      ),
+    );
+  }
+
+  Widget _buildActionButtons(bool atLimit) {
     return Wrap(
       spacing: 10,
       runSpacing: 10,
       children: [
         FilledButton.icon(
-          onPressed: _scanning ? null : _startScan,
+          onPressed: _scanning || atLimit ? null : _startScan,
           icon: Icon(
             _scanning ? Icons.radar_outlined : Icons.manage_search_outlined,
           ),
@@ -252,30 +247,28 @@ class _CctvConnectionPanelState extends State<CctvConnectionPanel> {
             label: const Text('Stop'),
           ),
         OutlinedButton.icon(
-          onPressed: () {
-            setState(() {
-              _showScanOptions = !_showScanOptions;
-            });
-          },
+          onPressed: atLimit
+              ? null
+              : () {
+                  setState(() {
+                    _showScanOptions = !_showScanOptions;
+                  });
+                },
           icon: const Icon(Icons.tune_outlined),
           label: Text(_showScanOptions ? 'Hide Options' : 'Scan Options'),
         ),
         OutlinedButton.icon(
-          onPressed: () {
-            setState(() {
-              _showManualEntry = !_showManualEntry;
-              _manualError = null;
-            });
-          },
-          icon: const Icon(Icons.link_outlined),
-          label: Text(selectedStreamUrl == null ? 'Manual URL' : 'Change URL'),
+          onPressed: atLimit
+              ? null
+              : () {
+                  setState(() {
+                    _showManualEntry = !_showManualEntry;
+                    _manualError = null;
+                  });
+                },
+          icon: const Icon(Icons.add_link_outlined),
+          label: const Text('Add Camera'),
         ),
-        if (selectedStreamUrl != null)
-          OutlinedButton.icon(
-            onPressed: _clearSelectedCamera,
-            icon: const Icon(Icons.videocam_off_outlined),
-            label: const Text('Disconnect'),
-          ),
       ],
     );
   }
@@ -411,6 +404,73 @@ class _CctvConnectionPanelState extends State<CctvConnectionPanel> {
   }
 }
 
+class _CctvStreamPanel extends StatelessWidget {
+  const _CctvStreamPanel({
+    required this.controller,
+    required this.user,
+    required this.stream,
+    required this.onRemove,
+  });
+
+  final AppController controller;
+  final AppUser user;
+  final LiveCctvStream stream;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.videocam_outlined, size: 18, color: colors.mutedText),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                stream.label,
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: onRemove,
+              icon: const Icon(Icons.videocam_off_outlined, size: 18),
+              label: const Text('Remove'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        LiveFeedCard(
+          key: ValueKey(stream.id),
+          streamUrl: stream.streamUrl,
+          recordingOwnerUsername: user.username,
+          detections: stream.inspection.detections,
+          onFrameCaptureStarted: () {
+            controller.markCctvInspectionCapturing(user.username, stream.id);
+          },
+          onFrameReady: (frameBytes) {
+            return controller.inspectCctvFrame(
+              user.username,
+              stream.id,
+              frameBytes,
+            );
+          },
+          onFrameCaptureFailed: (message) {
+            controller.markCctvInspectionError(
+              user.username,
+              stream.id,
+              message,
+            );
+          },
+        ),
+        const SizedBox(height: 12),
+        V380PtzControlPanel(streamUrl: stream.streamUrl),
+      ],
+    );
+  }
+}
+
 class _NoSelectedCctvState extends StatelessWidget {
   const _NoSelectedCctvState();
 
@@ -511,8 +571,8 @@ class _CameraCandidateTile extends StatelessWidget {
 
         final useButton = FilledButton.icon(
           onPressed: onUse,
-          icon: const Icon(Icons.play_arrow_outlined),
-          label: const Text('Use'),
+          icon: const Icon(Icons.add_outlined),
+          label: const Text('Add'),
         );
 
         if (compact) {

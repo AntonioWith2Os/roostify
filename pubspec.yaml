@@ -42,6 +42,10 @@ dependencies:
   image: ^4.8.0
   tflite_flutter: ^0.12.1
   xml: ^6.6.1
+  ffmpeg_kit_flutter_new_min_gpl: ^2.5.4
+  path_provider: ^2.1.0
+  gal: ^2.3.0
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:

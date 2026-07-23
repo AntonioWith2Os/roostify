@@ -4,6 +4,7 @@ class LiveFeedCard extends StatefulWidget {
   const LiveFeedCard({
     super.key,
     required this.streamUrl,
+    required this.recordingOwnerUsername,
     this.detections = const [],
     this.inspectionInterval,
     this.onFrameCaptureStarted,
@@ -12,6 +13,10 @@ class LiveFeedCard extends StatefulWidget {
   });
 
   final String streamUrl;
+
+  /// Username that any recording started from this card is saved under, so
+  /// only that user (and the admin) can see it in the Recordings list.
+  final String recordingOwnerUsername;
   final List<ChickenDetection> detections;
 
   /// Minimum time between frame captures; defaults to a device-scaled cadence.
@@ -128,6 +133,15 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   Duration _lastInspectionCost = Duration.zero;
   int _consecutiveCaptureFailures = 0;
 
+  final RtspRecorderService _recorder = RtspRecorderService();
+  Timer? _recordingTicker;
+  bool _isRecording = false;
+  bool _recordingBusy = false;
+  Duration _recordingElapsed = Duration.zero;
+
+  bool _wasFullScreen = false;
+  Timer? _orientationResetTimer;
+
   Duration get _baseInspectionInterval =>
       widget.inspectionInterval ?? _defaultInspectionInterval();
 
@@ -160,6 +174,18 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   }
 
   void _replaceController({bool resetRecovery = false}) {
+    final currentController = _controller;
+    if (currentController != null && currentController.value.fullScreen) {
+      // fijkplayer_plus pushes its own fullscreen route and only pops it
+      // (restoring system UI/orientation) when it sees fullScreen flip back
+      // to false on this exact player. If a stall/error triggers automatic
+      // recovery while the user is still in fullscreen, tearing down the
+      // player out from under that pushed route leaves it stuck on screen
+      // referencing a disposed player. Exit first so the route closes
+      // cleanly before we swap players.
+      currentController.exitFullScreen();
+    }
+
     _diagnosticTimer?.cancel();
     _recoveryTimer?.cancel();
     _inspectionTimer?.cancel();
@@ -250,6 +276,11 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
       return;
     }
 
+    if (_wasFullScreen && !value.fullScreen) {
+      _scheduleOrientationReset();
+    }
+    _wasFullScreen = value.fullScreen;
+
     if (_isPlaying(value)) {
       _hasPlayedCurrentController = true;
       _ensureRepeatedFrameInspection(controller, _controllerGeneration);
@@ -281,6 +312,21 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
         delay: _startupRecoveryDelay,
       );
     }
+  }
+
+  void _scheduleOrientationReset() {
+    _orientationResetTimer?.cancel();
+    // fijkplayer_plus locks device rotation to whichever two orientations
+    // match the video's aspect ratio when entering fullscreen (landscape
+    // for typical 16:9 CCTV footage), then on exit "restores" it by locking
+    // to the *other* pair instead of clearing the restriction — so the
+    // whole app is left rotation-locked after the first fullscreen use.
+    // Its own restore call runs asynchronously right after this listener
+    // fires, so clear the restriction shortly after rather than
+    // immediately, or this reset gets clobbered by that call.
+    _orientationResetTimer = Timer(const Duration(milliseconds: 400), () {
+      SystemChrome.setPreferredOrientations(const []);
+    });
   }
 
   void _ensureRepeatedFrameInspection(FijkPlayer controller, int generation) {
@@ -739,6 +785,100 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     return 'CCTV reached, but RTSP authentication was rejected. Check the username and password.';
   }
 
+  Future<void> _toggleRecording() async {
+    if (_recordingBusy) {
+      return;
+    }
+    if (_isRecording) {
+      await _stopRecording();
+    } else {
+      await _startRecording();
+    }
+  }
+
+  Future<void> _startRecording() async {
+    setState(() => _recordingBusy = true);
+    try {
+      await _recorder.startRecording(
+        widget.streamUrl,
+        username: widget.recordingOwnerUsername,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _isRecording = true;
+        _recordingElapsed = Duration.zero;
+      });
+      _recordingTicker?.cancel();
+      _recordingTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted) {
+          return;
+        }
+        setState(() => _recordingElapsed = _recorder.recordingDuration);
+      });
+      _showRecordingSnack('Recording started.');
+    } catch (error) {
+      if (mounted) {
+        _showRecordingSnack('Could not start recording: $error');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _recordingBusy = false);
+      }
+    }
+  }
+
+  Future<void> _stopRecording() async {
+    setState(() => _recordingBusy = true);
+    _recordingTicker?.cancel();
+    _recordingTicker = null;
+    try {
+      final outputPath = await _recorder.stopRecording();
+      if (!mounted) {
+        return;
+      }
+      if (outputPath == null) {
+        _showRecordingSnack(
+          'Recording stopped, but no video was saved (the stream may have failed).',
+        );
+      } else {
+        _showRecordingSnack('Recording saved to the Roostify gallery album.');
+      }
+    } catch (error) {
+      if (mounted) {
+        _showRecordingSnack('Could not finalize recording: $error');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRecording = false;
+          _recordingBusy = false;
+          _recordingElapsed = Duration.zero;
+        });
+      }
+    }
+  }
+
+  void _showRecordingSnack(String message) {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) {
+      return;
+    }
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  String _formatRecordingElapsed(Duration duration) {
+    final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    if (duration.inHours > 0) {
+      return '${duration.inHours.toString().padLeft(2, '0')}:$minutes:$seconds';
+    }
+    return '$minutes:$seconds';
+  }
+
   void _enterFullScreen() {
     final controller = _controller;
     if (!_supportsFijkPlayer || controller == null) {
@@ -772,26 +912,34 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
         Positioned(
           top: 16,
           left: 16,
-          child: const SeverityTag(
-            label: 'LIVE CCTV',
-            color: Color(0xFF43E39C),
+          child: SafeArea(
+            bottom: false,
+            right: false,
+            child: const SeverityTag(
+              label: 'LIVE CCTV',
+              color: Color(0xFF43E39C),
+            ),
           ),
         ),
         Positioned(
           top: 12,
           right: 12,
-          child: _LiveFeedIconButton(
-            tooltip: 'Exit full screen',
-            icon: Icons.fullscreen_exit,
-            onPressed: player.exitFullScreen,
+          child: SafeArea(
+            bottom: false,
+            left: false,
+            child: _LiveFeedIconButton(
+              tooltip: 'Exit full screen',
+              icon: Icons.fullscreen_exit,
+              onPressed: player.exitFullScreen,
+            ),
           ),
         ),
         Positioned(
-          left: 16,
+          right: 16,
           bottom: 64,
           child: SafeArea(
             top: false,
-            right: false,
+            left: false,
             child: Theme(
               data: buildAppTheme(Brightness.dark),
               child: V380PtzControlPanel(
@@ -848,6 +996,9 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     _diagnosticTimer?.cancel();
     _recoveryTimer?.cancel();
     _inspectionTimer?.cancel();
+    _recordingTicker?.cancel();
+    _orientationResetTimer?.cancel();
+    _recorder.dispose();
     _controller?.removeListener(_handlePlayerValueChanged);
     if (_controller case final controller?) {
       unawaited(controller.release().catchError((_) {}));
@@ -941,12 +1092,28 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
             left: 18,
             child: SeverityTag(label: 'LIVE CCTV', color: Color(0xFF43E39C)),
           ),
+          if (_isRecording)
+            Positioned(
+              top: 52,
+              left: 18,
+              child: _RecordingIndicator(
+                label: _formatRecordingElapsed(_recordingElapsed),
+              ),
+            ),
           Positioned(
             top: 12,
             right: 12,
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                _LiveFeedRecordButton(
+                  isRecording: _isRecording,
+                  busy: _recordingBusy,
+                  onPressed: _supportsFijkPlayer && controller != null
+                      ? _toggleRecording
+                      : null,
+                ),
+                const SizedBox(width: 8),
                 _LiveFeedIconButton(
                   tooltip: 'Full screen',
                   icon: Icons.fullscreen,
@@ -1063,6 +1230,102 @@ class _LiveFeedIconButton extends StatelessWidget {
         iconSize: 20,
         constraints: const BoxConstraints.tightFor(width: 42, height: 38),
         padding: EdgeInsets.zero,
+      ),
+    );
+  }
+}
+
+class _LiveFeedRecordButton extends StatelessWidget {
+  const _LiveFeedRecordButton({
+    required this.isRecording,
+    required this.busy,
+    required this.onPressed,
+  });
+
+  final bool isRecording;
+  final bool busy;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onPressed != null && !busy;
+    final baseColor = isRecording
+        ? _appAccent
+        : Colors.black.withValues(alpha: enabled ? 0.46 : 0.26);
+
+    return Material(
+      color: baseColor,
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
+      child: IconButton(
+        tooltip: isRecording ? 'Stop recording' : 'Record',
+        onPressed: enabled ? onPressed : null,
+        icon: busy
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.4,
+                  color: Colors.white,
+                ),
+              )
+            : Icon(
+                isRecording ? Icons.stop : Icons.fiber_manual_record,
+                color: enabled || isRecording ? Colors.white : Colors.white38,
+              ),
+        iconSize: 20,
+        constraints: const BoxConstraints.tightFor(width: 42, height: 38),
+        padding: EdgeInsets.zero,
+      ),
+    );
+  }
+}
+
+class _RecordingIndicator extends StatelessWidget {
+  const _RecordingIndicator({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 10,
+            height: 10,
+            decoration: const BoxDecoration(
+              color: _appAccent,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 8),
+          const Text(
+            'REC',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -352,19 +352,21 @@ class _V380PtzControlPanelState extends State<V380PtzControlPanel> {
     final mutedTextColor = widget.compactOverlay
         ? Colors.white70
         : colors.subtleText;
+    // In fullscreen the panel floats directly over the video with no solid
+    // backing, so give its text a drop shadow to stay legible over bright
+    // footage instead of relying on an opaque background box.
+    final overlayTextShadow = widget.compactOverlay
+        ? const [Shadow(color: Colors.black87, blurRadius: 6)]
+        : null;
 
     return Container(
       padding: EdgeInsets.all(widget.compactOverlay ? 10 : 14),
       decoration: BoxDecoration(
-        color: widget.compactOverlay
-            ? Colors.black.withValues(alpha: 0.52)
-            : colors.surfaceRaised,
+        color: widget.compactOverlay ? Colors.transparent : colors.surfaceRaised,
         borderRadius: BorderRadius.circular(widget.compactOverlay ? 16 : 20),
-        border: Border.all(
-          color: widget.compactOverlay
-              ? Colors.white.withValues(alpha: 0.14)
-              : colors.border,
-        ),
+        border: widget.compactOverlay
+            ? null
+            : Border.all(color: colors.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -383,6 +385,7 @@ class _V380PtzControlPanelState extends State<V380PtzControlPanel> {
                   style: TextStyle(
                     color: textColor,
                     fontWeight: FontWeight.w900,
+                    shadows: overlayTextShadow,
                   ),
                 ),
               ),
@@ -394,6 +397,7 @@ class _V380PtzControlPanelState extends State<V380PtzControlPanel> {
                   color: mutedTextColor,
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
+                  shadows: overlayTextShadow,
                 ),
               ),
               if (!widget.compactOverlay) ...[
@@ -443,6 +447,7 @@ class _V380PtzControlPanelState extends State<V380PtzControlPanel> {
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
                 height: 1.35,
+                shadows: overlayTextShadow,
               ),
             ),
           ],
@@ -460,47 +465,26 @@ class _V380PtzControlPanelState extends State<V380PtzControlPanel> {
             ? const EdgeInsets.fromLTRB(12, 12, 12, 10)
             : const EdgeInsets.fromLTRB(16, 14, 16, 12),
         decoration: BoxDecoration(
-          color: const Color(0xFF11162A),
+          color: widget.compactOverlay
+              ? Colors.transparent
+              : const Color(0xFF11162A),
           borderRadius: BorderRadius.circular(28),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.18),
-              blurRadius: 18,
-              offset: const Offset(0, 10),
-            ),
-          ],
+          border: widget.compactOverlay
+              ? null
+              : Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          boxShadow: widget.compactOverlay
+              ? null
+              : [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.18),
+                    blurRadius: 18,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _PtzHoldButton(
-                  tooltip: 'Zoom out',
-                  icon: Icons.zoom_out_outlined,
-                  active: _activeControlId == 'zoom-out',
-                  disabled: _isControlDisabled('zoom-out'),
-                  onPressStart: () => _startHoldMove(
-                    'zoom-out',
-                    const _OnvifPtzVector(zoom: -1),
-                  ),
-                  onPressEnd: () => _endHoldMove('zoom-out'),
-                ),
-                const SizedBox(width: 12),
-                _PtzHoldButton(
-                  tooltip: 'Zoom in',
-                  icon: Icons.zoom_in_outlined,
-                  active: _activeControlId == 'zoom-in',
-                  disabled: _isControlDisabled('zoom-in'),
-                  onPressStart: () =>
-                      _startHoldMove('zoom-in', const _OnvifPtzVector(zoom: 1)),
-                  onPressEnd: () => _endHoldMove('zoom-in'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
             _buildDirectionPad(),
             const SizedBox(height: 12),
             Row(

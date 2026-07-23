@@ -17,6 +17,7 @@ class _RoosterWatchAppState extends State<RoosterWatchApp> {
   void initState() {
     super.initState();
     _controller = AppController(cameras: widget.cameras);
+    unawaited(_controller.loadPersistedLiveCctvStreams());
   }
 
   void _finishStartup() {

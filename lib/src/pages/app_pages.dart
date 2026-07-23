@@ -657,7 +657,7 @@ class UserDashboardPage extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('User Dashboard'),
+        title: const Text('Dashboard'),
         actions: [
           IconButton(
             onPressed: () {
@@ -885,18 +885,12 @@ class UserCctvPage extends StatelessWidget {
       builder: (context, _) {
         final user = controller.userByUsername(session.user.username)!;
         final monitor = user.monitor;
-        final colors = context.appColors;
 
         return Scaffold(
           appBar: AppBar(title: const Text('CCTV Monitoring')),
           body: ListView(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
             children: [
-              const SectionHeader(
-                title: 'CCTV Rooster Inspection',
-                subtitle:
-                    'Connect the RTSP camera, preview the live feed, and inspect rendered frames with the on-device YOLOv8 model.',
-              ),
               const SizedBox(height: 12),
               _GlassCard(
                 child: Column(
@@ -904,18 +898,31 @@ class UserCctvPage extends StatelessWidget {
                   children: [
                     Row(
                       children: [
-                        const Expanded(
-                          child: Text(
-                            'Main Pen CCTV',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                        ),
                         SeverityTag(
                           label: monitor.cctvStatus.label,
                           color: monitor.cctvStatus.color,
+                        ),
+                        const Spacer(),
+                        Tooltip(
+                          message: user.liveCctvStreams.length >= 2
+                              ? 'View every connected camera at once'
+                              : 'Connect at least 2 cameras to combine them',
+                          child: OutlinedButton.icon(
+                            onPressed: user.liveCctvStreams.length >= 2
+                                ? () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute<void>(
+                                        builder: (_) =>
+                                            MultiCameraFullscreenPage(
+                                              streams: user.liveCctvStreams,
+                                            ),
+                                      ),
+                                    );
+                                  }
+                                : null,
+                            icon: const Icon(Icons.grid_view_outlined),
+                            label: const Text('View All'),
+                          ),
                         ),
                       ],
                     ),
@@ -924,38 +931,13 @@ class UserCctvPage extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(height: 14),
-              CctvInspectionResultCard(result: user.cctvInspection),
-              const SizedBox(height: 14),
-              _GlassCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      monitor.cctvSummary,
-                      style: TextStyle(color: colors.mutedText, height: 1.5),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: SummaryMiniCard(
-                            title: 'Detected Breed',
-                            value: monitor.detectedBreed,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: SummaryMiniCard(
-                            title: 'Movement',
-                            value: monitor.movementLabel,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+              for (final stream in user.liveCctvStreams) ...[
+                const SizedBox(height: 14),
+                CctvInspectionResultCard(
+                  title: '${stream.label} — Rooster inspection',
+                  result: stream.inspection,
                 ),
-              ),
+              ],
             ],
           ),
         );
@@ -1101,6 +1083,63 @@ const _systemBracketGuides = [
   ),
 ];
 
+const _normalPostureGuides = [
+  (
+    'Standing Upright',
+    'Rooster stands balanced on both legs with its head held high.',
+  ),
+  (
+    'Walking Normally',
+    'Moves smoothly without limping or dragging its legs.',
+  ),
+  (
+    'Foraging/Scratching',
+    'Scratches the ground while searching for food, showing natural behavior.',
+  ),
+  ('Eating', 'Pecking at feed with good appetite.'),
+  ('Drinking Water', 'Drinks normally without difficulty.'),
+  ('Alert Posture', 'Head raised, eyes open, aware of surroundings.'),
+  (
+    'Wing Stretching',
+    'Briefly stretches one or both wings before returning to a relaxed posture.',
+  ),
+  ('Perching', 'Resting comfortably on a perch while maintaining balance.'),
+  ('Preening', 'Cleaning feathers using its beak, a normal grooming behavior.'),
+  (
+    'Crowing',
+    'Standing upright while crowing; common in healthy adult roosters.',
+  ),
+  ('Dust Bathing', 'Rolling or lying briefly in dry soil to clean feathers.'),
+  (
+    'Light Resting',
+    'Sitting normally with head up and responding to nearby movement.',
+  ),
+];
+
+const _abnormalPostureGuides = [
+  ('Lying Flat on the Ground', 'Severe weakness or illness.'),
+  ('Head Drooping', 'Fatigue, dehydration, or sickness.'),
+  ('One-Wing Drooping', 'Wing injury or muscle weakness.'),
+  ('Both Wings Hanging Down', 'Heat stress or serious illness.'),
+  ('Unable to Stand', 'Leg injury or severe disease.'),
+  ('Limping While Walking', 'Foot or leg injury.'),
+  ('Twisted Neck', 'Possible neurological disorder or injury.'),
+  ('Constant Sitting', 'Weakness or lack of energy.'),
+  ('Panting with Open Beak', 'Heat stress or respiratory problem.'),
+  ('Loss of Balance', 'Possible neurological problem or injury.'),
+  ('Dragging One Leg', 'Injury or nerve damage.'),
+  ('Isolating from Other Birds', 'Illness or stress.'),
+  (
+    'Collapsed Posture',
+    'Emergency condition requiring immediate attention.',
+  ),
+  (
+    'Head Tucked Under Wing for Long Periods',
+    'Weakness or illness (outside normal sleeping).',
+  ),
+  ('Shaking or Trembling', 'Stress, fever, or neurological issues.'),
+];
+
 class _SystemBracketGuideCard extends StatelessWidget {
   const _SystemBracketGuideCard({required this.guide});
 
@@ -1159,6 +1198,78 @@ class _SystemBracketGuideCard extends StatelessWidget {
                   const SizedBox(height: 12),
                   for (final warningGuide in _sensorWarningGuides)
                     _SensorWarningGuideCard(guide: warningGuide),
+                ],
+                if (guide.title == 'Chicken State') ...[
+                  const SizedBox(height: 8),
+                  const Divider(),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Container(
+                        width: 10,
+                        height: 10,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF26C281),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Normal Postures (Healthy)',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'These postures indicate that the rooster appears healthy and behaving normally.',
+                    style: TextStyle(color: colors.mutedText, height: 1.45),
+                  ),
+                  const SizedBox(height: 12),
+                  for (final (posture, meaning) in _normalPostureGuides)
+                    _PostureGuideRow(
+                      posture: posture,
+                      meaning: meaning,
+                      color: const Color(0xFF26C281),
+                    ),
+                  const SizedBox(height: 8),
+                  const Divider(),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Container(
+                        width: 10,
+                        height: 10,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFFF6B72),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Abnormal Postures (Possible Health Problems)',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'These postures may indicate illness, injury, weakness, or stress.',
+                    style: TextStyle(color: colors.mutedText, height: 1.45),
+                  ),
+                  const SizedBox(height: 12),
+                  for (final (posture, meaning) in _abnormalPostureGuides)
+                    _PostureGuideRow(
+                      posture: posture,
+                      meaning: meaning,
+                      color: const Color(0xFFFF6B72),
+                    ),
                 ],
               ],
             ),
@@ -1388,6 +1499,63 @@ class _SensorWarningGuideCard extends StatelessWidget {
   }
 }
 
+class _PostureGuideRow extends StatelessWidget {
+  const _PostureGuideRow({
+    required this.posture,
+    required this.meaning,
+    required this.color,
+  });
+
+  final String posture;
+  final String meaning;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 5),
+            child: Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  posture,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  meaning,
+                  style: TextStyle(
+                    color: colors.mutedText,
+                    fontSize: 12,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class SupportChatPage extends StatefulWidget {
   const SupportChatPage({
     super.key,
@@ -1458,39 +1626,61 @@ class _SupportChatPageState extends State<SupportChatPage> {
                 top: false,
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                  child: Row(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _messageController,
-                          minLines: 1,
-                          maxLines: 4,
-                          decoration: const InputDecoration(
-                            hintText:
-                                'Describe the bug or arrange support time',
-                          ),
+                      for (
+                        var i = 0;
+                        i < _supportIssueCategories.length;
+                        i++
+                      ) ...[
+                        if (i > 0) const SizedBox(height: 8),
+                        _SupportCategoryButton(
+                          category: _supportIssueCategories[i],
+                          onMessageSelected: (message) {
+                            widget.controller.sendUserSupportMessage(
+                              username: widget.session.user.username,
+                              text: message,
+                            );
+                          },
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      FilledButton(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: _appAccent,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 18,
-                            vertical: 18,
+                      ],
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _messageController,
+                              minLines: 1,
+                              maxLines: 4,
+                              decoration: const InputDecoration(
+                                hintText:
+                                    'Describe the bug or arrange support time',
+                              ),
+                            ),
                           ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(18),
+                          const SizedBox(width: 12),
+                          FilledButton(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: _appAccent,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 18,
+                                vertical: 18,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(18),
+                              ),
+                            ),
+                            onPressed: () {
+                              widget.controller.sendUserSupportMessage(
+                                username: widget.session.user.username,
+                                text: _messageController.text,
+                              );
+                              _messageController.clear();
+                            },
+                            child: const Text('Send'),
                           ),
-                        ),
-                        onPressed: () {
-                          widget.controller.sendUserSupportMessage(
-                            username: widget.session.user.username,
-                            text: _messageController.text,
-                          );
-                          _messageController.clear();
-                        },
-                        child: const Text('Send'),
+                        ],
                       ),
                     ],
                   ),
@@ -1500,6 +1690,119 @@ class _SupportChatPageState extends State<SupportChatPage> {
           ),
         );
       },
+    );
+  }
+}
+
+class _SupportIssueCategory {
+  const _SupportIssueCategory({
+    required this.label,
+    required this.icon,
+    required this.messages,
+  });
+
+  final String label;
+  final IconData icon;
+  final List<String> messages;
+}
+
+const _supportIssueCategories = <_SupportIssueCategory>[
+  _SupportIssueCategory(
+    label: 'Camera Issues',
+    icon: Icons.videocam_outlined,
+    messages: [
+      "The camera won't connect.",
+      'The RTSP stream keeps disconnecting.',
+      "Scan Cameras isn't finding my camera.",
+      'The live feed is blurry or frozen.',
+      "The recording won't start or save.",
+    ],
+  ),
+  _SupportIssueCategory(
+    label: 'ESP32 Sensor Issues',
+    icon: Icons.sensors_outlined,
+    messages: [
+      "The ESP32 sensor won't connect.",
+      'Sensor readings look wrong or frozen.',
+      'The sensor keeps disconnecting.',
+    ],
+  ),
+  _SupportIssueCategory(
+    label: 'Other Issues',
+    icon: Icons.more_horiz_outlined,
+    messages: [
+      'I encountered a bug.',
+      'I have a general question.',
+      "I'd like to schedule a troubleshooting or repair visit.",
+    ],
+  ),
+];
+
+class _SupportCategoryButton extends StatelessWidget {
+  const _SupportCategoryButton({
+    required this.category,
+    required this.onMessageSelected,
+  });
+
+  final _SupportIssueCategory category;
+  final ValueChanged<String> onMessageSelected;
+
+  void _showCategorySheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        final colors = sheetContext.appColors;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(category.icon, color: _appAccent),
+                    const SizedBox(width: 10),
+                    Text(
+                      category.label,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Tap a message to send it to the admin.',
+                  style: TextStyle(color: colors.mutedText),
+                ),
+                const SizedBox(height: 8),
+                for (final message in category.messages)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.chat_bubble_outline),
+                    title: Text(message),
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      onMessageSelected(message);
+                    },
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: () => _showCategorySheet(context),
+      icon: Icon(category.icon),
+      label: Text(category.label),
     );
   }
 }
@@ -1595,32 +1898,75 @@ class ProfilePage extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(height: 14),
-          ProfileInfoCard(
-            icon: Icons.badge_outlined,
-            title: 'Username',
-            subtitle: user.username,
-          ),
-          ProfileInfoCard(
-            icon: Icons.camera_alt_outlined,
-            title: 'Manual camera access',
-            subtitle: user.isAdmin
-                ? 'Admin account'
-                : user.cameraAccessEnabled
-                ? 'Enabled by admin'
-                : 'Disabled by admin',
-          ),
-          ProfileInfoCard(
-            icon: Icons.support_agent_outlined,
-            title: 'Support conversation',
-            subtitle: user.isAdmin
-                ? '${controller.openSupportCount} open issue threads'
-                : controller.threadForUser(user.username) == null
-                ? 'No issue reported'
-                : 'Issue thread available',
-          ),
-          ThemePreferenceCard(controller: controller),
           const SizedBox(height: 18),
+          // 1. Profiles.
+          OutlinedButton.icon(
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) =>
+                      ProfileEditPage(controller: controller, user: user),
+                ),
+              );
+            },
+            icon: const Icon(Icons.contact_page_outlined),
+            label: const Text('Profiles'),
+          ),
+          const SizedBox(height: 12),
+          // 2. Username / password.
+          OutlinedButton.icon(
+            onPressed: () =>
+                _showChangeCredentialsDialog(context, controller, user),
+            icon: const Icon(Icons.manage_accounts_outlined),
+            label: const Text('Username & Password'),
+          ),
+          const SizedBox(height: 12),
+          // 3. Recordings.
+          OutlinedButton.icon(
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => RecordingsPage(currentUser: user),
+                ),
+              );
+            },
+            icon: const Icon(Icons.video_library_outlined),
+            label: Text(user.isAdmin ? 'All Recordings' : 'My Recordings'),
+          ),
+          const SizedBox(height: 12),
+          // 4. Dark mode.
+          ThemePreferenceCard(controller: controller),
+          // 5. Connect Google.
+          OutlinedButton.icon(
+            onPressed: session.email != null
+                ? null
+                : () async {
+                    final linked = await controller.linkGoogleAccount();
+                    if (!context.mounted) return;
+                    if (!linked) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            controller.lastError ??
+                                'Could not connect the Google account.',
+                          ),
+                        ),
+                      );
+                    }
+                  },
+            icon: Icon(
+              session.email != null
+                  ? Icons.check_circle_outline
+                  : Icons.link_outlined,
+            ),
+            label: Text(
+              session.email != null
+                  ? 'Connected: ${session.email}'
+                  : 'Connect Google Account',
+            ),
+          ),
+          const SizedBox(height: 12),
+          // 6. Log out.
           FilledButton.icon(
             onPressed: () async {
               await controller.signOut();
@@ -1633,10 +1979,239 @@ class ProfilePage extends StatelessWidget {
               );
             },
             icon: const Icon(Icons.logout),
-            label: const Text('Sign Out'),
+            label: const Text('Log Out'),
           ),
         ],
       ),
+    );
+  }
+}
+
+class ProfileEditPage extends StatefulWidget {
+  const ProfileEditPage({
+    super.key,
+    required this.controller,
+    required this.user,
+  });
+
+  final AppController controller;
+  final AppUser user;
+
+  @override
+  State<ProfileEditPage> createState() => _ProfileEditPageState();
+}
+
+class _ProfileEditPageState extends State<ProfileEditPage> {
+  late final TextEditingController _nameController = TextEditingController(
+    text: widget.user.displayName,
+  );
+  late final TextEditingController _contactController = TextEditingController(
+    text: widget.user.contactNumber,
+  );
+  late final TextEditingController _addressController = TextEditingController(
+    text: widget.user.address,
+  );
+  late final TextEditingController _facebookController =
+      TextEditingController(text: widget.user.facebookContact);
+
+  @override
+  void dispose() {
+    // A full page (rather than a showDialog() modal) means there's no
+    // barrier + fade/scale transition competing with the keyboard's own
+    // show/hide animation for frame budget when a field is focused — that
+    // race was the main source of the jank this used to have as a dialog.
+    // Disposing here, from this widget's own dispose(), still matters: it
+    // ties controller lifetime to the page's actual removal (after its
+    // transition finishes) instead of whenComplete()-style early disposal.
+    _nameController.dispose();
+    _contactController.dispose();
+    _addressController.dispose();
+    _facebookController.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    widget.controller.updateProfileDetails(
+      widget.user.username,
+      displayName: _nameController.text,
+      contactNumber: _contactController.text,
+      address: _addressController.text,
+      facebookContact: _facebookController.text,
+    );
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Profiles')),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        children: [
+          TextField(
+            controller: _nameController,
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(
+              labelText: 'Full name',
+              hintText: 'e.g. Juan Dela Cruz',
+              prefixIcon: Icon(Icons.badge_outlined),
+            ),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _contactController,
+            keyboardType: TextInputType.phone,
+            decoration: const InputDecoration(
+              labelText: 'Contact number',
+              hintText: 'e.g. 0917 123 4567',
+              prefixIcon: Icon(Icons.call_outlined),
+            ),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _addressController,
+            textCapitalization: TextCapitalization.sentences,
+            minLines: 1,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              labelText: 'Address',
+              hintText: 'e.g. Barangay, City, Province',
+              prefixIcon: Icon(Icons.home_outlined),
+            ),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _facebookController,
+            keyboardType: TextInputType.url,
+            decoration: const InputDecoration(
+              labelText: 'Facebook contact',
+              hintText: 'e.g. facebook.com/username',
+              prefixIcon: Icon(Icons.facebook),
+            ),
+          ),
+          const SizedBox(height: 24),
+          FilledButton(onPressed: _save, child: const Text('Save Changes')),
+        ],
+      ),
+    );
+  }
+}
+
+Future<void> _showChangeCredentialsDialog(
+  BuildContext context,
+  AppController controller,
+  AppUser user,
+) {
+  return showDialog<void>(
+    context: context,
+    builder: (dialogContext) =>
+        _ChangeCredentialsDialog(controller: controller, user: user),
+  );
+}
+
+class _ChangeCredentialsDialog extends StatefulWidget {
+  const _ChangeCredentialsDialog({
+    required this.controller,
+    required this.user,
+  });
+
+  final AppController controller;
+  final AppUser user;
+
+  @override
+  State<_ChangeCredentialsDialog> createState() =>
+      _ChangeCredentialsDialogState();
+}
+
+class _ChangeCredentialsDialogState extends State<_ChangeCredentialsDialog> {
+  late final TextEditingController _usernameController =
+      TextEditingController(text: widget.user.username);
+  final TextEditingController _passwordController = TextEditingController();
+  final TextEditingController _currentPasswordController =
+      TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    // See _EditFullNameDialogState.dispose: controllers must be disposed
+    // from this widget's own dispose(), not from showDialog().whenComplete(),
+    // or they get torn down mid closing-animation while still mounted.
+    _usernameController.dispose();
+    _passwordController.dispose();
+    _currentPasswordController.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final result = widget.controller.updateCredentials(
+      widget.user.username,
+      newUsername: _usernameController.text,
+      newPassword: _passwordController.text,
+      currentPassword: _currentPasswordController.text,
+    );
+    if (result != null) {
+      setState(() => _error = result);
+      return;
+    }
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Username & Password'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _usernameController,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Username',
+                prefixIcon: Icon(Icons.person_outline),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _passwordController,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'New password',
+                hintText: 'Leave blank to keep current password',
+                prefixIcon: Icon(Icons.lock_outline),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _currentPasswordController,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Current password',
+                prefixIcon: Icon(Icons.password_outlined),
+              ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                _error!,
+                style: const TextStyle(
+                  color: Color(0xFFFF6B72),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _save, child: const Text('Save')),
+      ],
     );
   }
 }
@@ -2066,6 +2641,7 @@ class ManualCameraPage extends StatefulWidget {
 
 class _ManualCameraPageState extends State<ManualCameraPage> {
   CameraController? _cameraController;
+  Timer? _autoScanTimer;
   bool _initializing = true;
   bool _analyzing = false;
   String? _scanStatus;
@@ -2074,12 +2650,13 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
   @override
   void initState() {
     super.initState();
-    _setupCamera();
+    unawaited(_setupCamera());
   }
 
   Future<void> _setupCamera() async {
     if (widget.controller.cameras.isEmpty) {
       setState(() => _initializing = false);
+      unawaited(_runAnalysis());
       return;
     }
 
@@ -2106,8 +2683,9 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
       setState(() {
         _cameraController = controller;
         _initializing = false;
-        _scanStatus = 'Ready for manual scan';
+        _scanStatus = 'Starting automatic scan...';
       });
+      _scheduleNextScan(immediate: true);
     } catch (_) {
       await controller.dispose();
       if (!mounted) return;
@@ -2115,7 +2693,20 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
         _initializing = false;
         _scanStatus = 'Camera preview unavailable';
       });
+      unawaited(_runAnalysis());
     }
+  }
+
+  void _scheduleNextScan({bool immediate = false}) {
+    _autoScanTimer?.cancel();
+    _autoScanTimer = Timer(
+      immediate ? Duration.zero : _defaultInspectionInterval(),
+      () async {
+        if (!mounted) return;
+        await _runAnalysis();
+        _scheduleNextScan();
+      },
+    );
   }
 
   String _statusForManualResult(ManualScanResult result) {
@@ -2127,15 +2718,18 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
   }
 
   Future<void> _runAnalysis() async {
+    if (_analyzing) return;
     final cameraController = _cameraController;
     setState(() {
       _analyzing = true;
-      _scanStatus = 'Running manual scan...';
+      if (_result == null) {
+        _scanStatus = 'Running automatic scan...';
+      }
     });
     try {
       final result =
           cameraController == null || !cameraController.value.isInitialized
-          ? widget.controller.generateManualScan(widget.user.username)
+          ? widget.controller.generateManualScan()
           : await widget.controller.inspectManualFrame(
               widget.user.username,
               await (await cameraController.takePicture()).readAsBytes(),
@@ -2151,7 +2745,7 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
       setState(() {
         _result = ManualScanResult(
           condition: HealthState.abnormal,
-          breed: widget.user.monitor.detectedBreed,
+          breed: '-',
           movement: 'Scan failed',
           note:
               'Could not inspect this phone frame with the on-device model: $error',
@@ -2164,104 +2758,115 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
 
   @override
   void dispose() {
+    _autoScanTimer?.cancel();
     _cameraController?.dispose();
     super.dispose();
   }
 
+  Widget _buildFillingCameraPreview(CameraController controller) {
+    // CameraPreview always wraps itself in an AspectRatio internally, which
+    // normally means it can only ever "contain" or "cover" its box, never
+    // stretch past its native ratio. FittedBox(fit: BoxFit.fill) sidesteps
+    // that: it measures the child at its natural (aspect-locked) size, then
+    // scales width and height independently to exactly fill the available
+    // space, distorting the image so it fills the screen edge to edge.
+    final aspectRatio = controller.value.aspectRatio;
+    return FittedBox(
+      fit: BoxFit.fill,
+      child: SizedBox(
+        width: 100,
+        height: 100 / aspectRatio,
+        child: CameraPreview(controller),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final colors = context.appColors;
     final hasCamera =
         _cameraController != null && _cameraController!.value.isInitialized;
+    final resultColor = _result == null
+        ? Colors.white70
+        : _result!.condition == HealthState.abnormal
+        ? HealthState.abnormal.color
+        : const Color(0xFF43E39C);
 
     return Scaffold(
+      backgroundColor: Colors.black,
       appBar: AppBar(title: const Text('Manual Rooster Scan')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+      body: Stack(
+        fit: StackFit.expand,
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(28),
-            child: Container(
-              height: 320,
-              color: colors.surfaceRaised,
-              child: _initializing
-                  ? const Center(child: CircularProgressIndicator())
-                  : hasCamera
-                  ? Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        CameraPreview(_cameraController!),
-                        Positioned.fill(
-                          child: IgnorePointer(
-                            child: CustomPaint(
-                              painter: ChickenDetectionPainter(
-                                detections: _result?.detections ?? const [],
-                              ),
-                            ),
-                          ),
-                        ),
-                        Positioned.fill(
-                          child: IgnorePointer(
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                border: Border.all(
-                                  color: Colors.white.withValues(alpha: 0.7),
-                                  width: 2,
-                                ),
-                                borderRadius: BorderRadius.circular(28),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    )
-                  : Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Text(
-                          'Camera preview is unavailable on this device or emulator, but the scan flow remains connected for UI testing.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: colors.text, height: 1.5),
-                        ),
-                      ),
-                    ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          if (_scanStatus != null) ...[
-            SeverityTag(
-              label: _scanStatus!,
-              color: _result?.condition == HealthState.abnormal
-                  ? HealthState.abnormal.color
-                  : colors.mutedText,
-            ),
-            const SizedBox(height: 16),
-          ],
-          _GlassCard(
-            child: Text(
-              'AI detection runs only when you capture the current camera view.',
-              style: TextStyle(color: colors.mutedText, height: 1.55),
-            ),
-          ),
-          const SizedBox(height: 16),
-          const _LocalYoloModelStatus(),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF26C281),
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(22),
+          if (_initializing)
+            const Center(child: CircularProgressIndicator())
+          else if (hasCamera) ...[
+            _buildFillingCameraPreview(_cameraController!),
+            Positioned.fill(
+              child: IgnorePointer(
+                child: CustomPaint(
+                  painter: ChickenDetectionPainter(
+                    detections: _result?.detections ?? const [],
+                  ),
+                ),
               ),
             ),
-            onPressed: _analyzing ? null : _runAnalysis,
-            icon: const Icon(Icons.center_focus_strong_outlined),
-            label: Text(_analyzing ? 'Analyzing...' : 'Capture Current View'),
+          ] else
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  'Camera preview is unavailable on this device or emulator, but the scan flow remains connected for UI testing.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70, height: 1.5),
+                ),
+              ),
+            ),
+          if (_scanStatus != null)
+            Positioned(
+              top: 16,
+              left: 16,
+              child: SeverityTag(label: _scanStatus!, color: resultColor),
+            ),
+          const Positioned(
+            top: 16,
+            right: 16,
+            child: SeverityTag(
+              label: 'AUTO SCAN ACTIVE',
+              color: Color(0xFFFFCE67),
+            ),
           ),
-          if (_result != null) ...[
-            const SizedBox(height: 16),
-            ManualScanResultCard(result: _result!),
-          ],
+          if (_result case final result?)
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 16,
+              child: Theme(
+                // SummaryMiniCard colors its text from the ambient theme; in
+                // light mode that would be near-black and unreadable against
+                // this dark overlay, so force dark colors regardless of the
+                // app's actual theme setting (same trick used for the CCTV
+                // fullscreen PTZ overlay).
+                data: buildAppTheme(Brightness.dark),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.55),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: SummaryMiniCard(
+                      title: 'Confidence',
+                      value: result.confidenceLabel,
+                      dark: true,
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
