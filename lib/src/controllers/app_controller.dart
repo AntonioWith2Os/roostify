@@ -43,7 +43,7 @@ class AppController extends ChangeNotifier {
             LiveCctvStream(
               id: 'seed-camera-1',
               streamUrl: _testRtspStreamUrl,
-              label: 'Camera 1',
+              label: 'CCTV',
             ),
           ],
         ),
@@ -338,7 +338,8 @@ class AppController extends ChangeNotifier {
         cleanUsername != null &&
         cleanUsername.isNotEmpty &&
         cleanUsername != user.username;
-    final wantsPasswordChange = cleanPassword != null && cleanPassword.isNotEmpty;
+    final wantsPasswordChange =
+        cleanPassword != null && cleanPassword.isNotEmpty;
 
     if (!wantsUsernameChange && !wantsPasswordChange) {
       return 'Enter a new username or password to update.';
@@ -555,7 +556,10 @@ class AppController extends ChangeNotifier {
       LiveCctvStream(
         id: _generateStreamId(),
         streamUrl: cleanStreamUrl,
-        label: 'Camera ${user.liveCctvStreams.length + 1}',
+        // Numbered display name is computed fresh wherever streams are
+        // listed (see cctvStreamDisplayLabel), so it stays correct after
+        // cameras are added/removed instead of going stale here.
+        label: 'CCTV',
       ),
     );
     lastError = null;
@@ -586,7 +590,9 @@ class AppController extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
       _liveCctvStreamsPrefKey(user.username),
-      jsonEncode(user.liveCctvStreams.map((stream) => stream.toJson()).toList()),
+      jsonEncode(
+        user.liveCctvStreams.map((stream) => stream.toJson()).toList(),
+      ),
     );
   }
 
@@ -606,8 +612,7 @@ class AppController extends ChangeNotifier {
         final decoded = jsonDecode(raw) as List<dynamic>;
         final streams = decoded
             .map(
-              (item) =>
-                  LiveCctvStream.fromJson(item as Map<String, dynamic>),
+              (item) => LiveCctvStream.fromJson(item as Map<String, dynamic>),
             )
             .toList();
         user.liveCctvStreams

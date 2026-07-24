@@ -10,6 +10,8 @@ class LiveFeedCard extends StatefulWidget {
     this.onFrameCaptureStarted,
     this.onFrameReady,
     this.onFrameCaptureFailed,
+    this.expand = false,
+    this.displayLabel,
   });
 
   final String streamUrl;
@@ -24,6 +26,15 @@ class LiveFeedCard extends StatefulWidget {
   final VoidCallback? onFrameCaptureStarted;
   final Future<void> Function(Uint8List frameBytes)? onFrameReady;
   final ValueChanged<String>? onFrameCaptureFailed;
+
+  /// When true, the card fills whatever bounded space its parent gives it
+  /// (a full-screen tab body, a grid cell) instead of using a fixed preview
+  /// height, and drops its rounded corners so the video sits edge to edge.
+  final bool expand;
+
+  /// Overrides the default "LIVE CCTV" tag, e.g. with "CCTV 1" when several
+  /// cameras are shown at once.
+  final String? displayLabel;
 
   @override
   State<LiveFeedCard> createState() => _LiveFeedCardState();
@@ -141,6 +152,15 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
 
   bool _wasFullScreen = false;
   Timer? _orientationResetTimer;
+  int? _pendingFullScreenRestoreGeneration;
+
+  bool _showPtzControls = true;
+
+  void _togglePtzControls() {
+    setState(() {
+      _showPtzControls = !_showPtzControls;
+    });
+  }
 
   Duration get _baseInspectionInterval =>
       widget.inspectionInterval ?? _defaultInspectionInterval();
@@ -175,14 +195,18 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
 
   void _replaceController({bool resetRecovery = false}) {
     final currentController = _controller;
-    if (currentController != null && currentController.value.fullScreen) {
+    final wasFullScreen = currentController?.value.fullScreen ?? false;
+    if (currentController != null && wasFullScreen) {
       // fijkplayer_plus pushes its own fullscreen route and only pops it
       // (restoring system UI/orientation) when it sees fullScreen flip back
       // to false on this exact player. If a stall/error triggers automatic
       // recovery while the user is still in fullscreen, tearing down the
       // player out from under that pushed route leaves it stuck on screen
       // referencing a disposed player. Exit first so the route closes
-      // cleanly before we swap players.
+      // cleanly before we swap players; once the new player is actually
+      // playing again (see _handlePlayerValueChanged), we re-enter
+      // fullscreen on it, so this is just a brief flicker rather than
+      // dropping out for good.
       currentController.exitFullScreen();
     }
 
@@ -197,6 +221,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     _consecutiveCaptureFailures = 0;
     _controllerGeneration += 1;
     final generation = _controllerGeneration;
+    _pendingFullScreenRestoreGeneration = wasFullScreen ? generation : null;
 
     final previousController = _controller;
     if (previousController != null) {
@@ -210,6 +235,25 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     unawaited(_configureAndStartController(controller, generation));
     _scheduleSlowStartDiagnostic(generation);
     _schedulePlaybackRecovery(generation, delay: _startupRecoveryDelay);
+  }
+
+  void _restoreFullScreenIfPending(FijkPlayer controller, int generation) {
+    if (_pendingFullScreenRestoreGeneration != generation || !mounted) {
+      return;
+    }
+    _pendingFullScreenRestoreGeneration = null;
+    // By now the new player actually has real video dimensions (it's
+    // playing), so fijkplayer_plus's fullscreen orientation lock uses the
+    // real aspect ratio instead of guessing. Force a frame first so the
+    // FijkView for this generation is mounted and its own fullscreen
+    // listener is attached before we ask the player to enter fullscreen.
+    setState(() {});
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_isCurrentController(controller, generation)) {
+        return;
+      }
+      controller.enterFullScreen();
+    });
   }
 
   Future<void> _configureAndStartController(
@@ -293,6 +337,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
           _streamProbeStatus = null;
         });
       }
+      _restoreFullScreenIfPending(controller, _controllerGeneration);
       return;
     }
 
@@ -898,83 +943,115 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
       return const SizedBox.shrink();
     }
 
-    return Stack(
-      children: [
-        if (widget.detections.isNotEmpty)
-          Positioned.fromRect(
-            rect: texturePos,
-            child: IgnorePointer(
-              child: CustomPaint(
-                painter: ChickenDetectionPainter(detections: widget.detections),
+    // fijkplayer_plus inserts this widget as an unpositioned child of its
+    // own internal Stack, which lays it out with loose constraints. Since
+    // every child here is a Positioned with no unpositioned sibling, the
+    // Stack would otherwise collapse to zero size, making any right/bottom
+    // anchored child (the exit button, the PTZ panel) resolve its offset
+    // against a 0x0 box and render off-canvas. Pin it to the real video
+    // viewport size so those offsets are computed correctly.
+    return SizedBox.fromSize(
+      size: viewSize,
+      child: Stack(
+        children: [
+          if (widget.detections.isNotEmpty)
+            Positioned.fromRect(
+              rect: texturePos,
+              child: IgnorePointer(
+                child: CustomPaint(
+                  painter: ChickenDetectionPainter(
+                    detections: widget.detections,
+                  ),
+                ),
+              ),
+            ),
+          Positioned(
+            top: 16,
+            left: 16,
+            child: SafeArea(
+              bottom: false,
+              right: false,
+              child: const SeverityTag(
+                label: 'LIVE CCTV',
+                color: Color(0xFF43E39C),
               ),
             ),
           ),
-        Positioned(
-          top: 16,
-          left: 16,
-          child: SafeArea(
-            bottom: false,
-            right: false,
-            child: const SeverityTag(
-              label: 'LIVE CCTV',
-              color: Color(0xFF43E39C),
-            ),
-          ),
-        ),
-        Positioned(
-          top: 12,
-          right: 12,
-          child: SafeArea(
-            bottom: false,
-            left: false,
-            child: _LiveFeedIconButton(
-              tooltip: 'Exit full screen',
-              icon: Icons.fullscreen_exit,
-              onPressed: player.exitFullScreen,
-            ),
-          ),
-        ),
-        Positioned(
-          right: 16,
-          bottom: 64,
-          child: SafeArea(
-            top: false,
-            left: false,
-            child: Theme(
-              data: buildAppTheme(Brightness.dark),
-              child: V380PtzControlPanel(
-                streamUrl: widget.streamUrl,
-                compactOverlay: true,
+          Positioned(
+            top: 12,
+            right: 12,
+            child: SafeArea(
+              bottom: false,
+              left: false,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _LiveFeedIconButton(
+                    tooltip: _showPtzControls
+                        ? 'Hide PTZ controls'
+                        : 'Show PTZ controls',
+                    icon: _showPtzControls
+                        ? Icons.control_camera
+                        : Icons.control_camera_outlined,
+                    onPressed: _togglePtzControls,
+                  ),
+                  const SizedBox(width: 8),
+                  _LiveFeedIconButton(
+                    tooltip: 'Exit full screen',
+                    icon: Icons.fullscreen_exit,
+                    onPressed: player.exitFullScreen,
+                  ),
+                ],
               ),
             ),
           ),
-        ),
-        Positioned(
-          left: 16,
-          right: 16,
-          bottom: 16,
-          child: Align(
-            alignment: Alignment.bottomLeft,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.46),
-                borderRadius: BorderRadius.circular(14),
+          if (_showPtzControls)
+            Positioned(
+              top: 0,
+              bottom: 0,
+              right: 16,
+              child: Center(
+                child: SafeArea(
+                  child: Theme(
+                    data: buildAppTheme(Brightness.dark),
+                    child: V380PtzControlPanel(
+                      streamUrl: widget.streamUrl,
+                      compactOverlay: true,
+                    ),
+                  ),
+                ),
               ),
-              child: Text(
-                widget.streamUrl,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
+            ),
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: 16,
+            child: Align(
+              alignment: Alignment.bottomLeft,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.46),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Text(
+                  widget.streamUrl,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -1009,195 +1086,238 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   @override
   Widget build(BuildContext context) {
     final controller = _controller;
+    final borderRadius = widget.expand
+        ? BorderRadius.zero
+        : BorderRadius.circular(24);
     return Container(
-      height: 220,
+      height: widget.expand ? null : 220,
       decoration: BoxDecoration(
         gradient: const LinearGradient(
           colors: [Color(0xFF2B365F), Color(0xFF151B31)],
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
         ),
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: borderRadius,
       ),
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(24),
-              child: _supportsFijkPlayer && controller != null
-                  ? ValueListenableBuilder<FijkValue>(
-                      valueListenable: controller,
-                      builder: (context, value, _) {
-                        return Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            KeyedSubtree(
-                              key: ValueKey(
-                                '${widget.streamUrl}|${_playbackProfile.name}|$_controllerGeneration',
-                              ),
-                              child: FijkView(
-                                player: controller,
-                                fit: FijkFit.cover,
-                                fsFit: FijkFit.contain,
-                                fs: true,
-                                color: Colors.black,
-                                panelBuilder: _liveFeedPanelBuilder,
-                              ),
-                            ),
-                            if (!value.videoRenderStart &&
-                                !_hasFijkError(value))
-                              const _LiveFeedPlaceholder(),
-                            IgnorePointer(
-                              child: DecoratedBox(
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(24),
-                                  border: Border.all(
-                                    color: Colors.white.withValues(alpha: 0.16),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // The PTZ overlay needs enough width for its direction pad; in a
+          // multi-camera grid each tile is far narrower than that, so it
+          // only appears once this card has room to show it usefully.
+          final showPtzOverlay = constraints.maxWidth >= 260;
+          return Stack(
+            children: [
+              Positioned.fill(
+                child: ClipRRect(
+                  borderRadius: borderRadius,
+                  child: _supportsFijkPlayer && controller != null
+                      ? ValueListenableBuilder<FijkValue>(
+                          valueListenable: controller,
+                          builder: (context, value, _) {
+                            return Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                KeyedSubtree(
+                                  key: ValueKey(
+                                    '${widget.streamUrl}|${_playbackProfile.name}|$_controllerGeneration',
                                   ),
-                                  gradient: const LinearGradient(
-                                    colors: [
-                                      Color(0x00000000),
-                                      Color(0x16000000),
-                                      Color(0x55000000),
-                                    ],
-                                    begin: Alignment.topCenter,
-                                    end: Alignment.bottomCenter,
+                                  child: FijkView(
+                                    player: controller,
+                                    fit: FijkFit.cover,
+                                    fsFit: FijkFit.contain,
+                                    fs: true,
+                                    color: Colors.black,
+                                    panelBuilder: _liveFeedPanelBuilder,
                                   ),
                                 ),
-                              ),
-                            ),
-                            if (widget.detections.isNotEmpty)
-                              Positioned.fill(
-                                child: IgnorePointer(
-                                  child: CustomPaint(
-                                    painter: ChickenDetectionPainter(
-                                      detections: widget.detections,
+                                if (!value.videoRenderStart &&
+                                    !_hasFijkError(value))
+                                  const _LiveFeedPlaceholder(),
+                                IgnorePointer(
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(24),
+                                      border: Border.all(
+                                        color: Colors.white.withValues(
+                                          alpha: 0.16,
+                                        ),
+                                      ),
+                                      gradient: const LinearGradient(
+                                        colors: [
+                                          Color(0x00000000),
+                                          Color(0x16000000),
+                                          Color(0x55000000),
+                                        ],
+                                        begin: Alignment.topCenter,
+                                        end: Alignment.bottomCenter,
+                                      ),
                                     ),
                                   ),
                                 ),
-                              ),
-                            if (_hasFijkError(value))
-                              _LiveFeedErrorState(
-                                message: _fijkErrorDescription(value),
-                              ),
-                          ],
-                        );
-                      },
-                    )
-                  : const _LiveFeedUnsupportedState(),
-            ),
-          ),
-          const Positioned(
-            top: 18,
-            left: 18,
-            child: SeverityTag(label: 'LIVE CCTV', color: Color(0xFF43E39C)),
-          ),
-          if (_isRecording)
-            Positioned(
-              top: 52,
-              left: 18,
-              child: _RecordingIndicator(
-                label: _formatRecordingElapsed(_recordingElapsed),
-              ),
-            ),
-          Positioned(
-            top: 12,
-            right: 12,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _LiveFeedRecordButton(
-                  isRecording: _isRecording,
-                  busy: _recordingBusy,
-                  onPressed: _supportsFijkPlayer && controller != null
-                      ? _toggleRecording
-                      : null,
-                ),
-                const SizedBox(width: 8),
-                _LiveFeedIconButton(
-                  tooltip: 'Full screen',
-                  icon: Icons.fullscreen,
-                  onPressed: _supportsFijkPlayer && controller != null
-                      ? _enterFullScreen
-                      : null,
-                ),
-                const SizedBox(width: 8),
-                _LiveFeedPlaybackMenu(
-                  selectedProfile: _playbackProfile,
-                  onSelected: _selectPlaybackProfile,
-                ),
-              ],
-            ),
-          ),
-          const Positioned(
-            bottom: 18,
-            right: 18,
-            child: SeverityTag(
-              label: 'YOLOv8 ACTIVE',
-              color: Color(0xFFFFCE67),
-            ),
-          ),
-          Positioned(
-            left: 18,
-            right: 18,
-            bottom: 18,
-            child: Align(
-              alignment: Alignment.bottomLeft,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.45),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Text(
-                  widget.streamUrl,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
+                                if (widget.detections.isNotEmpty)
+                                  Positioned.fill(
+                                    child: IgnorePointer(
+                                      child: CustomPaint(
+                                        painter: ChickenDetectionPainter(
+                                          detections: widget.detections,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                if (_hasFijkError(value))
+                                  _LiveFeedErrorState(
+                                    message: _fijkErrorDescription(value),
+                                  ),
+                              ],
+                            );
+                          },
+                        )
+                      : const _LiveFeedUnsupportedState(),
                 ),
               ),
-            ),
-          ),
-          if (_streamProbeStatus case final status?)
-            Positioned(
-              left: 18,
-              right: 18,
-              bottom: 58,
-              child: Align(
-                alignment: Alignment.bottomLeft,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
+              Positioned(
+                top: 18,
+                left: 18,
+                child: SeverityTag(
+                  label: widget.displayLabel ?? 'LIVE CCTV',
+                  color: const Color(0xFF43E39C),
+                ),
+              ),
+              if (_isRecording)
+                Positioned(
+                  top: 52,
+                  left: 18,
+                  child: _RecordingIndicator(
+                    label: _formatRecordingElapsed(_recordingElapsed),
                   ),
-                  decoration: BoxDecoration(
-                    color: status.startsWith('RTSP stream accepted')
-                        ? const Color(0xCC134F36)
-                        : const Color(0xCC5A1D24),
-                    borderRadius: BorderRadius.circular(14),
+                ),
+              Positioned(
+                top: 12,
+                right: 12,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _LiveFeedRecordButton(
+                      isRecording: _isRecording,
+                      busy: _recordingBusy,
+                      onPressed: _supportsFijkPlayer && controller != null
+                          ? _toggleRecording
+                          : null,
+                    ),
+                    const SizedBox(width: 8),
+                    _LiveFeedIconButton(
+                      tooltip: 'Full screen',
+                      icon: Icons.fullscreen,
+                      onPressed: _supportsFijkPlayer && controller != null
+                          ? _enterFullScreen
+                          : null,
+                    ),
+                    const SizedBox(width: 8),
+                    _LiveFeedPlaybackMenu(
+                      selectedProfile: _playbackProfile,
+                      onSelected: _selectPlaybackProfile,
+                    ),
+                    if (showPtzOverlay) ...[
+                      const SizedBox(width: 8),
+                      _LiveFeedIconButton(
+                        tooltip: _showPtzControls
+                            ? 'Hide PTZ controls'
+                            : 'Show PTZ controls',
+                        icon: _showPtzControls
+                            ? Icons.control_camera
+                            : Icons.control_camera_outlined,
+                        onPressed: _togglePtzControls,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const Positioned(
+                top: 56,
+                right: 12,
+                child: SeverityTag(
+                  label: 'YOLOv8 ACTIVE',
+                  color: Color(0xFFFFCE67),
+                ),
+              ),
+              if (showPtzOverlay && _showPtzControls)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 12,
+                  child: Center(
+                    child: Theme(
+                      data: buildAppTheme(Brightness.dark),
+                      child: V380PtzControlPanel(
+                        streamUrl: widget.streamUrl,
+                        compactOverlay: true,
+                      ),
+                    ),
                   ),
-                  child: Text(
-                    status,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      height: 1.3,
+                ),
+              Positioned(
+                left: 18,
+                right: 18,
+                bottom: 18,
+                child: Align(
+                  alignment: Alignment.bottomLeft,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.45),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Text(
+                      widget.streamUrl,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-        ],
+              if (_streamProbeStatus case final status?)
+                Positioned(
+                  left: 18,
+                  right: 18,
+                  bottom: 58,
+                  child: Align(
+                    alignment: Alignment.bottomLeft,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: status.startsWith('RTSP stream accepted')
+                            ? const Color(0xCC134F36)
+                            : const Color(0xCC5A1D24),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Text(
+                        status,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          height: 1.3,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -1478,93 +1598,6 @@ class _RtspProbeResponse {
     }
 
     return statusLine.replaceFirst(RegExp(r'^RTSP/\d\.\d\s+'), '');
-  }
-}
-
-class _LocalYoloModelStatus extends StatelessWidget {
-  const _LocalYoloModelStatus();
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.appColors;
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: colors.surfaceRaised,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: colors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.memory_outlined, color: Color(0xFF26C281)),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'On-device YOLOv8 model',
-                  style: TextStyle(
-                    color: colors.text,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: const [
-              _ModelStatusChip(
-                icon: Icons.insert_drive_file_outlined,
-                label: 'best_float32.tflite',
-              ),
-              _ModelStatusChip(
-                icon: Icons.health_and_safety_outlined,
-                label: 'normal / abnormal',
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ModelStatusChip extends StatelessWidget {
-  const _ModelStatusChip({required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.appColors;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: colors.inputFill,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: colors.border),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 16, color: colors.mutedText),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: TextStyle(
-              color: colors.mutedText,
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }
 

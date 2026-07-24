@@ -14,8 +14,7 @@ class MultiCameraFullscreenPage extends StatefulWidget {
       _MultiCameraFullscreenPageState();
 }
 
-class _MultiCameraFullscreenPageState
-    extends State<MultiCameraFullscreenPage> {
+class _MultiCameraFullscreenPageState extends State<MultiCameraFullscreenPage> {
   @override
   void initState() {
     super.initState();
@@ -71,6 +70,10 @@ class _MultiCameraFullscreenPageState
                       itemBuilder: (context, index) => _LiveMosaicTile(
                         key: ValueKey(streams[index].id),
                         stream: streams[index],
+                        displayLabel: cctvStreamDisplayLabel(
+                          index,
+                          streams.length,
+                        ),
                       ),
                     ),
             ),
@@ -96,9 +99,14 @@ class _MultiCameraFullscreenPageState
 }
 
 class _LiveMosaicTile extends StatefulWidget {
-  const _LiveMosaicTile({super.key, required this.stream});
+  const _LiveMosaicTile({
+    super.key,
+    required this.stream,
+    required this.displayLabel,
+  });
 
   final LiveCctvStream stream;
+  final String displayLabel;
 
   @override
   State<_LiveMosaicTile> createState() => _LiveMosaicTileState();
@@ -204,7 +212,7 @@ class _LiveMosaicTileState extends State<_LiveMosaicTile> {
                 borderRadius: BorderRadius.circular(999),
               ),
               child: Text(
-                widget.stream.label,
+                widget.displayLabel,
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 11,

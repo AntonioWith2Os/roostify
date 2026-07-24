@@ -1,7 +1,10 @@
 part of '../../main.dart';
 
-class CctvConnectionPanel extends StatefulWidget {
-  const CctvConnectionPanel({
+/// Bottom-sheet content for connecting to, scanning for, and removing live
+/// CCTV cameras. The live video itself fills the CCTV tab behind this sheet;
+/// this panel only manages which streams are connected.
+class CctvManagementSheet extends StatefulWidget {
+  const CctvManagementSheet({
     super.key,
     required this.controller,
     required this.user,
@@ -11,23 +14,17 @@ class CctvConnectionPanel extends StatefulWidget {
   final AppUser user;
 
   @override
-  State<CctvConnectionPanel> createState() => _CctvConnectionPanelState();
+  State<CctvManagementSheet> createState() => _CctvManagementSheetState();
 }
 
-class _CctvConnectionPanelState extends State<CctvConnectionPanel> {
+class _CctvManagementSheetState extends State<CctvManagementSheet> {
   final TextEditingController _manualUrlController = TextEditingController();
-  final TextEditingController _usernameController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
-  final TextEditingController _pathController = TextEditingController(
-    text: '/live/ch00_1',
-  );
 
   RtspCameraScanner? _activeScanner;
   CameraScanProgress? _scanProgress;
   List<RtspCameraCandidate> _candidates = const [];
   bool _scanning = false;
   bool _showManualEntry = false;
-  bool _showScanOptions = false;
   String? _scanMessage;
   String? _manualError;
 
@@ -35,9 +32,6 @@ class _CctvConnectionPanelState extends State<CctvConnectionPanel> {
   void dispose() {
     _activeScanner?.cancel();
     _manualUrlController.dispose();
-    _usernameController.dispose();
-    _passwordController.dispose();
-    _pathController.dispose();
     super.dispose();
   }
 
@@ -57,9 +51,6 @@ class _CctvConnectionPanelState extends State<CctvConnectionPanel> {
     });
 
     final candidates = await scanner.scan(
-      username: _usernameController.text.trim(),
-      password: _passwordController.text,
-      preferredPath: _pathController.text.trim(),
       onProgress: (progress) {
         if (!mounted || _activeScanner != scanner) {
           return;
@@ -169,47 +160,73 @@ class _CctvConnectionPanelState extends State<CctvConnectionPanel> {
   Widget build(BuildContext context) {
     final streams = widget.user.liveCctvStreams;
     final atLimit = streams.length >= AppController.maxLiveCctvStreams;
+    final colors = context.appColors;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const _LocalYoloModelStatus(),
-        const SizedBox(height: 12),
-        if (streams.isEmpty)
-          const _NoSelectedCctvState()
-        else
-          for (var i = 0; i < streams.length; i++) ...[
-            if (i > 0) const SizedBox(height: 20),
-            _CctvStreamPanel(
-              controller: widget.controller,
-              user: widget.user,
-              stream: streams[i],
-              onRemove: () => _removeStream(streams[i]),
-            ),
-          ],
-        const SizedBox(height: 12),
-        _buildActionButtons(atLimit),
-        if (atLimit) ...[
-          const SizedBox(height: 10),
-          _buildLimitNotice(),
-        ],
-        if (_showScanOptions) ...[
-          const SizedBox(height: 12),
-          _buildScanOptions(),
-        ],
-        if (_showManualEntry) ...[
-          const SizedBox(height: 12),
-          _buildManualEntry(),
-        ],
-        if (_scanMessage != null) ...[
-          const SizedBox(height: 12),
-          _buildScanStatus(),
-        ],
-        if (_candidates.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          _buildCandidateList(),
-        ],
-      ],
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          20,
+          12,
+          20,
+          16 + MediaQuery.of(context).viewInsets.bottom,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 14),
+                  decoration: BoxDecoration(
+                    color: colors.border,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+              ),
+              const Text(
+                'Manage Cameras',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                streams.isEmpty
+                    ? 'Scan the local network or enter an RTSP URL to connect a camera.'
+                    : 'Connected cameras (${streams.length}/${AppController.maxLiveCctvStreams}).',
+                style: TextStyle(color: colors.mutedText, height: 1.4),
+              ),
+              if (streams.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                for (var i = 0; i < streams.length; i++) ...[
+                  if (i > 0) Divider(color: colors.border, height: 1),
+                  _ConnectedCameraRow(
+                    displayLabel: cctvStreamDisplayLabel(i, streams.length),
+                    streamUrl: streams[i].streamUrl,
+                    onRemove: () => _removeStream(streams[i]),
+                  ),
+                ],
+              ],
+              const SizedBox(height: 16),
+              _buildActionButtons(atLimit),
+              if (atLimit) ...[const SizedBox(height: 10), _buildLimitNotice()],
+              if (_showManualEntry) ...[
+                const SizedBox(height: 12),
+                _buildManualEntry(),
+              ],
+              if (_scanMessage != null) ...[
+                const SizedBox(height: 12),
+                _buildScanStatus(),
+              ],
+              if (_candidates.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _buildCandidateList(),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -229,101 +246,61 @@ class _CctvConnectionPanelState extends State<CctvConnectionPanel> {
   }
 
   Widget _buildActionButtons(bool atLimit) {
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      children: [
-        FilledButton.icon(
-          onPressed: _scanning || atLimit ? null : _startScan,
-          icon: Icon(
-            _scanning ? Icons.radar_outlined : Icons.manage_search_outlined,
-          ),
-          label: Text(_scanning ? 'Scanning...' : 'Scan Cameras'),
-        ),
-        if (_scanning)
-          OutlinedButton.icon(
+    final scanButton = FilledButton.icon(
+      onPressed: _scanning || atLimit ? null : _startScan,
+      icon: Icon(
+        _scanning ? Icons.radar_outlined : Icons.manage_search_outlined,
+      ),
+      label: Text(_scanning ? 'Scanning...' : 'Scan Cameras'),
+    );
+    final addButton = OutlinedButton.icon(
+      onPressed: atLimit
+          ? null
+          : () {
+              setState(() {
+                _showManualEntry = !_showManualEntry;
+                _manualError = null;
+              });
+            },
+      icon: const Icon(Icons.add_link_outlined),
+      label: const Text('Add Camera'),
+    );
+    final stopButton = _scanning
+        ? OutlinedButton.icon(
             onPressed: _stopScan,
             icon: const Icon(Icons.stop_circle_outlined),
             label: const Text('Stop'),
-          ),
-        OutlinedButton.icon(
-          onPressed: atLimit
-              ? null
-              : () {
-                  setState(() {
-                    _showScanOptions = !_showScanOptions;
-                  });
-                },
-          icon: const Icon(Icons.tune_outlined),
-          label: Text(_showScanOptions ? 'Hide Options' : 'Scan Options'),
-        ),
-        OutlinedButton.icon(
-          onPressed: atLimit
-              ? null
-              : () {
-                  setState(() {
-                    _showManualEntry = !_showManualEntry;
-                    _manualError = null;
-                  });
-                },
-          icon: const Icon(Icons.add_link_outlined),
-          label: const Text('Add Camera'),
-        ),
-      ],
-    );
-  }
+          )
+        : null;
 
-  Widget _buildScanOptions() {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final compact = constraints.maxWidth < 620;
-        final fields = [
-          TextField(
-            controller: _usernameController,
-            decoration: const InputDecoration(
-              labelText: 'Camera username',
-              hintText: 'V380 often uses admin',
-              prefixIcon: Icon(Icons.person_outline),
-            ),
-          ),
-          TextField(
-            controller: _passwordController,
-            obscureText: true,
-            decoration: const InputDecoration(
-              labelText: 'Camera password',
-              hintText: 'Leave blank if the camera password is empty',
-              prefixIcon: Icon(Icons.lock_outline),
-            ),
-          ),
-          TextField(
-            controller: _pathController,
-            decoration: const InputDecoration(
-              labelText: 'Try stream path first',
-              hintText: '/live/ch00_1',
-              prefixIcon: Icon(Icons.route_outlined),
-            ),
-          ),
-        ];
+        final compact = constraints.maxWidth < 360;
 
         if (compact) {
           return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              fields[0],
+              scanButton,
+              if (stopButton != null) ...[
+                const SizedBox(height: 10),
+                stopButton,
+              ],
               const SizedBox(height: 10),
-              fields[1],
-              const SizedBox(height: 10),
-              fields[2],
+              addButton,
             ],
           );
         }
 
         return Row(
           children: [
-            Expanded(child: fields[0]),
+            Expanded(child: scanButton),
+            if (stopButton != null) ...[
+              const SizedBox(width: 10),
+              Expanded(child: stopButton),
+            ],
             const SizedBox(width: 10),
-            Expanded(child: fields[1]),
-            const SizedBox(width: 10),
-            Expanded(child: fields[2]),
+            Expanded(child: addButton),
           ],
         );
       },
@@ -404,106 +381,48 @@ class _CctvConnectionPanelState extends State<CctvConnectionPanel> {
   }
 }
 
-class _CctvStreamPanel extends StatelessWidget {
-  const _CctvStreamPanel({
-    required this.controller,
-    required this.user,
-    required this.stream,
+class _ConnectedCameraRow extends StatelessWidget {
+  const _ConnectedCameraRow({
+    required this.displayLabel,
+    required this.streamUrl,
     required this.onRemove,
   });
 
-  final AppController controller;
-  final AppUser user;
-  final LiveCctvStream stream;
+  final String displayLabel;
+  final String streamUrl;
   final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.appColors;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Icon(Icons.videocam_outlined, size: 18, color: colors.mutedText),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                stream.label,
-                style: const TextStyle(fontWeight: FontWeight.w900),
-              ),
-            ),
-            TextButton.icon(
-              onPressed: onRemove,
-              icon: const Icon(Icons.videocam_off_outlined, size: 18),
-              label: const Text('Remove'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        LiveFeedCard(
-          key: ValueKey(stream.id),
-          streamUrl: stream.streamUrl,
-          recordingOwnerUsername: user.username,
-          detections: stream.inspection.detections,
-          onFrameCaptureStarted: () {
-            controller.markCctvInspectionCapturing(user.username, stream.id);
-          },
-          onFrameReady: (frameBytes) {
-            return controller.inspectCctvFrame(
-              user.username,
-              stream.id,
-              frameBytes,
-            );
-          },
-          onFrameCaptureFailed: (message) {
-            controller.markCctvInspectionError(
-              user.username,
-              stream.id,
-              message,
-            );
-          },
-        ),
-        const SizedBox(height: 12),
-        V380PtzControlPanel(streamUrl: stream.streamUrl),
-      ],
-    );
-  }
-}
-
-class _NoSelectedCctvState extends StatelessWidget {
-  const _NoSelectedCctvState();
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.appColors;
-    return Container(
-      height: 220,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [colors.mediaGradientStart, colors.mediaGradientEnd],
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-        ),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: colors.border),
-      ),
-      alignment: Alignment.center,
-      padding: const EdgeInsets.all(22),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
         children: [
-          Icon(Icons.videocam_outlined, color: colors.mutedText, size: 38),
-          const SizedBox(height: 12),
-          const Text(
-            'No CCTV stream selected',
-            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
+          Icon(Icons.videocam_outlined, size: 18, color: colors.mutedText),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  displayLabel,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  streamUrl,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: colors.subtleText, fontSize: 12),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: 8),
-          Text(
-            'Scan the local network or enter an RTSP URL to connect a camera.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: colors.mutedText, height: 1.4),
+          IconButton(
+            tooltip: 'Remove camera',
+            onPressed: onRemove,
+            icon: const Icon(Icons.videocam_off_outlined),
           ),
         ],
       ),

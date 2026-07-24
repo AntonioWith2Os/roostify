@@ -85,6 +85,12 @@ class LiveCctvStream {
   }
 }
 
+/// Display name for a connected camera at [index] out of [totalStreams].
+/// Only numbered once a user has more than one CCTV connected.
+String cctvStreamDisplayLabel(int index, int totalStreams) {
+  return totalStreams > 1 ? 'CCTV ${index + 1}' : 'CCTV';
+}
+
 class Session {
   Session({required this.user, this.email, this.photoUrl});
 

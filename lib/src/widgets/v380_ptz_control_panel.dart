@@ -352,21 +352,27 @@ class _V380PtzControlPanelState extends State<V380PtzControlPanel> {
     final mutedTextColor = widget.compactOverlay
         ? Colors.white70
         : colors.subtleText;
-    // In fullscreen the panel floats directly over the video with no solid
-    // backing, so give its text a drop shadow to stay legible over bright
-    // footage instead of relying on an opaque background box.
+    // The overlay floats directly over live video, so give its text a drop
+    // shadow to stay legible over bright footage even though the backing
+    // box behind it is only translucent, not opaque.
     final overlayTextShadow = widget.compactOverlay
         ? const [Shadow(color: Colors.black87, blurRadius: 6)]
         : null;
 
     return Container(
+      // Callers commonly place this overlay in a Positioned with only a
+      // right/bottom offset (no matching left/top or explicit size), which
+      // gives it unbounded constraints — and the Row+Expanded header below
+      // needs bounded width to lay out. Pin a concrete width so this works
+      // regardless of how the caller positions it.
+      width: widget.compactOverlay ? 240 : null,
       padding: EdgeInsets.all(widget.compactOverlay ? 10 : 14),
       decoration: BoxDecoration(
-        color: widget.compactOverlay ? Colors.transparent : colors.surfaceRaised,
+        color: widget.compactOverlay
+            ? Colors.black.withValues(alpha: 0.32)
+            : colors.surfaceRaised,
         borderRadius: BorderRadius.circular(widget.compactOverlay ? 16 : 20),
-        border: widget.compactOverlay
-            ? null
-            : Border.all(color: colors.border),
+        border: widget.compactOverlay ? null : Border.all(color: colors.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

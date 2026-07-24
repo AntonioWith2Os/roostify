@@ -496,7 +496,10 @@ class _AppShellState extends State<AppShell> {
               controller: widget.controller,
               session: widget.session,
             ),
-            UserGuidelinesPage(guides: widget.controller.guides),
+            UserGuidelinesPage(
+              controller: widget.controller,
+              session: widget.session,
+            ),
             ProfilePage(controller: widget.controller, session: widget.session),
           ];
 
@@ -878,104 +881,254 @@ class UserCctvPage extends StatelessWidget {
   final AppController controller;
   final Session session;
 
+  void _openManageCameras(BuildContext context, AppUser user) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: context.appColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => CctvManagementSheet(controller: controller, user: user),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
         final user = controller.userByUsername(session.user.username)!;
-        final monitor = user.monitor;
+        final streams = user.liveCctvStreams;
 
         return Scaffold(
-          appBar: AppBar(title: const Text('CCTV Monitoring')),
-          body: ListView(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-            children: [
-              const SizedBox(height: 12),
-              _GlassCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        SeverityTag(
-                          label: monitor.cctvStatus.label,
-                          color: monitor.cctvStatus.color,
-                        ),
-                        const Spacer(),
-                        Tooltip(
-                          message: user.liveCctvStreams.length >= 2
-                              ? 'View every connected camera at once'
-                              : 'Connect at least 2 cameras to combine them',
-                          child: OutlinedButton.icon(
-                            onPressed: user.liveCctvStreams.length >= 2
-                                ? () {
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute<void>(
-                                        builder: (_) =>
-                                            MultiCameraFullscreenPage(
-                                              streams: user.liveCctvStreams,
-                                            ),
-                                      ),
-                                    );
-                                  }
-                                : null,
-                            icon: const Icon(Icons.grid_view_outlined),
-                            label: const Text('View All'),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    CctvConnectionPanel(controller: controller, user: user),
-                  ],
+          appBar: AppBar(
+            title: const Text('CCTV Monitoring'),
+            actions: [
+              if (streams.length >= 2)
+                IconButton(
+                  tooltip: 'View every connected camera at once',
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            MultiCameraFullscreenPage(streams: streams),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.grid_view_outlined),
                 ),
+              IconButton(
+                tooltip: 'Manage cameras',
+                onPressed: () => _openManageCameras(context, user),
+                icon: const Icon(Icons.tune_outlined),
               ),
-              for (final stream in user.liveCctvStreams) ...[
-                const SizedBox(height: 14),
-                CctvInspectionResultCard(
-                  title: '${stream.label} — Rooster inspection',
-                  result: stream.inspection,
-                ),
-              ],
             ],
           ),
+          body: streams.isEmpty
+              ? _CctvTabEmptyState(
+                  onManage: () => _openManageCameras(context, user),
+                )
+              : _CctvFullscreenFeed(
+                  controller: controller,
+                  user: user,
+                  streams: streams,
+                ),
         );
       },
     );
   }
 }
 
-class UserGuidelinesPage extends StatelessWidget {
-  const UserGuidelinesPage({super.key, required this.guides});
+class _CctvTabEmptyState extends StatelessWidget {
+  const _CctvTabEmptyState({required this.onManage});
 
-  final List<GuidelineItem> guides;
+  final VoidCallback onManage;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.appColors;
-    return Scaffold(
-      appBar: AppBar(title: const Text('Guidelines')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+    return Container(
+      alignment: Alignment.center,
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          //...guides.map((guide) => GuidelineCard(item: guide)),
-          //const SizedBox(height: 8),
+          Icon(Icons.videocam_outlined, color: colors.mutedText, size: 46),
+          const SizedBox(height: 14),
           const Text(
-            'System Brackets',
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+            'No CCTV stream connected',
+            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           Text(
-            'These brackets explain the app tools and chicken condition labels used across the dashboard.',
-            style: TextStyle(color: colors.mutedText, height: 1.5),
+            'Scan the local network or enter an RTSP URL to connect a camera.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: colors.mutedText, height: 1.4),
           ),
-          const SizedBox(height: 12),
-          ..._systemBracketGuides.map(
-            (guide) => _SystemBracketGuideCard(guide: guide),
+          const SizedBox(height: 20),
+          FilledButton.icon(
+            onPressed: onManage,
+            icon: const Icon(Icons.add_link_outlined),
+            label: const Text('Add Camera'),
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Fills the entire CCTV tab body with the connected live feed(s): one
+/// camera fills the whole area, several share it in a grid — the same
+/// layout used by [MultiCameraFullscreenPage], but with full YOLOv8
+/// inspection and recording since this is the primary monitoring view.
+class _CctvFullscreenFeed extends StatelessWidget {
+  const _CctvFullscreenFeed({
+    required this.controller,
+    required this.user,
+    required this.streams,
+  });
+
+  final AppController controller;
+  final AppUser user;
+  final List<LiveCctvStream> streams;
+
+  @override
+  Widget build(BuildContext context) {
+    if (streams.length == 1) {
+      return _CctvFeedTile(
+        controller: controller,
+        user: user,
+        stream: streams[0],
+        displayLabel: cctvStreamDisplayLabel(0, streams.length),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.all(4),
+      child: GridView.builder(
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          mainAxisSpacing: 4,
+          crossAxisSpacing: 4,
+          childAspectRatio: 16 / 9,
+        ),
+        itemCount: streams.length,
+        itemBuilder: (context, index) => _CctvFeedTile(
+          key: ValueKey(streams[index].id),
+          controller: controller,
+          user: user,
+          stream: streams[index],
+          displayLabel: cctvStreamDisplayLabel(index, streams.length),
+        ),
+      ),
+    );
+  }
+}
+
+class _CctvFeedTile extends StatelessWidget {
+  const _CctvFeedTile({
+    super.key,
+    required this.controller,
+    required this.user,
+    required this.stream,
+    required this.displayLabel,
+  });
+
+  final AppController controller;
+  final AppUser user;
+  final LiveCctvStream stream;
+  final String displayLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return LiveFeedCard(
+      key: ValueKey(stream.id),
+      expand: true,
+      displayLabel: displayLabel,
+      streamUrl: stream.streamUrl,
+      recordingOwnerUsername: user.username,
+      detections: stream.inspection.detections,
+      onFrameCaptureStarted: () {
+        controller.markCctvInspectionCapturing(user.username, stream.id);
+      },
+      onFrameReady: (frameBytes) {
+        return controller.inspectCctvFrame(
+          user.username,
+          stream.id,
+          frameBytes,
+        );
+      },
+      onFrameCaptureFailed: (message) {
+        controller.markCctvInspectionError(user.username, stream.id, message);
+      },
+    );
+  }
+}
+
+class UserGuidelinesPage extends StatelessWidget {
+  const UserGuidelinesPage({
+    super.key,
+    required this.controller,
+    required this.session,
+  });
+
+  final AppController controller;
+  final Session session;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final colors = context.appColors;
+        final user = controller.userByUsername(session.user.username)!;
+        final streams = user.liveCctvStreams;
+
+        return Scaffold(
+          appBar: AppBar(title: const Text('Guidelines')),
+          body: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+            children: [
+              const SizedBox(height: 12),
+              if (streams.isNotEmpty) ...[
+                const Text(
+                  'Rooster Inspection',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Live YOLOv8 inspection results from your connected CCTV cameras.',
+                  style: TextStyle(color: colors.mutedText, height: 1.5),
+                ),
+                const SizedBox(height: 12),
+                for (var i = 0; i < streams.length; i++) ...[
+                  if (i > 0) const SizedBox(height: 14),
+                  CctvInspectionResultCard(
+                    title:
+                        '${cctvStreamDisplayLabel(i, streams.length)} — Rooster inspection',
+                    result: streams[i].inspection,
+                  ),
+                ],
+                const SizedBox(height: 20),
+              ],
+              const Text(
+                'System Brackets',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'These brackets explain the app tools and chicken condition labels used across the dashboard.',
+                style: TextStyle(color: colors.mutedText, height: 1.5),
+              ),
+              const SizedBox(height: 12),
+              ..._systemBracketGuides.map(
+                (guide) => _SystemBracketGuideCard(guide: guide),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -1088,10 +1241,7 @@ const _normalPostureGuides = [
     'Standing Upright',
     'Rooster stands balanced on both legs with its head held high.',
   ),
-  (
-    'Walking Normally',
-    'Moves smoothly without limping or dragging its legs.',
-  ),
+  ('Walking Normally', 'Moves smoothly without limping or dragging its legs.'),
   (
     'Foraging/Scratching',
     'Scratches the ground while searching for food, showing natural behavior.',
@@ -1129,10 +1279,7 @@ const _abnormalPostureGuides = [
   ('Loss of Balance', 'Possible neurological problem or injury.'),
   ('Dragging One Leg', 'Injury or nerve damage.'),
   ('Isolating from Other Birds', 'Illness or stress.'),
-  (
-    'Collapsed Posture',
-    'Emergency condition requiring immediate attention.',
-  ),
+  ('Collapsed Posture', 'Emergency condition requiring immediate attention.'),
   (
     'Head Tucked Under Wing for Long Periods',
     'Weakness or illness (outside normal sleeping).',
@@ -1214,11 +1361,13 @@ class _SystemBracketGuideCard extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      const Text(
-                        'Normal Postures (Healthy)',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w900,
+                      const Expanded(
+                        child: Text(
+                          'Normal Postures (Healthy)',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                          ),
                         ),
                       ),
                     ],
@@ -1249,11 +1398,13 @@ class _SystemBracketGuideCard extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      const Text(
-                        'Abnormal Postures (Possible Health Problems)',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w900,
+                      const Expanded(
+                        child: Text(
+                          'Abnormal Postures (Possible Health Problems)',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                          ),
                         ),
                       ),
                     ],
@@ -1915,8 +2066,14 @@ class ProfilePage extends StatelessWidget {
           const SizedBox(height: 12),
           // 2. Username / password.
           OutlinedButton.icon(
-            onPressed: () =>
-                _showChangeCredentialsDialog(context, controller, user),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) =>
+                      CredentialsEditPage(controller: controller, user: user),
+                ),
+              );
+            },
             icon: const Icon(Icons.manage_accounts_outlined),
             label: const Text('Username & Password'),
           ),
@@ -2011,8 +2168,9 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
   late final TextEditingController _addressController = TextEditingController(
     text: widget.user.address,
   );
-  late final TextEditingController _facebookController =
-      TextEditingController(text: widget.user.facebookContact);
+  late final TextEditingController _facebookController = TextEditingController(
+    text: widget.user.facebookContact,
+  );
 
   @override
   void dispose() {
@@ -2097,20 +2255,9 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
   }
 }
 
-Future<void> _showChangeCredentialsDialog(
-  BuildContext context,
-  AppController controller,
-  AppUser user,
-) {
-  return showDialog<void>(
-    context: context,
-    builder: (dialogContext) =>
-        _ChangeCredentialsDialog(controller: controller, user: user),
-  );
-}
-
-class _ChangeCredentialsDialog extends StatefulWidget {
-  const _ChangeCredentialsDialog({
+class CredentialsEditPage extends StatefulWidget {
+  const CredentialsEditPage({
+    super.key,
     required this.controller,
     required this.user,
   });
@@ -2119,13 +2266,13 @@ class _ChangeCredentialsDialog extends StatefulWidget {
   final AppUser user;
 
   @override
-  State<_ChangeCredentialsDialog> createState() =>
-      _ChangeCredentialsDialogState();
+  State<CredentialsEditPage> createState() => _CredentialsEditPageState();
 }
 
-class _ChangeCredentialsDialogState extends State<_ChangeCredentialsDialog> {
-  late final TextEditingController _usernameController =
-      TextEditingController(text: widget.user.username);
+class _CredentialsEditPageState extends State<CredentialsEditPage> {
+  late final TextEditingController _usernameController = TextEditingController(
+    text: widget.user.username,
+  );
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _currentPasswordController =
       TextEditingController();
@@ -2133,9 +2280,10 @@ class _ChangeCredentialsDialogState extends State<_ChangeCredentialsDialog> {
 
   @override
   void dispose() {
-    // See _EditFullNameDialogState.dispose: controllers must be disposed
-    // from this widget's own dispose(), not from showDialog().whenComplete(),
-    // or they get torn down mid closing-animation while still mounted.
+    // Disposing from this page's own dispose() (rather than a
+    // showDialog().whenComplete()-style callback) ties controller lifetime
+    // to the page's actual removal, after its transition finishes — see the
+    // same note on ProfileEditPage's dispose().
     _usernameController.dispose();
     _passwordController.dispose();
     _currentPasswordController.dispose();
@@ -2158,60 +2306,51 @@ class _ChangeCredentialsDialogState extends State<_ChangeCredentialsDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Username & Password'),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: _usernameController,
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: 'Username',
-                prefixIcon: Icon(Icons.person_outline),
-              ),
+    return Scaffold(
+      appBar: AppBar(title: const Text('Username & Password')),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        children: [
+          TextField(
+            controller: _usernameController,
+            decoration: const InputDecoration(
+              labelText: 'Username',
+              prefixIcon: Icon(Icons.person_outline),
             ),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _passwordController,
+            obscureText: true,
+            decoration: const InputDecoration(
+              labelText: 'New password',
+              hintText: 'Leave blank to keep current password',
+              prefixIcon: Icon(Icons.lock_outline),
+            ),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _currentPasswordController,
+            obscureText: true,
+            decoration: const InputDecoration(
+              labelText: 'Current password',
+              prefixIcon: Icon(Icons.password_outlined),
+            ),
+          ),
+          if (_error != null) ...[
             const SizedBox(height: 12),
-            TextField(
-              controller: _passwordController,
-              obscureText: true,
-              decoration: const InputDecoration(
-                labelText: 'New password',
-                hintText: 'Leave blank to keep current password',
-                prefixIcon: Icon(Icons.lock_outline),
+            Text(
+              _error!,
+              style: const TextStyle(
+                color: Color(0xFFFF6B72),
+                fontWeight: FontWeight.w700,
               ),
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _currentPasswordController,
-              obscureText: true,
-              decoration: const InputDecoration(
-                labelText: 'Current password',
-                prefixIcon: Icon(Icons.password_outlined),
-              ),
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 12),
-              Text(
-                _error!,
-                style: const TextStyle(
-                  color: Color(0xFFFF6B72),
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
           ],
-        ),
+          const SizedBox(height: 24),
+          FilledButton(onPressed: _save, child: const Text('Save Changes')),
+        ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(onPressed: _save, child: const Text('Save')),
-      ],
     );
   }
 }
