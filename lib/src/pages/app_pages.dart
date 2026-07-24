@@ -572,6 +572,7 @@ class _AppShellState extends State<AppShell> {
                 ),
           floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
           bottomNavigationBar: NavigationBar(
+            backgroundColor: Colors.white,
             selectedIndex: _index,
             onDestinationSelected: (value) => setState(() => _index = value),
             destinations: destinations,
@@ -704,15 +705,26 @@ class UserDashboardPage extends StatelessWidget {
               .length;
 
           return SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                _FarmOverviewCard(
+                  cctvCount: user.cctvs.length,
+                  alertCount: activeWarnings,
+                ),
+                const SizedBox(height: 12),
+                const _DashboardSectionTitle(
+                  title: 'Live Environment',
+                  subtitle: 'Updated just now',
+                  online: true,
+                ),
+                const SizedBox(height: 8),
                 Esp32SensorConnectionCard(
                   controller: controller,
                   username: user.username,
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 CircularSensorGauge(
                   title: 'Temperature',
                   value: monitor.temperature.toStringAsFixed(1),
@@ -745,12 +757,17 @@ class UserDashboardPage extends StatelessWidget {
                   level: monitor.airLevel,
                   alerts: airAlerts,
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 16),
+                const _DashboardSectionTitle(
+                  title: 'Farm status',
+                  subtitle: 'Current monitoring summary',
+                ),
+                const SizedBox(height: 9),
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
                     color: context.appColors.surface,
-                    borderRadius: BorderRadius.circular(24),
+                    borderRadius: BorderRadius.circular(16),
                     border: Border.all(color: context.appColors.border),
                   ),
                   child: Row(
@@ -795,6 +812,128 @@ class UserDashboardPage extends StatelessWidget {
       ),
     );
   }
+}
+
+class _FarmOverviewCard extends StatelessWidget {
+  const _FarmOverviewCard({required this.cctvCount, required this.alertCount});
+  final int cctvCount;
+  final int alertCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 15),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: colors.border),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: .025),
+            blurRadius: 12,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: _OverviewMetric(value: '$cctvCount', label: 'CCTVs'),
+              ),
+              Expanded(
+                child: _OverviewMetric(
+                  value: '$alertCount',
+                  label: 'Alerts today',
+                ),
+              ),
+              const Expanded(
+                child: _OverviewMetric(value: '28', label: 'Chickens'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _OverviewMetric extends StatelessWidget {
+  const _OverviewMetric({required this.value, required this.label});
+  final String value;
+  final String label;
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        value,
+        style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 20),
+      ),
+      const SizedBox(height: 2),
+      Text(
+        label,
+        style: TextStyle(
+          color: context.appColors.mutedText,
+          fontSize: 10,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    ],
+  );
+}
+
+class _DashboardSectionTitle extends StatelessWidget {
+  const _DashboardSectionTitle({
+    required this.title,
+    required this.subtitle,
+    this.online = false,
+  });
+  final String title;
+  final String subtitle;
+  final bool online;
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              subtitle,
+              style: TextStyle(
+                color: context.appColors.mutedText,
+                fontSize: 10,
+              ),
+            ),
+          ],
+        ),
+      ),
+      if (online)
+        const Row(
+          children: [
+            Icon(Icons.circle, color: Color(0xFF23BF75), size: 8),
+            SizedBox(width: 4),
+            Text(
+              'Online',
+              style: TextStyle(
+                color: Color(0xFF23BF75),
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+    ],
+  );
 }
 
 class UserManualCameraTabPage extends StatelessWidget {
@@ -1066,7 +1205,7 @@ class _CctvFeedTile extends StatelessWidget {
   }
 }
 
-class UserGuidelinesPage extends StatelessWidget {
+class UserGuidelinesPage extends StatefulWidget {
   const UserGuidelinesPage({
     super.key,
     required this.controller,
@@ -1077,13 +1216,29 @@ class UserGuidelinesPage extends StatelessWidget {
   final Session session;
 
   @override
+  State<UserGuidelinesPage> createState() => _UserGuidelinesPageState();
+}
+
+class _UserGuidelinesPageState extends State<UserGuidelinesPage> {
+  final _searchController = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: controller,
+      animation: widget.controller,
       builder: (context, _) {
         final colors = context.appColors;
-        final user = controller.userByUsername(session.user.username)!;
-        final streams = user.liveCctvStreams;
+        final query = _query.trim().toLowerCase();
+        final guideItems = _guideGridItems
+            .where((item) => query.isEmpty || item.matches(query))
+            .toList();
 
         return Scaffold(
           appBar: AppBar(title: const Text('Guidelines')),
@@ -1091,40 +1246,35 @@ class UserGuidelinesPage extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
             children: [
               const SizedBox(height: 12),
-              if (streams.isNotEmpty) ...[
-                const Text(
-                  'Rooster Inspection',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+              TextField(
+                controller: _searchController,
+                onChanged: (value) => setState(() => _query = value),
+                decoration: const InputDecoration(
+                  hintText: 'Search guidelines...',
+                  prefixIcon: Icon(Icons.search_rounded),
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  'Live YOLOv8 inspection results from your connected CCTV cameras.',
-                  style: TextStyle(color: colors.mutedText, height: 1.5),
-                ),
-                const SizedBox(height: 12),
-                for (var i = 0; i < streams.length; i++) ...[
-                  if (i > 0) const SizedBox(height: 14),
-                  CctvInspectionResultCard(
-                    title:
-                        '${cctvStreamDisplayLabel(i, streams.length)} — Rooster inspection',
-                    result: streams[i].inspection,
+              ),
+              const SizedBox(height: 18),
+              if (guideItems.isEmpty)
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(28),
+                    child: Text('No guidelines found.', style: TextStyle(color: colors.mutedText)),
                   ),
-                ],
-                const SizedBox(height: 20),
-              ],
-              const Text(
-                'System Brackets',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'These brackets explain the app tools and chicken condition labels used across the dashboard.',
-                style: TextStyle(color: colors.mutedText, height: 1.5),
-              ),
-              const SizedBox(height: 12),
-              ..._systemBracketGuides.map(
-                (guide) => _SystemBracketGuideCard(guide: guide),
-              ),
+                )
+              else
+                GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    crossAxisSpacing: 10,
+                    mainAxisSpacing: 10,
+                    childAspectRatio: .9,
+                  ),
+                  itemCount: guideItems.length,
+                  itemBuilder: (context, index) => _GuideGridCard(item: guideItems[index]),
+                ),
             ],
           ),
         );
@@ -1236,6 +1386,72 @@ const _systemBracketGuides = [
   ),
 ];
 
+List<_GuideGridItem> get _guideGridItems => [
+  _GuideGridItem.system(_systemBracketGuides[0], 'Understand sensor readings and warnings.', Icons.shield_outlined, const Color(0xFFFF6B72)),
+  _GuideGridItem.system(_systemBracketGuides[1], 'Camera setup and troubleshooting.', Icons.videocam_outlined, const Color(0xFFFF7A45)),
+  _GuideGridItem.system(_systemBracketGuides[2], 'How detection works and confidence levels.', Icons.center_focus_strong_outlined, const Color(0xFFFF6B72)),
+  _GuideGridItem.system(_systemBracketGuides[3], 'Posture and behavior explanations.', Icons.health_and_safety_outlined, const Color(0xFFFF6B72)),
+  const _GuideGridItem.supplemental('Breeding Guide', 'How to breed healthy roosters.', Icons.egg_alt_outlined, Color(0xFF4A9FF5), [('Selecting a breeding rooster', 'Choose active, healthy birds with good balance and a calm temperament.'), ('Breeding setup', 'Keep breeding areas clean, spacious, and supplied with fresh water and feed.'), ('Egg care', 'Collect eggs regularly and keep them clean and protected before incubation.')]),
+  const _GuideGridItem.supplemental('Care & Best Practices', 'Daily care tips for a healthy flock.', Icons.verified_user_outlined, Color(0xFF26C281), [('Daily check', 'Observe appetite, movement, droppings, and breathing every day.'), ('Clean living space', 'Remove waste, refresh bedding, and maintain dry, well-ventilated coops.'), ('Food and water', 'Provide balanced feed and clean water at all times.')]),
+  const _GuideGridItem.supplemental('Diseases & Prevention', 'Common diseases and prevention.', Icons.health_and_safety_outlined, Color(0xFF9A62D8), [('Prevent spread', 'Separate birds showing signs of illness from the rest of the flock.'), ('Keep records', 'Track symptoms, treatments, and vaccinations for each flock.'), ('Ask a professional', 'Contact a veterinarian when symptoms are severe or persistent.')]),
+];
+
+class _GuideGridItem {
+  const _GuideGridItem.system(this.systemGuide, this.description, this.icon, this.color) : title = null, entries = null;
+  const _GuideGridItem.supplemental(this.title, this.description, this.icon, this.color, this.entries) : systemGuide = null;
+  final _SystemBracketGuide? systemGuide;
+  final String? title;
+  final String description;
+  final IconData icon;
+  final Color color;
+  final List<(String, String)>? entries;
+  String get label => systemGuide?.title ?? title!;
+  bool matches(String query) => label.toLowerCase().contains(query) || description.toLowerCase().contains(query);
+}
+
+class _GuideGridCard extends StatelessWidget {
+  const _GuideGridCard({required this.item});
+  final _GuideGridItem item;
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Material(
+      color: colors.surface,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => item.label == 'Breeding Guide'
+                ? const _BreedingGuidePage()
+                : item.systemGuide != null
+                ? _SystemBracketDetailPage(guide: item.systemGuide!)
+                : _SupplementalGuidePage(item: item),
+          ),
+        ),
+        child: Container(
+          padding: const EdgeInsets.all(13),
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), border: Border.all(color: colors.border)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(width: 42, height: 42, decoration: BoxDecoration(color: item.color.withValues(alpha: .12), borderRadius: BorderRadius.circular(13)), child: Icon(item.icon, color: item.color, size: 22)),
+            const Spacer(),
+            Text(item.label, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900)),
+            const SizedBox(height: 5),
+            Text(item.description, maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(color: colors.mutedText, fontSize: 12, height: 1.35)),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+class _SupplementalGuidePage extends StatelessWidget {
+  const _SupplementalGuidePage({required this.item});
+  final _GuideGridItem item;
+  @override
+  Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: Text(item.label)), body: ListView(padding: const EdgeInsets.fromLTRB(20, 12, 20, 24), children: [Text(item.description, style: TextStyle(color: context.appColors.mutedText)), const SizedBox(height: 18), for (final (title, text) in item.entries!) _BracketEntryCard(label: title, explanation: text)]));
+}
+
 const _normalPostureGuides = [
   (
     'Standing Upright',
@@ -1287,194 +1503,461 @@ const _abnormalPostureGuides = [
   ('Shaking or Trembling', 'Stress, fever, or neurological issues.'),
 ];
 
-class _SystemBracketGuideCard extends StatelessWidget {
-  const _SystemBracketGuideCard({required this.guide});
+class _ChickenStateGuidePage extends StatelessWidget {
+  const _ChickenStateGuidePage();
 
-  final _SystemBracketGuide guide;
-
-  void _showGuideDialog(BuildContext context) {
-    final colors = context.appColors;
-    showDialog<void>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Row(
-            children: [
-              Icon(guide.icon, color: _appAccent),
-              const SizedBox(width: 10),
-              Expanded(child: Text(guide.title)),
-            ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (final (label, explanation) in guide.entries)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: RichText(
-                      text: TextSpan(
-                        style: TextStyle(color: colors.mutedText, height: 1.45),
-                        children: [
-                          TextSpan(
-                            text: '[$label] ',
-                            style: TextStyle(
-                              color: colors.text,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                          TextSpan(text: explanation),
-                        ],
-                      ),
-                    ),
-                  ),
-                if (guide.title == 'Sensors') ...[
-                  const SizedBox(height: 8),
-                  const Divider(),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Sensor Warning Explanations',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'These are the same warnings that pop up on the dashboard sensor cards: what each level means and what to do.',
-                    style: TextStyle(color: colors.mutedText, height: 1.45),
-                  ),
-                  const SizedBox(height: 12),
-                  for (final warningGuide in _sensorWarningGuides)
-                    _SensorWarningGuideCard(guide: warningGuide),
-                ],
-                if (guide.title == 'Chicken State') ...[
-                  const SizedBox(height: 8),
-                  const Divider(),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Container(
-                        width: 10,
-                        height: 10,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFF26C281),
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        child: Text(
-                          'Normal Postures (Healthy)',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'These postures indicate that the rooster appears healthy and behaving normally.',
-                    style: TextStyle(color: colors.mutedText, height: 1.45),
-                  ),
-                  const SizedBox(height: 12),
-                  for (final (posture, meaning) in _normalPostureGuides)
-                    _PostureGuideRow(
-                      posture: posture,
-                      meaning: meaning,
-                      color: const Color(0xFF26C281),
-                    ),
-                  const SizedBox(height: 8),
-                  const Divider(),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Container(
-                        width: 10,
-                        height: 10,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFFFF6B72),
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        child: Text(
-                          'Abnormal Postures (Possible Health Problems)',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'These postures may indicate illness, injury, weakness, or stress.',
-                    style: TextStyle(color: colors.mutedText, height: 1.45),
-                  ),
-                  const SizedBox(height: 12),
-                  for (final (posture, meaning) in _abnormalPostureGuides)
-                    _PostureGuideRow(
-                      posture: posture,
-                      meaning: meaning,
-                      color: const Color(0xFFFF6B72),
-                    ),
-                ],
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Close'),
-            ),
-          ],
-        );
-      },
+  @override
+  Widget build(BuildContext context) {
+    if (Theme.of(context).useMaterial3) return const _FunctionalChickenStateGuide();
+    return Scaffold(
+    appBar: AppBar(title: const Text('Chicken State')),
+    body: ListView(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+      children: const [
+        _GuideModeTabs(),
+        SizedBox(height: 14),
+        _ChickenStateCard(
+          title: 'Normal (Healthy)',
+          description: 'Roosters appear alert, balanced, and active with natural posture.',
+          color: Color(0xFF26C281),
+          cues: ['Standing upright', 'Walking normally', 'Foraging / scratching'],
+        ),
+        SizedBox(height: 12),
+        _ChickenStateCard(
+          title: 'Abnormal (Needs Attention)',
+          description: 'Roosters show signs of discomfort, illness, or stress.',
+          color: Color(0xFFFF4F3A),
+          cues: ['Weak balance', 'Abnormal stance', 'Repeated pacing'],
+          note: 'Inspect as soon as possible and provide proper care.',
+        ),
+      ],
+    ),
     );
   }
+}
+
+class _GuideModeTabs extends StatelessWidget {
+  const _GuideModeTabs();
+  @override
+  Widget build(BuildContext context) => Row(children: [
+    Expanded(child: Container(alignment: Alignment.center, padding: const EdgeInsets.symmetric(vertical: 11), decoration: BoxDecoration(color: const Color(0xFFFFEEE9), borderRadius: BorderRadius.circular(22)), child: const Text('Posture-based State', style: TextStyle(color: _appAccent, fontWeight: FontWeight.w800, fontSize: 12)))),
+    const SizedBox(width: 9),
+    Expanded(child: Container(alignment: Alignment.center, padding: const EdgeInsets.symmetric(vertical: 11), decoration: BoxDecoration(color: const Color(0xFFFFF9F6), borderRadius: BorderRadius.circular(22)), child: const Text('Movement Cues', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)))),
+  ]);
+}
+
+class _ChickenStateCard extends StatelessWidget {
+  const _ChickenStateCard({required this.title, required this.description, required this.color, required this.cues, this.note});
+  final String title;
+  final String description;
+  final Color color;
+  final List<String> cues;
+  final String? note;
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: colors.surface, borderRadius: BorderRadius.circular(18), border: Border.all(color: colors.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [Container(width: 11, height: 11, decoration: BoxDecoration(color: color, shape: BoxShape.circle)), const SizedBox(width: 9), Text(title, style: const TextStyle(fontWeight: FontWeight.w900))]),
+        const SizedBox(height: 10),
+        Text(description, style: TextStyle(color: colors.mutedText, height: 1.45)),
+        const SizedBox(height: 15),
+        for (final cue in cues) Padding(padding: const EdgeInsets.only(bottom: 12), child: Row(children: [Icon(color == const Color(0xFF26C281) ? Icons.check_box_rounded : Icons.cancel_rounded, color: color, size: 20), const SizedBox(width: 10), Text(cue)])),
+        if (note != null) ...[const SizedBox(height: 4), Text(note!, style: TextStyle(color: colors.mutedText, height: 1.45))],
+      ]),
+    );
+  }
+}
+
+class _FunctionalChickenStateGuide extends StatefulWidget {
+  const _FunctionalChickenStateGuide();
+  @override
+  State<_FunctionalChickenStateGuide> createState() => _FunctionalChickenStateGuideState();
+}
+
+class _FunctionalChickenStateGuideState extends State<_FunctionalChickenStateGuide> {
+  bool _movementCues = false;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.appColors;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+    final normal = _movementCues
+        ? const ['Active walking', 'Smooth, even steps', 'Regular foraging']
+        : const ['Standing upright', 'Walking normally', 'Foraging / scratching'];
+    final abnormal = _movementCues
+        ? const ['Limping or dragging', 'Loss of balance', 'Repeated pacing']
+        : const ['Weak balance', 'Abnormal stance', 'Repeated pacing'];
+    return Scaffold(
+      appBar: AppBar(title: const Text('Chicken State')),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+        children: [
+          Row(children: [
+            _StateTab(label: 'Posture-based State', selected: !_movementCues, onTap: () => setState(() => _movementCues = false)),
+            const SizedBox(width: 9),
+            _StateTab(label: 'Movement Cues', selected: _movementCues, onTap: () => setState(() => _movementCues = true)),
+          ]),
+          const SizedBox(height: 14),
+          _FunctionalStateCard(title: 'Normal (Healthy)', description: _movementCues ? 'Healthy roosters move with purpose and stay engaged with their surroundings.' : 'Roosters appear alert, balanced, and active with natural posture.', color: const Color(0xFF26C281), cues: normal, imageAsset: 'assets/chickens/healthy_rooster.png'),
+          const SizedBox(height: 12),
+          _FunctionalStateCard(title: 'Abnormal (Needs Attention)', description: _movementCues ? 'Unusual movement can point to injury, illness, pain, or stress.' : 'Roosters show signs of discomfort, illness, or stress.', color: const Color(0xFFFF4F3A), cues: abnormal, note: 'Inspect as soon as possible and provide proper care.', imageAsset: 'assets/chickens/abnormal_rooster.png'),
+          const SizedBox(height: 14),
+          Text(_movementCues ? 'Watch a rooster over several moments before deciding a movement is abnormal.' : 'Posture is most useful when the full body is visible and the camera view is clear.', style: TextStyle(color: colors.mutedText, fontSize: 12, height: 1.45)),
+        ],
+      ),
+    );
+  }
+}
+
+class _StateTab extends StatelessWidget {
+  const _StateTab({required this.label, required this.selected, required this.onTap});
+  final String label; final bool selected; final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Expanded(child: Material(color: selected ? _appAccent.withValues(alpha: .13) : colors.surfaceRaised, borderRadius: BorderRadius.circular(22), child: InkWell(borderRadius: BorderRadius.circular(22), onTap: onTap, child: Padding(padding: const EdgeInsets.symmetric(vertical: 11), child: Text(label, textAlign: TextAlign.center, style: TextStyle(color: selected ? _appAccent : colors.mutedText, fontWeight: FontWeight.w800, fontSize: 12))))));
+  }
+}
+
+class _FunctionalStateCard extends StatelessWidget {
+  const _FunctionalStateCard({required this.title, required this.description, required this.color, required this.cues, this.note, this.imageAsset});
+  final String title; final String description; final Color color; final List<String> cues; final String? note; final String? imageAsset;
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    final showImage = imageAsset != null && Theme.of(context).brightness == Brightness.light;
+    final content = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Container(width: 11, height: 11, decoration: BoxDecoration(color: color, shape: BoxShape.circle)), const SizedBox(width: 9), Expanded(child: Text(title, overflow: TextOverflow.ellipsis, style: TextStyle(color: colors.text, fontWeight: FontWeight.w900)))]), const SizedBox(height: 10), Text(description, style: TextStyle(color: colors.mutedText, height: 1.45)), const SizedBox(height: 15), for (final cue in cues) Padding(padding: const EdgeInsets.only(bottom: 12), child: Row(children: [Icon(color == const Color(0xFF26C281) ? Icons.check_box_rounded : Icons.cancel_rounded, color: color, size: 20), const SizedBox(width: 10), Expanded(child: Text(cue, style: TextStyle(color: colors.text)))])), if (note != null) Text(note!, style: TextStyle(color: colors.mutedText, height: 1.45))]);
+    return Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: colors.surface, borderRadius: BorderRadius.circular(18), border: Border.all(color: colors.border)), child: Stack(children: [Padding(padding: EdgeInsets.only(right: showImage ? 116 : 0), child: content), if (showImage) Positioned(right: -20, bottom: 0, child: SizedBox(width: 144, height: 138, child: Image.asset(imageAsset!, fit: BoxFit.contain)))]));
+  }
+}
+
+class _BreedingGuidePage extends StatelessWidget {
+  const _BreedingGuidePage();
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    const topics = [
+      ('Selecting a Breeding Rooster', Icons.person_outline),
+      ('Selecting Hens', Icons.group_outlined),
+      ('Breeder Nutrition & Conditioning', Icons.restaurant_outlined),
+      ('Breeding Setup', Icons.home_outlined),
+      ('Mating Process', Icons.favorite_border),
+      ('Egg Collection & Incubation', Icons.egg_alt_outlined),
+      ('Hatching & Chick Care', Icons.egg_alt_outlined),
+      ('Common Breeding Mistakes to Avoid', Icons.rule_outlined),
+      ('Breeding Tips & Reminders', Icons.lightbulb_outline),
+    ];
+    return Scaffold(appBar: AppBar(title: const Text('Breeding Guide')), body: ListView(padding: const EdgeInsets.fromLTRB(20, 8, 20, 24), children: [Text('A complete walkthrough of breeding healthy, strong roosters: choosing parent stock, preparing a proper setup, and caring for eggs and chicks all the way to a healthy hatch.', style: TextStyle(color: colors.mutedText, height: 1.5)), const SizedBox(height: 18), Container(decoration: BoxDecoration(color: colors.surface, borderRadius: BorderRadius.circular(16), border: Border.all(color: colors.border)), child: Column(children: [for (final (title, icon) in topics) _BreedingTopicRow(title: title, icon: icon)])), const SizedBox(height: 18), Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: const Color(0xFFFFF4E7), borderRadius: BorderRadius.circular(16), border: Border.all(color: const Color(0xFFFFDFB8))), child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(Icons.lightbulb_outline, color: Color(0xFFF0A22A), size: 27), SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Tip', style: TextStyle(fontWeight: FontWeight.w900)), SizedBox(height: 4), Text('Good breeding starts with healthy parents, a clean setup, and proper care from egg to chick.')]))]))]));
+  }
+}
+
+class _BreedingTopicRow extends StatelessWidget {
+  const _BreedingTopicRow({required this.title, required this.icon});
+  final String title;
+  final IconData icon;
+  @override
+  Widget build(BuildContext context) => Material(
+    type: MaterialType.transparency,
+    child: ListTile(
+      leading: Icon(icon, color: context.appColors.mutedText),
+      title: Text(title, style: TextStyle(color: context.appColors.text, fontWeight: FontWeight.w700)),
+      trailing: Icon(Icons.chevron_right_rounded, color: context.appColors.mutedText),
+      onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => _BreedingTopicPage(topic: title, icon: icon))),
+    ),
+  );
+}
+
+class _BreedingTopicPage extends StatelessWidget {
+  const _BreedingTopicPage({required this.topic, required this.icon});
+  final String topic; final IconData icon;
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    final details = _breedingTopicDetails[topic] ?? const ['Keep birds healthy, comfortable, and under regular observation.', 'Use clean housing, balanced feed, fresh water, and appropriate space.', 'Ask a poultry professional for help with illness or persistent breeding issues.'];
+    return Scaffold(appBar: AppBar(title: Text(topic)), body: ListView(padding: const EdgeInsets.fromLTRB(20, 12, 20, 24), children: [Container(width: 50, height: 50, decoration: BoxDecoration(color: _appAccent.withValues(alpha: .12), borderRadius: BorderRadius.circular(14)), child: Icon(icon, color: _appAccent)), const SizedBox(height: 16), Text('Practical guidance', style: TextStyle(color: colors.text, fontSize: 20, fontWeight: FontWeight.w900)), const SizedBox(height: 10), for (var index = 0; index < details.length; index++) _BracketEntryCard(label: 'Step ${index + 1}', explanation: details[index]) ]));
+  }
+}
+
+const _breedingTopicDetails = <String, List<String>>{
+  'Selecting a Breeding Rooster': [
+    'Choose an alert, active rooster with bright eyes, sound legs, and a natural, balanced stance.',
+    'Avoid birds with persistent limping, breathing issues, or any visible illness.',
+    'Pick a rooster whose traits (size, color, temperament) you want to carry into the next generation.',
+    'Favor roosters that are at least 7-8 months old so they are fully mature before breeding.',
+    'Rotate or rest a rooster that is overused to keep fertility and mating quality high.',
+  ],
+  'Selecting Hens': [
+    'Choose healthy hens with a good appetite, normal movement, and clean, well-kept feathers.',
+    'Avoid breeding hens that are weak, underweight, or recovering from illness.',
+    'Keep the breeding group calm and avoid overcrowding, which raises stress and injury risk.',
+    'Prefer hens already laying consistently, since irregular layers often produce fewer viable eggs.',
+    'Match hen age and size to the rooster to reduce injury during mating.',
+  ],
+  'Breeder Nutrition & Conditioning': [
+    'Feed a balanced breeder ration with higher protein and added vitamins A, D, and E for fertility.',
+    'Provide calcium (oyster shell or limestone grit) so hens keep strong eggshells during heavy laying.',
+    'Keep breeders at a healthy weight; both underweight and overweight birds have lower fertility.',
+    'Offer fresh, clean water at all times, since dehydration quickly reduces egg and sperm quality.',
+    'Start conditioning 2-3 weeks before breeding season so both rooster and hens are in peak health.',
+  ],
+  'Breeding Setup': [
+    'Provide a clean, dry pen with shade, ventilation, nesting areas, and fresh water.',
+    'Keep litter dry and remove waste often to reduce ammonia and disease risk.',
+    'Give birds enough room to move away from each other and avoid constant close contact.',
+    'Add one nesting box for every 4-5 hens to reduce crowding and egg damage.',
+    'Separate breeding pens from the general flock to control which birds mate and avoid stress.',
+  ],
+  'Mating Process': [
+    'Introduce breeding birds gradually and watch for aggression during the first few days.',
+    'Observe the flock daily to ensure hens are not being over-mated or injured.',
+    'Keep food and water available in more than one spot when possible to reduce competition.',
+    'Pair one rooster with 8-10 hens as a general guide for balanced mating and fertility.',
+    'Trim sharp spurs or claws if they are causing injuries to hens during mating.',
+  ],
+  'Egg Collection & Incubation': [
+    'Collect eggs at least once daily and discard cracked, misshapen, or heavily soiled eggs.',
+    'Store suitable eggs point-down in a cool, clean place before incubation, ideally within 7 days.',
+    'Follow stable temperature, humidity, and turning guidance for the incubator (typically ~37.5°C).',
+    'Turn eggs 3-5 times a day if not using an automatic turner, stopping a few days before hatch.',
+    'Candle eggs around day 7-10 to check development and remove clearly infertile ones.',
+  ],
+  'Hatching & Chick Care': [
+    'Prepare a warm, dry brooder before chicks hatch, with a heat source and non-slip flooring.',
+    'Give chicks clean water, starter feed, and a safe, consistent heat source (around 32-35°C at first).',
+    'Watch for piling, chilling, weakness, or poor eating, which often signal temperature or health issues.',
+    'Let chicks fully dry and fluff up in the incubator before moving them to the brooder.',
+    'Gradually lower brooder temperature by about 3°C per week as chicks feather out.',
+  ],
+  'Common Breeding Mistakes to Avoid': [
+    'Breeding birds that are sick, stressed, injured, or under treatment, which lowers fertility and chick health.',
+    'Overusing one rooster across too many hens, leading to fatigue and reduced fertility.',
+    'Breeding closely related birds repeatedly, which can weaken the flock over generations.',
+    'Skipping quarantine for new breeding stock before introducing them to the flock.',
+    'Rushing the incubation or brooder setup instead of confirming stable temperature and humidity first.',
+  ],
+  'Breeding Tips & Reminders': [
+    'Keep records of parent birds, hatch dates, health issues, and results to guide future pairings.',
+    'Do not breed birds while they are sick, stressed, or under treatment.',
+    'Prioritize bird health and welfare over rapid breeding results.',
+    'Introduce new bloodlines occasionally to keep the flock genetically healthy.',
+    'Review past hatch outcomes each season and adjust nutrition, setup, or pairings as needed.',
+  ],
+};
+
+class _SensorsGuidePage extends StatelessWidget {
+  const _SensorsGuidePage();
+  @override
+  Widget build(BuildContext context) {
+    if (Theme.of(context).useMaterial3) return const _FunctionalSensorsGuide();
+    final colors = context.appColors;
+    return Scaffold(appBar: AppBar(title: const Text('Sensors')), body: ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 24), children: [Text('Environmental sensor explanations and safe levels.', style: TextStyle(color: colors.mutedText, height: 1.5)), const SizedBox(height: 18), _SensorRangeCard(title: 'Temperature (°C)', icon: Icons.thermostat_outlined, color: const Color(0xFFFF6B55), ranges: const [('OK\nNORMAL', '18 - 27 °C', 'Comfortable for roosters.', Color(0xFF26C281)), ('!\nCAUTION', '27 - 30 °C', 'Start prevention.', Color(0xFFE5A52C)), ('!\nDANGER', '> 30 °C', 'Strong cooling needed.', Color(0xFFFF4F3A))]), const SizedBox(height: 10), _SensorCollapsedRow(title: 'Humidity (%)', icon: Icons.water_drop_outlined, color: const Color(0xFF3BB7E8)), const SizedBox(height: 8), _SensorCollapsedRow(title: 'Air Pollution (ppm)', icon: Icons.air_outlined, color: const Color(0xFF4A9FF5)), const SizedBox(height: 18), Text('Tap any sensor to learn more about readings and recommendations.', style: TextStyle(color: colors.mutedText, fontSize: 12, height: 1.45))]));
+  }
+}
+
+class _SensorRangeCard extends StatelessWidget {
+  const _SensorRangeCard({required this.title, required this.icon, required this.color, required this.ranges});
+  final String title; final IconData icon; final Color color; final List<(String, String, String, Color)> ranges;
+  @override
+  Widget build(BuildContext context) { final colors = context.appColors; return Container(padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: colors.surface, borderRadius: BorderRadius.circular(18), border: Border.all(color: colors.border)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Icon(icon, color: color), const SizedBox(width: 12), Text(title, style: const TextStyle(fontWeight: FontWeight.w900))]), const SizedBox(height: 13), for (final (level, range, note, levelColor) in ranges) Padding(padding: const EdgeInsets.only(bottom: 12), child: Row(children: [Container(width: 68, padding: const EdgeInsets.symmetric(vertical: 7), alignment: Alignment.center, decoration: BoxDecoration(color: levelColor.withValues(alpha: .12), borderRadius: BorderRadius.circular(8)), child: Text(level, textAlign: TextAlign.center, style: TextStyle(color: levelColor, fontSize: 10, fontWeight: FontWeight.w900))), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(range, style: const TextStyle(fontWeight: FontWeight.w900)), const SizedBox(height: 2), Text(note, style: TextStyle(color: colors.mutedText, fontSize: 12))]))]))])); }
+}
+
+class _SensorCollapsedRow extends StatelessWidget {
+  const _SensorCollapsedRow({required this.title, required this.icon, required this.color}); final String title; final IconData icon; final Color color;
+  @override
+  Widget build(BuildContext context) => Container(padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 15), decoration: BoxDecoration(color: context.appColors.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: context.appColors.border)), child: Row(children: [Icon(icon, color: color), const SizedBox(width: 12), Expanded(child: Text(title, style: const TextStyle(fontWeight: FontWeight.w800))), Icon(Icons.keyboard_arrow_down_rounded, color: context.appColors.mutedText)]));
+}
+
+class _FunctionalSensorsGuide extends StatelessWidget {
+  const _FunctionalSensorsGuide();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Sensors')),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        children: [
+          Text('Environmental sensor explanations, safe levels, and recommended actions.', style: TextStyle(color: colors.mutedText, height: 1.5)),
+          const SizedBox(height: 18),
+          const _FunctionalSensorGuideCard(title: 'Temperature (°C)', icon: Icons.thermostat_outlined, color: Color(0xFFFF6B55), summary: 'Comfort, heat-stress, and emergency temperature ranges.', ranges: [('Normal', '18 - 26 °C', 'Good / comfortable'), ('Caution', '27 - 29 °C', 'Shade, water, and airflow'), ('Warning', '30 - 31 °C', 'Heat stress likely'), ('Danger', '32 °C+', 'Strong cooling needed')]),
+          const SizedBox(height: 10),
+          const _FunctionalSensorGuideCard(title: 'Humidity (%)', icon: Icons.water_drop_outlined, color: Color(0xFF3BB7E8), summary: 'Relative humidity levels that affect cooling and dust.', ranges: [('Normal', '45 - 70%', 'Good range'), ('Caution', '71 - 79%', 'Improve ventilation'), ('Warning', '80 - 89%', 'Risky, especially in heat'), ('Danger', '90%+', 'Very poor cooling condition')]),
+          const SizedBox(height: 10),
+          const _FunctionalSensorGuideCard(title: 'Air Pollution (ppm)', icon: Icons.air_outlined, color: Color(0xFF4A9FF5), summary: 'Ammonia air-quality limits for the poultry area.', ranges: [('Normal', '0 - 9 ppm', 'Good air'), ('Caution', '10 - 19 ppm', 'Improve ventilation'), ('Warning', '20 - 24 ppm', 'Air quality becoming unsafe'), ('Danger', '25+ ppm', 'Ventilate and clean immediately')]),
+          const SizedBox(height: 18),
+          Text('Tap a sensor to expand its reference chart and the action for each level.', style: TextStyle(color: colors.mutedText, fontSize: 12, height: 1.45)),
+        ],
+      ),
+    );
+  }
+}
+
+class _FunctionalSensorGuideCard extends StatelessWidget {
+  const _FunctionalSensorGuideCard({required this.title, required this.icon, required this.color, required this.summary, required this.ranges});
+  final String title; final IconData icon; final Color color; final String summary; final List<(String, String, String)> ranges;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
       child: Material(
         color: colors.surface,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-          side: BorderSide(color: colors.border),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: () => _showGuideDialog(context),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                CircleAvatar(
-                  backgroundColor: colors.accentSurface,
-                  foregroundColor: _appAccent,
-                  child: Icon(guide.icon),
+        borderRadius: BorderRadius.circular(18),
+        clipBehavior: Clip.antiAlias,
+        child: Container(
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(18), border: Border.all(color: colors.border)),
+          child: ExpansionTile(
+            tilePadding: const EdgeInsets.all(15),
+            childrenPadding: const EdgeInsets.fromLTRB(15, 0, 15, 15),
+            leading: Container(width: 44, height: 44, decoration: BoxDecoration(color: color.withValues(alpha: .12), borderRadius: BorderRadius.circular(13)), child: Icon(icon, color: color)),
+            title: Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+            subtitle: Text(summary, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: colors.mutedText, fontSize: 12, height: 1.35)),
+            children: [
+              for (final (level, range, action) in ranges)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(13),
+                  decoration: BoxDecoration(color: colors.background, borderRadius: BorderRadius.circular(14), border: Border.all(color: colors.border)),
+                  child: Row(children: [
+                    Container(width: 68, padding: const EdgeInsets.symmetric(vertical: 6), alignment: Alignment.center, decoration: BoxDecoration(color: color.withValues(alpha: .12), borderRadius: BorderRadius.circular(8)), child: Text(level, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w900))),
+                    const SizedBox(width: 12),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(range, style: TextStyle(color: colors.text, fontWeight: FontWeight.w900)), const SizedBox(height: 3), Text(action, style: TextStyle(color: colors.mutedText, fontSize: 12))])),
+                  ]),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    guide.title,
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ),
-                Icon(Icons.chevron_right_rounded, color: colors.mutedText),
-              ],
-            ),
+            ],
           ),
         ),
       ),
+    );
+  }
+}
+
+/// A full page for one System Bracket so longer advice remains easy to read
+/// and users can return to the Guide index with the standard back button.
+class _SystemBracketDetailPage extends StatelessWidget {
+  const _SystemBracketDetailPage({required this.guide});
+
+  final _SystemBracketGuide guide;
+
+  @override
+  Widget build(BuildContext context) {
+    if (guide.title == 'Chicken State') return const _ChickenStateGuidePage();
+    if (guide.title == 'Sensors') return const _SensorsGuidePage();
+    final colors = context.appColors;
+    return Scaffold(
+      appBar: AppBar(title: Text(guide.title)),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                backgroundColor: colors.accentSurface,
+                foregroundColor: _appAccent,
+                child: Icon(guide.icon),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  guide.title,
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          for (final (label, explanation) in guide.entries)
+            _BracketEntryCard(label: label, explanation: explanation),
+          if (guide.title == 'Sensors') ...[
+            const SizedBox(height: 8),
+            const Text('Sensor Warning Explanations', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+            const SizedBox(height: 6),
+            Text('Warning levels explain when a reading needs closer monitoring or action.', style: TextStyle(color: colors.mutedText, height: 1.45)),
+            const SizedBox(height: 12),
+            for (final warningGuide in _sensorWarningGuides)
+              _SensorWarningGuideCard(guide: warningGuide),
+          ],
+          if (guide.title == 'Chicken State') ...[
+            const SizedBox(height: 8),
+            const _PostureGuideSection(
+              title: 'Normal Postures (Healthy)',
+              description: 'These postures indicate that the rooster appears healthy and behaves normally.',
+              color: Color(0xFF26C281),
+              entries: _normalPostureGuides,
+            ),
+            const SizedBox(height: 16),
+            const _PostureGuideSection(
+              title: 'Abnormal Postures (Possible Health Problems)',
+              description: 'These postures may indicate illness, injury, weakness, or stress.',
+              color: Color(0xFFFF6B72),
+              entries: _abnormalPostureGuides,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _BracketEntryCard extends StatelessWidget {
+  const _BracketEntryCard({required this.label, required this.explanation});
+
+  final String label;
+  final String explanation;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
+          const SizedBox(height: 5),
+          Text(explanation, style: TextStyle(color: colors.mutedText, height: 1.45)),
+        ],
+      ),
+    );
+  }
+}
+
+class _PostureGuideSection extends StatelessWidget {
+  const _PostureGuideSection({
+    required this.title,
+    required this.description,
+    required this.color,
+    required this.entries,
+  });
+
+  final String title;
+  final String description;
+  final Color color;
+  final List<(String, String)> entries;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [Container(width: 9, height: 9, decoration: BoxDecoration(color: color, shape: BoxShape.circle)), const SizedBox(width: 8), Expanded(child: Text(title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w900)))]),
+        const SizedBox(height: 6),
+        Text(description, style: TextStyle(color: colors.mutedText, height: 1.45)),
+        const SizedBox(height: 10),
+        for (final (posture, meaning) in entries)
+          _PostureGuideRow(posture: posture, meaning: meaning, color: color),
+      ],
     );
   }
 }
@@ -1971,174 +2454,399 @@ class ProfilePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final user = controller.userByUsername(session.user.username)!;
-    final colors = context.appColors;
     return Scaffold(
-      appBar: AppBar(title: const Text('Profile')),
+      appBar: AppBar(
+        title: const Text('Profile'),
+        actions: [
+          IconButton(
+            tooltip: 'App settings',
+            onPressed: () => showModalBottomSheet<void>(
+              context: context,
+              showDragHandle: true,
+              builder: (context) => Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
+                child: ThemePreferenceCard(controller: controller),
+              ),
+            ),
+            icon: const Icon(Icons.settings_outlined),
+          ),
+        ],
+      ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
-          _GlassCard(
-            child: Column(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: _appAccent, width: 3),
-                  ),
-                  child: CircleAvatar(
-                    radius: 38,
-                    backgroundColor: colors.accentSurface,
-                    backgroundImage: session.photoUrl == null
-                        ? null
-                        : NetworkImage(session.photoUrl!),
-                    child: session.photoUrl == null
-                        ? Icon(
-                            session.user.isAdmin
-                                ? Icons.admin_panel_settings_outlined
-                                : Icons.person_outline,
-                            color: _appAccent,
-                            size: 36,
-                          )
-                        : null,
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Text(
-                  user.displayName,
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  session.email ??
-                      (user.isAdmin
-                          ? 'Admin supervisor account'
-                          : 'Backyard rooster farm user account'),
-                  style: TextStyle(color: colors.mutedText),
-                ),
-                const SizedBox(height: 18),
-                IntrinsicHeight(
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: _ProfileStat(
-                          value: user.isAdmin ? 'Admin' : 'User',
-                          label: 'Role',
-                        ),
-                      ),
-                      VerticalDivider(color: colors.border, width: 1),
-                      Expanded(
-                        child: _ProfileStat(
-                          value: '${user.cctvs.length}',
-                          label: 'CCTVs',
-                        ),
-                      ),
-                      VerticalDivider(color: colors.border, width: 1),
-                      Expanded(
-                        child: _ProfileStat(
-                          value: '${user.monitor.alerts.length}',
-                          label: 'Alerts',
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+          _ProfileSummaryCard(user: user, session: session),
+          const SizedBox(height: 14),
+          _ProfileMenuGroup(children: [
+            _ProfileMenuRow(
+              icon: Icons.person_outline,
+              label: 'My Information',
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => ProfileEditPage(controller: controller, user: user))),
             ),
-          ),
-          const SizedBox(height: 18),
-          // 1. Profiles.
-          OutlinedButton.icon(
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) =>
-                      ProfileEditPage(controller: controller, user: user),
-                ),
-              );
-            },
-            icon: const Icon(Icons.contact_page_outlined),
-            label: const Text('Profiles'),
-          ),
-          const SizedBox(height: 12),
-          // 2. Username / password.
-          OutlinedButton.icon(
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) =>
-                      CredentialsEditPage(controller: controller, user: user),
-                ),
-              );
-            },
-            icon: const Icon(Icons.manage_accounts_outlined),
-            label: const Text('Username & Password'),
-          ),
-          const SizedBox(height: 12),
-          // 3. Recordings.
-          OutlinedButton.icon(
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => RecordingsPage(currentUser: user),
-                ),
-              );
-            },
-            icon: const Icon(Icons.video_library_outlined),
-            label: Text(user.isAdmin ? 'All Recordings' : 'My Recordings'),
-          ),
-          const SizedBox(height: 12),
-          // 4. Dark mode.
-          ThemePreferenceCard(controller: controller),
-          // 5. Connect Google.
-          OutlinedButton.icon(
-            onPressed: session.email != null
-                ? null
-                : () async {
-                    final linked = await controller.linkGoogleAccount();
-                    if (!context.mounted) return;
-                    if (!linked) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            controller.lastError ??
-                                'Could not connect the Google account.',
-                          ),
-                        ),
-                      );
-                    }
-                  },
-            icon: Icon(
-              session.email != null
-                  ? Icons.check_circle_outline
-                  : Icons.link_outlined,
+            _ProfileMenuRow(
+              icon: Icons.key_outlined,
+              label: 'Username & Password',
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => CredentialsEditPage(controller: controller, user: user))),
             ),
-            label: Text(
-              session.email != null
-                  ? 'Connected: ${session.email}'
-                  : 'Connect Google Account',
+            _ProfileMenuRow(
+              icon: Icons.account_circle_outlined,
+              label: 'Connected Accounts',
+              trailing: const Icon(Icons.g_mobiledata_rounded, color: Color(0xFF4285F4), size: 30),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => ConnectedAccountsPage(controller: controller))),
             ),
-          ),
-          const SizedBox(height: 12),
-          // 6. Log out.
-          FilledButton.icon(
+            _ProfileMenuRow(
+              icon: Icons.video_library_outlined,
+              label: user.isAdmin ? 'All Recordings' : 'My Recordings',
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RecordingsPage(currentUser: user))),
+            ),
+            _ProfileMenuRow(
+              icon: Icons.notifications_none_rounded,
+              label: 'Notification Preferences',
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const NotificationPreferencesPage())),
+            ),
+            _ProfileMenuRow(
+              icon: Icons.settings_outlined,
+              label: 'App Settings',
+              onTap: () => showModalBottomSheet<void>(context: context, showDragHandle: true, builder: (context) => Padding(padding: const EdgeInsets.fromLTRB(20, 0, 20, 28), child: ThemePreferenceCard(controller: controller))),
+            ),
+            _ProfileMenuRow(
+              icon: Icons.help_outline_rounded,
+              label: 'Help & Support',
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SupportChatPage(controller: controller, session: session))),
+            ),
+          ]),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
             onPressed: () async {
               await controller.signOut();
               if (!context.mounted) return;
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute<void>(
-                  builder: (_) => LandingPage(controller: controller),
-                ),
-                (route) => false,
-              );
+              Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute<void>(builder: (_) => LandingPage(controller: controller)), (route) => false);
             },
-            icon: const Icon(Icons.logout),
-            label: const Text('Log Out'),
+            icon: const Icon(Icons.logout_outlined),
+            label: const Text('Log out'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class ConnectedAccountsPage extends StatelessWidget {
+  const ConnectedAccountsPage({super.key, required this.controller});
+
+  final AppController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final session = controller.session;
+        final connected = session?.email != null;
+        final colors = context.appColors;
+        return Scaffold(
+          appBar: AppBar(title: const Text('Connected Accounts')),
+          body: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
+            children: [
+              Text('Connect your Google account for faster login and cloud backup.', style: TextStyle(color: colors.mutedText, height: 1.5)),
+              const SizedBox(height: 22),
+              _ConnectedAccountCard(
+                connected: connected,
+                email: session?.email,
+                onTap: () async {
+                  if (connected) {
+                    await controller.unlinkGoogleAccount();
+                    return;
+                  }
+                  final linked = await controller.linkGoogleAccount();
+                  if (!context.mounted || linked) return;
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(controller.lastError ?? 'Could not connect Google.')));
+                },
+              ),
+              const SizedBox(height: 28),
+              Container(
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(color: colors.surface, borderRadius: BorderRadius.circular(18), border: Border.all(color: colors.border)),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Benefits', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                    const SizedBox(height: 14),
+                    const _AccountBenefit(text: 'Quick and secure login'),
+                    const _AccountBenefit(text: 'Backup your recordings and settings'),
+                    const _AccountBenefit(text: 'Sync across multiple devices'),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 22),
+              Text('You can connect or disconnect Google anytime in Profile settings.', style: TextStyle(color: colors.mutedText, height: 1.45)),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ConnectedAccountCard extends StatelessWidget {
+  const _ConnectedAccountCard({required this.connected, required this.email, required this.onTap});
+
+  final bool connected;
+  final String? email;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Material(
+      color: colors.surface,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), border: Border.all(color: colors.border)),
+          child: Row(
+            children: [
+              const Icon(Icons.g_mobiledata_rounded, color: Color(0xFF4285F4), size: 38),
+              const SizedBox(width: 12),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(connected ? 'Google connected' : 'Connect with Google', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)), if (connected) ...[const SizedBox(height: 3), Text(email!, style: TextStyle(color: colors.mutedText, fontSize: 12))]])),
+              if (connected) const Icon(Icons.check_circle, color: Color(0xFF26C281)) else Icon(Icons.chevron_right_rounded, color: colors.mutedText),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AccountBenefit extends StatelessWidget {
+  const _AccountBenefit({required this.text});
+  final String text;
+  @override
+  Widget build(BuildContext context) => Padding(padding: const EdgeInsets.only(bottom: 12), child: Row(children: [const Icon(Icons.diamond, size: 13), const SizedBox(width: 11), Text(text)]));
+}
+
+class NotificationPreferencesPage extends StatefulWidget {
+  const NotificationPreferencesPage({super.key});
+  @override
+  State<NotificationPreferencesPage> createState() => _NotificationPreferencesPageState();
+}
+
+class _NotificationPreferencesPageState extends State<NotificationPreferencesPage> {
+  static const _prefix = 'roostify.notification.';
+  bool _enabled = true;
+  final Map<String, bool> _preferences = {for (final item in _notificationOptions) item.key: true};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPreferences();
+  }
+
+  Future<void> _loadPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _enabled = prefs.getBool('${_prefix}enabled') ?? true;
+      for (final item in _notificationOptions) {
+        _preferences[item.key] = prefs.getBool('$_prefix${item.key}') ?? true;
+      }
+    });
+  }
+
+  Future<void> _setEnabled(bool value) async {
+    setState(() => _enabled = value);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('${_prefix}enabled', value);
+  }
+
+  Future<void> _setPreference(String key, bool value) async {
+    setState(() => _preferences[key] = value);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('$_prefix$key', value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Notification Preferences')),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
+        children: [
+          Container(
+            decoration: BoxDecoration(color: colors.surface, borderRadius: BorderRadius.circular(16), border: Border.all(color: colors.border)),
+            child: SwitchListTile(title: const Text('Enable Notifications', style: TextStyle(fontWeight: FontWeight.w800)), value: _enabled, activeThumbColor: const Color(0xFF26C281), onChanged: _setEnabled),
+          ),
+          const SizedBox(height: 26),
+          const Text('Notify me about', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900)),
+          const SizedBox(height: 10),
+          Container(
+            decoration: BoxDecoration(color: colors.surface, borderRadius: BorderRadius.circular(16), border: Border.all(color: colors.border)),
+            child: Column(children: [for (final item in _notificationOptions) _NotificationOptionRow(option: item, value: _preferences[item.key]!, enabled: _enabled, onChanged: (value) => _setPreference(item.key, value))]),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NotificationOption {
+  const _NotificationOption(this.key, this.label, this.icon, this.color);
+  final String key;
+  final String label;
+  final IconData icon;
+  final Color color;
+}
+
+const _notificationOptions = [
+  _NotificationOption('high_temperature', 'High Temperature', Icons.thermostat_outlined, Color(0xFFFF6B55)),
+  _NotificationOption('high_humidity', 'High Humidity', Icons.water_drop_outlined, Color(0xFF3BB7E8)),
+  _NotificationOption('air_pollution', 'Air Pollution Warning', Icons.air_outlined, Color(0xFFE5A52C)),
+  _NotificationOption('abnormal_behavior', 'Abnormal Behavior', Icons.close_rounded, Color(0xFFFF6B72)),
+  _NotificationOption('camera_offline', 'Camera Offline', Icons.videocam_off_outlined, Color(0xFFFF6B72)),
+  _NotificationOption('chick_alerts', 'Chick Alerts', Icons.egg_alt_outlined, Color(0xFFE79B47)),
+  _NotificationOption('system_updates', 'System Updates', Icons.settings_suggest_outlined, Color(0xFF7B8799)),
+];
+
+class _NotificationOptionRow extends StatelessWidget {
+  const _NotificationOptionRow({required this.option, required this.value, required this.enabled, required this.onChanged});
+  final _NotificationOption option;
+  final bool value;
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Container(
+      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: colors.border.withValues(alpha: .7)))),
+      child: SwitchListTile(
+        secondary: Container(width: 34, height: 34, decoration: BoxDecoration(color: option.color.withValues(alpha: .12), borderRadius: BorderRadius.circular(10)), child: Icon(option.icon, color: option.color, size: 19)),
+        title: Text(option.label, style: const TextStyle(fontWeight: FontWeight.w700)),
+        value: value,
+        activeThumbColor: const Color(0xFF26C281),
+        onChanged: enabled ? onChanged : null,
+      ),
+    );
+  }
+}
+
+class _ProfileSummaryCard extends StatelessWidget {
+  const _ProfileSummaryCard({required this.user, required this.session});
+
+  final AppUser user;
+  final Session session;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(3),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: _appAccent.withValues(alpha: .35), width: 2),
+                ),
+                child: CircleAvatar(
+                  radius: 34,
+                  backgroundColor: colors.accentSurface,
+                  backgroundImage: session.photoUrl == null ? null : NetworkImage(session.photoUrl!),
+                  child: session.photoUrl == null ? Icon(user.isAdmin ? Icons.admin_panel_settings_outlined : Icons.person_outline, color: _appAccent, size: 32) : null,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(user.displayName, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+                    const SizedBox(height: 3),
+                    Text(session.email ?? '@${user.username}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: colors.mutedText, fontSize: 12)),
+                    const SizedBox(height: 3),
+                    Text(user.isAdmin ? 'Admin supervisor account' : 'Backyard rooster farm user', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: colors.subtleText, fontSize: 12)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          IntrinsicHeight(
+            child: Row(
+              children: [
+                Expanded(child: _ProfileStat(value: user.isAdmin ? 'Admin' : 'User', label: 'Role')),
+                VerticalDivider(color: colors.border, width: 1),
+                Expanded(child: _ProfileStat(value: '${user.cctvs.length}', label: 'CCTVs')),
+                VerticalDivider(color: colors.border, width: 1),
+                Expanded(child: _ProfileStat(value: '${user.monitor.alerts.length}', label: 'Alerts')),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProfileMenuGroup extends StatelessWidget {
+  const _ProfileMenuGroup({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Container(
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(children: children),
+    );
+  }
+}
+
+class _ProfileMenuRow extends StatelessWidget {
+  const _ProfileMenuRow({required this.icon, required this.label, this.onTap, this.trailing});
+
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 55),
+          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: colors.border.withValues(alpha: .75)))),
+          child: Row(
+            children: [
+              Icon(icon, color: colors.mutedText, size: 22),
+              const SizedBox(width: 18),
+              Expanded(child: Text(label, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
+              if (trailing != null) trailing! else Icon(Icons.chevron_right_rounded, color: colors.mutedText),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -5,13 +5,28 @@ class _LandingBrand extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Text(
-      'Roostify',
-      style: TextStyle(
-        color: Color(0xFF17191E),
-        fontWeight: FontWeight.w900,
-        fontSize: 28,
-      ),
+    return const Column(
+      children: [
+        Text(
+          'Roostify',
+          style: TextStyle(
+            color: Color(0xFF17191E),
+            fontWeight: FontWeight.w900,
+            fontSize: 30,
+            letterSpacing: -1,
+          ),
+        ),
+        SizedBox(height: 4),
+        Text(
+          'SMART ROOSTER MONITORING',
+          style: TextStyle(
+            color: Color(0xFFFF6A32),
+            fontWeight: FontWeight.w800,
+            fontSize: 10,
+            letterSpacing: .45,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -45,11 +60,11 @@ class _LandingLoginPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.fromLTRB(20, 22, 20, 20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFE8E5E0)),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFF0EDEA)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.12),
@@ -61,6 +76,17 @@ class _LandingLoginPanel extends StatelessWidget {
       child: Column(
         children: [
           const _LandingBrand(),
+          const SizedBox(height: 14),
+          const Text(
+            'Welcome back!',
+            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Monitor your flock, anytime, anywhere.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Color(0xFF72757C), fontSize: 12),
+          ),
           const SizedBox(height: 18),
           LayoutBuilder(
             builder: (context, constraints) {
@@ -78,14 +104,14 @@ class _LandingLoginPanel extends StatelessWidget {
               final userButton = FilledButton.icon(
                 style: orangeButtonStyle,
                 onPressed: onUserTap,
-                icon: const Icon(Icons.person_outline_rounded),
-                label: const Text('User Login'),
+                icon: const Icon(Icons.login_rounded, size: 18),
+                label: const Text('Log in'),
               );
               final adminButton = OutlinedButton.icon(
                 style: orangeButtonStyle,
                 onPressed: onAdminTap,
-                icon: const Icon(Icons.admin_panel_settings_outlined),
-                label: const Text('Admin'),
+                icon: const Icon(Icons.admin_panel_settings_outlined, size: 18),
+                label: const Text('Admin access'),
               );
 
               if (compact) {
@@ -382,7 +408,7 @@ class CircularSensorGauge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.appColors;
-    final ringColor = level.color;
+    final statusColor = level.color;
 
     return Tooltip(
       message: '$title: $value $unit - $status',
@@ -390,101 +416,55 @@ class CircularSensorGauge extends StatelessWidget {
         label: '$title sensor, $value $unit, $status',
         child: Material(
           color: colors.surface,
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(16),
           child: InkWell(
-            borderRadius: BorderRadius.circular(24),
+            borderRadius: BorderRadius.circular(16),
             onTap: () => _showWarnings(context),
             child: Container(
-              padding: const EdgeInsets.all(14),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(24),
+                borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: colors.border),
               ),
               child: Row(
                 children: [
-                  SizedBox(
-                    width: 88,
-                    height: 88,
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: statusColor.withValues(alpha: 0.13),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                     child: Stack(
-                      clipBehavior: Clip.none,
+                      alignment: Alignment.center,
                       children: [
-                        Positioned.fill(
-                          child: CustomPaint(
-                            painter: _SensorRingPainter(
-                              progress: progress.clamp(0.0, 1.0),
-                              color: ringColor,
-                              track: ringColor.withValues(alpha: 0.14),
-                            ),
-                            child: Center(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    value,
-                                    maxLines: 1,
-                                    style: TextStyle(
-                                      color: colors.text,
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w900,
-                                      letterSpacing: -0.4,
-                                    ),
-                                  ),
-                                  Text(
-                                    unit,
-                                    style: TextStyle(
-                                      color: colors.mutedText,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
+                        Icon(icon, color: statusColor, size: 21),
                         if (alerts.isNotEmpty)
                           Positioned(
-                            top: -4,
-                            right: -4,
+                            top: 0,
+                            right: 0,
                             child: Container(
-                              constraints: const BoxConstraints(
-                                minWidth: 24,
-                                minHeight: 24,
-                              ),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 7,
-                              ),
+                              width: 15,
+                              height: 15,
                               alignment: Alignment.center,
                               decoration: BoxDecoration(
-                                color: level.color,
+                                color: statusColor,
                                 shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: colors.surface,
-                                  width: 2,
-                                ),
+                                border: Border.all(color: colors.surface, width: 1.5),
                               ),
-                              child: Text(
-                                '${alerts.length}',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
+                              child: Text('${alerts.length}', style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.w900)),
                             ),
                           ),
                       ],
                     ),
                   ),
-                  const SizedBox(width: 14),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
                           children: [
-                            Icon(icon, size: 15, color: colors.mutedText),
-                            const SizedBox(width: 5),
                             Expanded(
                               child: Text(
                                 title,
@@ -500,15 +480,29 @@ class CircularSensorGauge extends StatelessWidget {
                             SensorLevelTag(level: level, compact: true),
                           ],
                         ),
-                        const SizedBox(height: 6),
-                        Text(
-                          status,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: colors.mutedText,
-                            fontSize: 12,
-                            height: 1.35,
+                        const SizedBox(height: 3),
+                        Row(
+                          children: [
+                            Text('$value $unit', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w900)),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                status,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(color: colors.mutedText, fontSize: 11),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 7),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(99),
+                          child: LinearProgressIndicator(
+                            value: progress.clamp(0.0, 1.0),
+                            minHeight: 3,
+                            color: statusColor,
+                            backgroundColor: statusColor.withValues(alpha: 0.12),
                           ),
                         ),
                       ],
@@ -521,54 +515,6 @@ class CircularSensorGauge extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-class _SensorRingPainter extends CustomPainter {
-  const _SensorRingPainter({
-    required this.progress,
-    required this.color,
-    required this.track,
-  });
-
-  final double progress;
-  final Color color;
-  final Color track;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final strokeWidth = size.shortestSide * 0.105;
-    final rect = Offset.zero & size;
-    final arcRect = rect.deflate(strokeWidth / 2 + 1);
-
-    final trackPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth
-      ..color = track;
-    canvas.drawArc(arcRect, 0, math.pi * 2, false, trackPaint);
-
-    if (progress <= 0) {
-      return;
-    }
-    final progressPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth
-      ..strokeCap = StrokeCap.round
-      ..color = color;
-    canvas.drawArc(
-      arcRect,
-      -math.pi / 2,
-      math.pi * 2 * progress,
-      false,
-      progressPaint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _SensorRingPainter oldDelegate) {
-    return oldDelegate.progress != progress ||
-        oldDelegate.color != color ||
-        oldDelegate.track != track;
   }
 }
 

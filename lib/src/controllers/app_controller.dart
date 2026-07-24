@@ -288,6 +288,18 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  /// Removes the Google identity from the active local account without
+  /// ending the app session.
+  Future<void> unlinkGoogleAccount() async {
+    final session = _session;
+    if (session == null) return;
+    await _googleSignIn.signOut();
+    session.email = null;
+    session.photoUrl = null;
+    lastError = null;
+    notifyListeners();
+  }
+
   /// Updates [username]'s profile fields in one pass. Batching every field
   /// into a single notifyListeners() call (instead of one call per field)
   /// keeps the Profiles page's save action to one rebuild of the app shell

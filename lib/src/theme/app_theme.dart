@@ -26,17 +26,15 @@ ThemeData buildAppTheme(Brightness brightness) {
     extensions: <ThemeExtension<dynamic>>[colors],
     textTheme: textTheme.copyWith(
       headlineSmall: textTheme.headlineSmall?.copyWith(
-        fontWeight: FontWeight.w900,
-        letterSpacing: -0.4,
+        fontWeight: FontWeight.w800,
+        letterSpacing: -0.7,
       ),
       titleLarge: textTheme.titleLarge?.copyWith(
         fontWeight: FontWeight.w900,
         letterSpacing: -0.3,
       ),
-      titleMedium: textTheme.titleMedium?.copyWith(
-        fontWeight: FontWeight.w800,
-      ),
-      labelLarge: textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
+      titleMedium: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+      labelLarge: textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
     ),
     appBarTheme: AppBarTheme(
       backgroundColor: Colors.transparent,
@@ -46,9 +44,9 @@ ThemeData buildAppTheme(Brightness brightness) {
       foregroundColor: colors.text,
       titleTextStyle: TextStyle(
         color: colors.text,
-        fontSize: 20,
-        fontWeight: FontWeight.w900,
-        letterSpacing: -0.3,
+        fontSize: 18,
+        fontWeight: FontWeight.w800,
+        letterSpacing: -0.45,
       ),
     ),
     inputDecorationTheme: InputDecorationTheme(
@@ -57,15 +55,15 @@ ThemeData buildAppTheme(Brightness brightness) {
       hintStyle: TextStyle(color: colors.subtleText),
       labelStyle: TextStyle(color: colors.mutedText),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         borderSide: BorderSide.none,
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         borderSide: BorderSide.none,
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         borderSide: const BorderSide(color: seed, width: 1.6),
       ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
@@ -76,9 +74,10 @@ ThemeData buildAppTheme(Brightness brightness) {
       labelTextStyle: WidgetStateProperty.resolveWith((states) {
         return TextStyle(
           color: states.contains(WidgetState.selected)
-              ? colors.text
+              ? seed
               : colors.mutedText,
           fontWeight: FontWeight.w800,
+          fontSize: 10,
         );
       }),
       iconTheme: WidgetStateProperty.resolveWith((states) {
@@ -88,7 +87,9 @@ ThemeData buildAppTheme(Brightness brightness) {
               : colors.mutedText,
         );
       }),
-      elevation: isDark ? 0 : 1,
+      height: 72,
+      labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+      elevation: isDark ? 0 : 2,
       shadowColor: colors.border.withValues(alpha: 0.4),
       surfaceTintColor: Colors.transparent,
     ),
@@ -105,9 +106,7 @@ ThemeData buildAppTheme(Brightness brightness) {
               : BorderSide(color: colors.border);
         }),
         backgroundColor: WidgetStateProperty.resolveWith((states) {
-          return states.contains(WidgetState.selected)
-              ? seed
-              : colors.surface;
+          return states.contains(WidgetState.selected) ? seed : colors.surface;
         }),
         textStyle: WidgetStateProperty.all(
           const TextStyle(fontWeight: FontWeight.w800),
@@ -142,7 +141,7 @@ ThemeData buildAppTheme(Brightness brightness) {
     cardTheme: CardThemeData(
       color: colors.surface,
       elevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       margin: EdgeInsets.zero,
     ),
   );
@@ -208,20 +207,20 @@ class AppThemeColors extends ThemeExtension<AppThemeColors> {
 
   const AppThemeColors.light()
     : this(
-        background: const Color(0xFFF6F5F2),
+        background: const Color(0xFFFFFDFC),
         surface: const Color(0xFFFFFFFF),
-        surfaceRaised: const Color(0xFFF3F1ED),
-        inputFill: const Color(0xFFF3F1ED),
-        text: const Color(0xFF17191E),
-        mutedText: const Color(0xFF6B7076),
-        subtleText: const Color(0xFF9AA0A6),
-        border: const Color(0xFFE8E5E0),
+        surfaceRaised: const Color(0xFFFFF8F5),
+        inputFill: const Color(0xFFFFF9F6),
+        text: const Color(0xFF1D2025),
+        mutedText: const Color(0xFF72757C),
+        subtleText: const Color(0xFFA4A6AB),
+        border: const Color(0xFFF0EDEA),
         navigationBackground: const Color(0xFFFFFFFF),
-        navigationIndicator: const Color(0xFFFFE3DB),
-        accentSurface: const Color(0xFFFFE3DB),
-        backgroundGradientStart: const Color(0xFFF9F8F5),
-        backgroundGradientMiddle: const Color(0xFFF6F5F2),
-        backgroundGradientEnd: const Color(0xFFF2F0EC),
+        navigationIndicator: const Color(0xFFFFE8E1),
+        accentSurface: const Color(0xFFFFEEE9),
+        backgroundGradientStart: const Color(0xFFFFFFFF),
+        backgroundGradientMiddle: const Color(0xFFFFFEFD),
+        backgroundGradientEnd: const Color(0xFFFFF8F5),
         heroGradientStart: const Color(0xFFFFFFFF),
         heroGradientEnd: const Color(0xFFFFF0EB),
         mediaGradientStart: const Color(0xFFECE9E4),
