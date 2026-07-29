@@ -1,0 +1,45 @@
+{
+  "@@locale": "en",
+
+  "navDashboard": "Dashboard",
+  "navOverview": "Overview",
+  "navUsers": "Users",
+  "navCctv": "CCTV",
+  "navInbox": "Inbox",
+  "navScan": "Scan",
+  "navGuides": "Guides",
+  "navProfile": "Profile",
+
+  "loginAdminAccess": "Admin access",
+  "loginTitle": "Log in",
+  "loginSubtitle": "Monitor your rooster, anytime, anywhere.",
+  "loginUserSegment": "User",
+  "loginAdminSegment": "Admin",
+  "loginUsernameLabel": "Username or email",
+  "loginPasswordLabel": "Password",
+  "loginSigningIn": "Signing in...",
+  "loginButtonUser": "Log in",
+  "loginButtonAdmin": "Log in as Admin",
+  "loginGoogleOpening": "Opening Google...",
+  "loginGoogleUser": "Continue with Google",
+  "loginGoogleAdmin": "Continue as Admin with Google",
+
+  "settingsTitle": "App Settings",
+  "settingsSubtitle": "Adjust how the app looks and behaves.",
+  "settingsLanguage": "Language",
+  "settingsAutoPlayTitle": "Auto-play CCTV Preview",
+  "settingsAutoPlaySubtitle": "Start camera previews automatically",
+  "settingsDataSaverTitle": "Data Saver",
+  "settingsDataSaverSubtitle": "Reduce data usage on mobile networks",
+  "settingsCameraPermTitle": "Camera Permissions",
+  "settingsClearCacheTitle": "Clear Cache",
+  "settingsCacheEmpty": "Cache is empty",
+  "settingsCacheSize": "{megabytes} MB",
+  "@settingsCacheSize": {
+    "placeholders": {
+      "megabytes": {"type": "String"}
+    }
+  },
+  "settingsSaveButton": "Save Settings",
+  "settingsCancelButton": "Cancel"
+}

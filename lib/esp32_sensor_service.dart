@@ -62,10 +62,25 @@ class Esp32SensorClient extends ChangeNotifier {
     Esp32SensorConnectionStatus.scanning =>
       'Scanning for $esp32SensorDeviceName',
     Esp32SensorConnectionStatus.connecting => 'Connecting to ESP32 sensor',
-    Esp32SensorConnectionStatus.connected => 'Receiving live ESP32 readings',
+    Esp32SensorConnectionStatus.connected => _connectedLabel(),
     Esp32SensorConnectionStatus.error =>
       _lastError ?? 'ESP32 sensor connection failed',
   };
+
+  /// The BLE link can be "connected" while never actually having produced a
+  /// usable reading (no notification has arrived yet, or every payload so
+  /// far failed to parse) — those are silent no-ops for the caller
+  /// otherwise, so distinguish them instead of always claiming success.
+  String _connectedLabel() {
+    if (_lastError != null) return _lastError!;
+    if (_latestReading == null) return 'Connected — waiting for first reading...';
+    return 'Receiving live ESP32 readings';
+  }
+
+  /// True once connected if the most recent payload failed to parse, so the
+  /// UI can flag it instead of showing a plain "connected" state.
+  bool get hasReadIssue =>
+      _status == Esp32SensorConnectionStatus.connected && _lastError != null;
 
   Future<void> connect({
     required ValueChanged<Esp32SensorReading> onReading,
@@ -228,10 +243,26 @@ class Esp32SensorClient extends ChangeNotifier {
     return null;
   }
 
+  // The firmware sends a fresh, self-contained "{...}\n" reading on every
+  // notification — never a continuation of a previous one. If a single BLE
+  // packet ever arrives short (e.g. the negotiated ATT MTU is smaller than
+  // the ~50-byte payload, which the ESP32 BLE stack silently truncates to
+  // rather than fragmenting across packets), that fragment would otherwise
+  // sit in the buffer forever, get concatenated with the *next* unrelated
+  // notification, and never again match a complete "\n"-terminated or
+  // balanced-brace payload — i.e. readings would stop updating permanently
+  // after a single bad packet. Capping the buffer and recovering from the
+  // most recent "{" keeps this self-healing instead.
+  static const int _maxBufferLength = 512;
+
   void _handleSensorBytes(List<int> bytes) {
     if (bytes.isEmpty) return;
 
     _rxBuffer += utf8.decode(bytes, allowMalformed: true);
+    if (_rxBuffer.length > _maxBufferLength) {
+      final lastBrace = _rxBuffer.lastIndexOf('{');
+      _rxBuffer = lastBrace == -1 ? '' : _rxBuffer.substring(lastBrace);
+    }
 
     while (_rxBuffer.contains('\n')) {
       final newline = _rxBuffer.indexOf('\n');
@@ -240,11 +271,30 @@ class Esp32SensorClient extends ChangeNotifier {
       _parseAndEmit(payload);
     }
 
-    final possibleJson = _rxBuffer.trim();
-    if (possibleJson.startsWith('{') && possibleJson.endsWith('}')) {
+    final candidate = _extractBalancedJsonObject(_rxBuffer);
+    if (candidate != null) {
       _rxBuffer = '';
-      _parseAndEmit(possibleJson);
+      _parseAndEmit(candidate);
     }
+  }
+
+  /// Finds the first complete `{...}` object in [buffer] by brace counting,
+  /// instead of requiring the *entire* trimmed buffer to start and end with
+  /// braces — a stray leading/trailing byte shouldn't block an otherwise
+  /// complete payload from parsing.
+  String? _extractBalancedJsonObject(String buffer) {
+    final start = buffer.indexOf('{');
+    if (start == -1) return null;
+
+    var depth = 0;
+    for (var i = start; i < buffer.length; i++) {
+      if (buffer[i] == '{') depth++;
+      if (buffer[i] == '}') {
+        depth--;
+        if (depth == 0) return buffer.substring(start, i + 1);
+      }
+    }
+    return null;
   }
 
   void _parseAndEmit(String payload) {

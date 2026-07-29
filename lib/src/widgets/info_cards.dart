@@ -355,79 +355,386 @@ class ProfileInfoCard extends StatelessWidget {
   }
 }
 
-class ThemePreferenceCard extends StatelessWidget {
-  const ThemePreferenceCard({super.key, required this.controller});
+class ThemePreferenceCard extends StatefulWidget {
+  const ThemePreferenceCard({
+    super.key,
+    required this.controller,
+    required this.username,
+  });
 
   final AppController controller;
 
+  /// Whose Recordings folder to measure/clear for the Clear Cache row.
+  final String username;
+
+  @override
+  State<ThemePreferenceCard> createState() => _ThemePreferenceCardState();
+}
+
+class _ThemePreferenceCardState extends State<ThemePreferenceCard> {
+  static final _languageNames = {
+    const Locale('en'): 'English',
+    const Locale('fil'): 'Filipino',
+  };
+
+  bool _autoPlayPreview = true;
+  bool _dataSaver = false;
+  int? _cacheBytes;
+  bool _clearingCache = false;
+  PermissionStatus? _cameraPermissionStatus;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadSettings());
+    unawaited(_refreshCacheSize());
+    unawaited(_refreshCameraPermissionStatus());
+  }
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _autoPlayPreview = prefs.getBool('roostify.app.autoplay') ?? true;
+      _dataSaver = prefs.getBool('roostify.app.data_saver') ?? false;
+    });
+  }
+
+  Future<void> _saveSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('roostify.app.autoplay', _autoPlayPreview);
+    await prefs.setBool('roostify.app.data_saver', _dataSaver);
+    if (mounted) Navigator.of(context).maybePop();
+  }
+
+  Future<void> _refreshCacheSize() async {
+    try {
+      final recordings = await RtspRecorderService.listRecordings(
+        username: widget.username,
+      );
+      final totalBytes = recordings.fold<int>(
+        0,
+        (sum, recording) => sum + recording.sizeBytes,
+      );
+      if (!mounted) return;
+      setState(() => _cacheBytes = totalBytes);
+    } catch (_) {
+      // Recording storage isn't available on this platform (e.g. desktop/
+      // web builds); treat the cache as empty rather than crashing.
+      if (mounted) setState(() => _cacheBytes = 0);
+    }
+  }
+
+  Future<void> _clearCache() async {
+    setState(() => _clearingCache = true);
+    try {
+      final recordings = await RtspRecorderService.listRecordings(
+        username: widget.username,
+      );
+      for (final recording in recordings) {
+        final file = File(recording.path);
+        if (await file.exists()) {
+          await file.delete();
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _cacheBytes = 0;
+        _clearingCache = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            recordings.isEmpty
+                ? 'Cache was already empty.'
+                : 'Deleted ${recordings.length} saved recording${recordings.length == 1 ? '' : 's'} and freed up space.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _clearingCache = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not clear cache: $error')),
+      );
+    }
+  }
+
+  Future<void> _refreshCameraPermissionStatus() async {
+    final status = await Permission.camera.status;
+    if (!mounted) return;
+    setState(() => _cameraPermissionStatus = status);
+  }
+
+  Future<void> _manageCameraPermission() async {
+    final current = await Permission.camera.status;
+    if (current.isGranted) {
+      final opened = await openAppSettings();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            opened
+                ? 'Camera access is already granted. Opened device settings to manage it.'
+                : 'Camera access is already granted.',
+          ),
+        ),
+      );
+      await _refreshCameraPermissionStatus();
+      return;
+    }
+
+    final result = await Permission.camera.request();
+    if (!mounted) return;
+    setState(() => _cameraPermissionStatus = result);
+
+    if (result.isGranted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Camera access granted.')),
+      );
+    } else if (result.isPermanentlyDenied) {
+      final opened = await openAppSettings();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            opened
+                ? 'Camera access is blocked. Enable it in device settings.'
+                : 'Camera access is blocked. Enable it in your device settings.',
+          ),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Camera access denied.')),
+      );
+    }
+  }
+
+  String _cameraPermissionLabel() {
+    switch (_cameraPermissionStatus) {
+      case PermissionStatus.granted:
+      case PermissionStatus.limited:
+        return 'Granted — tap to open device settings';
+      case PermissionStatus.permanentlyDenied:
+        return 'Blocked — tap to open device settings';
+      case PermissionStatus.denied:
+        return 'Not granted — tap to allow';
+      case PermissionStatus.restricted:
+        return 'Restricted by the device';
+      case PermissionStatus.provisional:
+        return 'Granted — tap to open device settings';
+      case null:
+        return 'Checking permission...';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     return AnimatedBuilder(
-      animation: controller,
+      animation: widget.controller,
       builder: (context, _) {
         final colors = context.appColors;
-        return Container(
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            color: colors.surface,
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: colors.border),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  CircleAvatar(
-                    backgroundColor: colors.accentSurface,
-                    foregroundColor: _appAccent,
-                    child: const Icon(Icons.palette_outlined),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Appearance',
-                          style: TextStyle(fontWeight: FontWeight.w800),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Choose how Roostify looks.',
-                          style: TextStyle(color: colors.mutedText),
-                        ),
-                      ],
+        final currentLanguage =
+            _languageNames[widget.controller.languageLocale] ?? 'English';
+        return SingleChildScrollView(
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: colors.surface,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: colors.border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    CircleAvatar(
+                      backgroundColor: colors.accentSurface,
+                      foregroundColor: _appAccent,
+                      child: const Icon(Icons.palette_outlined),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: SegmentedButton<AppThemePreference>(
-                  segments: [
-                    for (final preference in AppThemePreference.values)
-                      ButtonSegment<AppThemePreference>(
-                        value: preference,
-                        icon: Icon(preference.icon),
-                        label: Text(preference.label),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            l10n.settingsTitle,
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            l10n.settingsSubtitle,
+                            style: TextStyle(color: colors.mutedText),
+                          ),
+                        ],
                       ),
+                    ),
                   ],
-                  selected: {controller.themePreference},
-                  showSelectedIcon: false,
-                  onSelectionChanged: (selection) {
-                    controller.setThemePreference(selection.first);
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<AppThemePreference>(
+                    segments: [
+                      for (final preference in AppThemePreference.values)
+                        ButtonSegment<AppThemePreference>(
+                          value: preference,
+                          icon: Icon(preference.icon),
+                          label: Text(preference.label),
+                        ),
+                    ],
+                    selected: {widget.controller.themePreference},
+                    showSelectedIcon: false,
+                    onSelectionChanged: (selection) {
+                      widget.controller.setThemePreference(selection.first);
+                    },
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _SettingsActionRow(
+                  icon: Icons.language_rounded,
+                  title: l10n.settingsLanguage,
+                  subtitle: currentLanguage,
+                  onTap: () async {
+                    final value = await showDialog<String>(
+                      context: context,
+                      builder: (context) => SimpleDialog(
+                        title: Text(l10n.settingsLanguage),
+                        children: [
+                          for (final language in _languageNames.values)
+                            SimpleDialogOption(
+                              onPressed: () =>
+                                  Navigator.of(context).pop(language),
+                              child: Text(language),
+                            ),
+                        ],
+                      ),
+                    );
+                    if (value != null) widget.controller.setLanguage(value);
                   },
                 ),
-              ),
-            ],
+                _SettingsActionRow(
+                  icon: Icons.play_circle_outline_rounded,
+                  title: l10n.settingsAutoPlayTitle,
+                  subtitle: l10n.settingsAutoPlaySubtitle,
+                  trailing: Switch(
+                    value: _autoPlayPreview,
+                    onChanged: (value) =>
+                        setState(() => _autoPlayPreview = value),
+                  ),
+                ),
+                _SettingsActionRow(
+                  icon: Icons.energy_savings_leaf_outlined,
+                  title: l10n.settingsDataSaverTitle,
+                  subtitle: l10n.settingsDataSaverSubtitle,
+                  trailing: Switch(
+                    value: _dataSaver,
+                    onChanged: (value) => setState(() => _dataSaver = value),
+                  ),
+                ),
+                _SettingsActionRow(
+                  icon: Icons.shield_outlined,
+                  title: l10n.settingsCameraPermTitle,
+                  subtitle: _cameraPermissionLabel(),
+                  onTap: _manageCameraPermission,
+                ),
+                _SettingsActionRow(
+                  icon: Icons.delete_outline_rounded,
+                  title: l10n.settingsClearCacheTitle,
+                  subtitle: _clearingCache
+                      ? 'Clearing...'
+                      : _cacheBytes == null
+                      ? 'Calculating...'
+                      : _cacheBytes == 0
+                      ? l10n.settingsCacheEmpty
+                      : l10n.settingsCacheSize(
+                          (_cacheBytes! / (1024 * 1024)).round().toString(),
+                        ),
+                  onTap: _clearingCache ? null : _clearCache,
+                ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: _saveSettings,
+                    child: Text(l10n.settingsSaveButton),
+                  ),
+                ),
+                Center(
+                  child: TextButton(
+                    onPressed: () => Navigator.of(context).maybePop(),
+                    child: Text(l10n.settingsCancelButton),
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },
     );
   }
+}
+
+class _SettingsActionRow extends StatelessWidget {
+  const _SettingsActionRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    this.trailing,
+    this.onTap,
+  });
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Widget? trailing;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+    onTap: onTap,
+    child: Container(
+      padding: const EdgeInsets.symmetric(vertical: 11),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: context.appColors.border)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: _appAccent, size: 20),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    color: context.appColors.mutedText,
+                    fontSize: 10,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          ?trailing,
+          if (trailing == null)
+            const Icon(Icons.chevron_right_rounded, size: 19),
+        ],
+      ),
+    ),
+  );
 }
 
 class SummaryPanel extends StatelessWidget {

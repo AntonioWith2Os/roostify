@@ -1,10 +1,12 @@
 import 'package:coolapp/main.dart';
+import 'package:coolapp/l10n/app_localizations.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('app opens landing and shows Google sign-in', (tester) async {
+  testWidgets('app opens login and shows Google sign-in', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.linux;
     try {
       await tester.pumpWidget(const RoosterWatchApp(cameras: []));
@@ -14,13 +16,11 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Roostify'), findsOneWidget);
-      expect(find.text('User Login'), findsOneWidget);
-
-      await tester.tap(find.text('User Login'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('User access'), findsOneWidget);
-      expect(find.text('Google sign-in'), findsOneWidget);
+      expect(find.text('Log in'), findsNWidgets(2));
+      expect(
+        find.text('Monitor your rooster, anytime, anywhere.'),
+        findsOneWidget,
+      );
       expect(find.text('Continue with Google'), findsOneWidget);
     } finally {
       debugDefaultTargetPlatformOverride = null;
@@ -34,7 +34,19 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: buildAppTheme(Brightness.light),
-        home: Scaffold(body: ThemePreferenceCard(controller: controller)),
+        localizationsDelegates: const [
+          AppLocalizations.delegate,
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: ThemePreferenceCard(
+            controller: controller,
+            username: 'farmer1',
+          ),
+        ),
       ),
     );
 

@@ -5,6 +5,7 @@ class LiveFeedCard extends StatefulWidget {
     super.key,
     required this.streamUrl,
     required this.recordingOwnerUsername,
+    required this.controller,
     this.detections = const [],
     this.inspectionInterval,
     this.onFrameCaptureStarted,
@@ -19,6 +20,10 @@ class LiveFeedCard extends StatefulWidget {
   /// Username that any recording started from this card is saved under, so
   /// only that user (and the admin) can see it in the Recordings list.
   final String recordingOwnerUsername;
+
+  /// Used to read the Auto-play/Data Saver preferences and to emit a gated
+  /// "Recording Updates" alert when a clip finishes saving.
+  final AppController controller;
   final List<ChickenDetection> detections;
 
   /// Minimum time between frame captures; defaults to a device-scaled cadence.
@@ -155,6 +160,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   int? _pendingFullScreenRestoreGeneration;
 
   bool _showPtzControls = true;
+  bool _dataSaverEnabled = false;
 
   void _togglePtzControls() {
     setState(() {
@@ -179,15 +185,35 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   @override
   void initState() {
     super.initState();
-    if (_supportsFijkPlayer) {
+    unawaited(_loadPreviewPreferences());
+  }
+
+  /// Honors the "Auto-play CCTV Preview" and "Data Saver" app settings: when
+  /// Data Saver is on, or Auto-play is off, the stream isn't opened until
+  /// the viewer explicitly taps play (see [_startManually]), instead of
+  /// pulling live video automatically.
+  Future<void> _loadPreviewPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final autoPlay = prefs.getBool('roostify.app.autoplay') ?? true;
+    final dataSaver = prefs.getBool('roostify.app.data_saver') ?? false;
+    setState(() => _dataSaverEnabled = dataSaver);
+    if (autoPlay && !dataSaver && _supportsFijkPlayer) {
       _replaceController();
     }
+  }
+
+  void _startManually() {
+    if (_controller != null || !_supportsFijkPlayer) return;
+    setState(() => _replaceController());
   }
 
   @override
   void didUpdateWidget(covariant LiveFeedCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.streamUrl != widget.streamUrl && _supportsFijkPlayer) {
+    if (oldWidget.streamUrl != widget.streamUrl &&
+        _supportsFijkPlayer &&
+        _controller != null) {
       _playbackProfile = _LiveFeedPlaybackProfile.tcp;
       _replaceController(resetRecovery: true);
     }
@@ -294,7 +320,10 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
         'mediacodec-all-videos',
         _playbackProfile == _LiveFeedPlaybackProfile.software ? 0 : 1,
       )
-      ..setFormatOption('max_delay', _streamCachingMs * 1000)
+      ..setFormatOption(
+        'max_delay',
+        (_dataSaverEnabled ? _streamCachingMs ~/ 2 : _streamCachingMs) * 1000,
+      )
       ..setFormatOption('stimeout', 5000000)
       ..setFormatOption('reconnect', 1);
 
@@ -889,6 +918,12 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
         );
       } else {
         _showRecordingSnack('Recording saved to the Roostify gallery album.');
+        unawaited(
+          widget.controller.notifyRecordingSaved(
+            widget.recordingOwnerUsername,
+            outputPath,
+          ),
+        );
       }
     } catch (error) {
       if (mounted) {
@@ -1171,6 +1206,11 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                               ],
                             );
                           },
+                        )
+                      : _supportsFijkPlayer
+                      ? _LiveFeedManualStartState(
+                          dataSaver: _dataSaverEnabled,
+                          onTap: _startManually,
                         )
                       : const _LiveFeedUnsupportedState(),
                 ),
@@ -1626,6 +1666,57 @@ class _LiveFeedPlaceholder extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _LiveFeedManualStartState extends StatelessWidget {
+  const _LiveFeedManualStartState({
+    required this.dataSaver,
+    required this.onTap,
+  });
+
+  final bool dataSaver;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xFF11162A),
+      alignment: Alignment.center,
+      child: InkWell(
+        onTap: onTap,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.14),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.play_arrow_rounded,
+                color: Colors.white,
+                size: 30,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              dataSaver
+                  ? 'Data Saver is on — tap to load this preview'
+                  : 'Auto-play is off — tap to start this preview',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontWeight: FontWeight.w700,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

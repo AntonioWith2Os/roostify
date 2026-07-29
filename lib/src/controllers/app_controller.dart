@@ -105,6 +105,8 @@ class AppController extends ChangeNotifier {
         ),
       ] {
     _sensorClient.addListener(notifyListeners);
+    unawaited(_loadThemePreference());
+    unawaited(_loadLanguagePreference());
   }
 
   final List<CameraDescription> cameras;
@@ -120,10 +122,18 @@ class AppController extends ChangeNotifier {
   final Map<String, CctvInspectionResult> _cctvCandidates = {};
   final Map<String, int> _cctvCandidateHits = {};
   final Map<String, int> _cctvEmptyFrames = {};
+  final StreamController<AppAlertEvent> _alertController =
+      StreamController<AppAlertEvent>.broadcast();
   AppThemePreference _themePreference = AppThemePreference.light;
+  Locale _languageLocale = const Locale('en');
+  DateTime? _lastDailySummaryDate;
   String? lastError;
   Session? _session;
   int _streamIdCounter = 0;
+
+  static const _notificationPrefsPrefix = 'roostify.notification.';
+  static const _rememberUsernameKey = 'roostify.remember.username';
+  static const _rememberRoleKey = 'roostify.remember.role';
 
   List<AppUser> get farmUsers =>
       List.unmodifiable(_users.where((user) => !user.isAdmin));
@@ -138,12 +148,194 @@ class AppController extends ChangeNotifier {
       _sensorClient.status;
   Esp32SensorReading? get latestSensorReading => _sensorClient.latestReading;
   String get sensorStatusLabel => _sensorClient.statusLabel;
+  bool get sensorHasReadIssue => _sensorClient.hasReadIssue;
   AppThemePreference get themePreference => _themePreference;
+  Locale get languageLocale => _languageLocale;
+
+  /// Fires whenever an event matches an enabled Notification Preference
+  /// (and isn't muted by quiet hours), for the app shell to surface as an
+  /// in-app SnackBar/sound/vibration.
+  Stream<AppAlertEvent> get alertEvents => _alertController.stream;
 
   void setThemePreference(AppThemePreference preference) {
     if (_themePreference == preference) return;
     _themePreference = preference;
     notifyListeners();
+    unawaited(_persistThemePreference(preference));
+  }
+
+  Future<void> _loadThemePreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString('roostify.app.theme');
+    final preference = AppThemePreference.values
+        .where((item) => item.name == saved)
+        .firstOrNull;
+    if (preference == null || preference == _themePreference) return;
+    _themePreference = preference;
+    notifyListeners();
+  }
+
+  Future<void> _persistThemePreference(AppThemePreference preference) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('roostify.app.theme', preference.name);
+  }
+
+  static const Map<String, Locale> _supportedLanguageLocales = {
+    'English': Locale('en'),
+    'Filipino': Locale('fil'),
+  };
+
+  /// Switches the app's display language. [languageName] is one of the
+  /// entries offered by the Language settings picker ('English', 'Filipino').
+  void setLanguage(String languageName) {
+    final locale = _supportedLanguageLocales[languageName];
+    if (locale == null || locale == _languageLocale) return;
+    _languageLocale = locale;
+    notifyListeners();
+    unawaited(_persistLanguagePreference(languageName));
+  }
+
+  Future<void> _loadLanguagePreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString('roostify.app.language');
+    final locale = saved == null ? null : _supportedLanguageLocales[saved];
+    if (locale == null || locale == _languageLocale) return;
+    _languageLocale = locale;
+    notifyListeners();
+  }
+
+  Future<void> _persistLanguagePreference(String languageName) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('roostify.app.language', languageName);
+  }
+
+  /// Persists the currently signed-in [username]/[role] so the next app
+  /// launch can skip straight back in, per the "Remember this device"
+  /// checkbox shown when logging out. No password is stored.
+  Future<void> rememberThisDevice(String username, UserRole role) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_rememberUsernameKey, username);
+    await prefs.setString(_rememberRoleKey, role.name);
+  }
+
+  Future<void> forgetThisDevice() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_rememberUsernameKey);
+    await prefs.remove(_rememberRoleKey);
+  }
+
+  /// Restores a session remembered via [rememberThisDevice], if any. Called
+  /// once at app startup, before falling back to the login screen.
+  Future<Session?> restoreRememberedSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    final username = prefs.getString(_rememberUsernameKey);
+    final roleName = prefs.getString(_rememberRoleKey);
+    if (username == null || roleName == null) return null;
+
+    final role = UserRole.values.where((r) => r.name == roleName).firstOrNull;
+    final user = userByUsername(username);
+    if (role == null || user == null || user.role != role) return null;
+
+    lastError = null;
+    _session = Session(user: user);
+    notifyListeners();
+    return _session;
+  }
+
+  /// Emits an [AppAlertEvent] for [category] if that Notification Preference
+  /// toggle is enabled and the event isn't muted by quiet hours (danger-level
+  /// events always get through, matching the "critical alerts still deliver
+  /// during quiet hours" copy on the Notification Preferences page).
+  Future<void> _maybeEmitAlert({
+    required String category,
+    required String title,
+    required String message,
+    AlertSeverity severity = AlertSeverity.info,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final enabled = prefs.getBool('$_notificationPrefsPrefix$category') ?? true;
+    if (!enabled) return;
+    if (severity != AlertSeverity.danger && _isWithinQuietHours(prefs)) {
+      return;
+    }
+    if (_alertController.isClosed) return;
+
+    _alertController.add(
+      AppAlertEvent(
+        category: category,
+        title: title,
+        message: message,
+        severity: severity,
+        playSound:
+            prefs.getBool('${_notificationPrefsPrefix}sound_notifications') ??
+            true,
+        vibrate: prefs.getBool('${_notificationPrefsPrefix}vibration') ?? false,
+      ),
+    );
+  }
+
+  bool _isWithinQuietHours(SharedPreferences prefs) {
+    final startHour = prefs.getInt('${_notificationPrefsPrefix}quiet_start_hour');
+    final endHour = prefs.getInt('${_notificationPrefsPrefix}quiet_end_hour');
+    if (startHour == null || endHour == null) {
+      return false;
+    }
+    final startMinute =
+        prefs.getInt('${_notificationPrefsPrefix}quiet_start_minute') ?? 0;
+    final endMinute =
+        prefs.getInt('${_notificationPrefsPrefix}quiet_end_minute') ?? 0;
+    final startMinutes = startHour * 60 + startMinute;
+    final endMinutes = endHour * 60 + endMinute;
+    if (startMinutes == endMinutes) return false;
+
+    final now = TimeOfDay.now();
+    final nowMinutes = now.hour * 60 + now.minute;
+    return startMinutes < endMinutes
+        ? nowMinutes >= startMinutes && nowMinutes < endMinutes
+        : nowMinutes >= startMinutes || nowMinutes < endMinutes;
+  }
+
+  /// Shows a once-per-day farm summary alert, gated by the "Daily Summary"
+  /// Notification Preference. Safe to call from every Dashboard build; the
+  /// in-memory date guard makes repeat calls on the same day a no-op.
+  Future<void> maybeShowDailySummary(String username) async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    if (_lastDailySummaryDate == today) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    const dateKey = 'roostify.notification.daily_summary_date';
+    final todayLabel = today.toIso8601String();
+    if (prefs.getString(dateKey) == todayLabel) {
+      _lastDailySummaryDate = today;
+      return;
+    }
+
+    final user = userByUsername(username);
+    if (user == null) return;
+    _lastDailySummaryDate = today;
+    await prefs.setString(dateKey, todayLabel);
+
+    final monitor = user.monitor;
+    await _maybeEmitAlert(
+      category: 'daily_summary',
+      title: 'Daily farm summary',
+      message:
+          'Temp ${monitor.temperature.toStringAsFixed(1)}°C · Humidity '
+          '${monitor.humidity.toStringAsFixed(0)}% · Air ${monitor.airPpm} ppm. '
+          '${monitor.cctvSummary}',
+    );
+  }
+
+  /// Called after a live camera finishes saving a recorded clip, gated by
+  /// the "Recording Updates" Notification Preference.
+  Future<void> notifyRecordingSaved(String username, String path) async {
+    final fileName = path.split(Platform.pathSeparator).last;
+    await _maybeEmitAlert(
+      category: 'recording_updates',
+      title: 'Recording saved',
+      message: 'Saved $fileName to your Recordings library.',
+    );
   }
 
   Future<void> connectEsp32Sensor(String username) {
@@ -232,6 +424,7 @@ class AppController extends ChangeNotifier {
       // Google provides identity; the selected landing button still decides
       // which existing app workspace the user enters.
       final user = _userForGoogleAccount(googleAccount, expectedRole);
+      await _applyGoogleProfileIfSyncEnabled(user, googleAccount);
 
       lastError = null;
       _session = Session(
@@ -246,6 +439,23 @@ class AppController extends ChangeNotifier {
           'Unable to sign in with Google. Check the Google OAuth setup for this app.';
       notifyListeners();
       return null;
+    }
+  }
+
+  /// Overwrites [user]'s display name with the Google account's, but only
+  /// when the "Sync profile information" toggle on Connected Accounts is on
+  /// (defaults to on). When off, local profile edits are left alone.
+  Future<void> _applyGoogleProfileIfSyncEnabled(
+    AppUser user,
+    GoogleSignInAccount googleAccount,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final syncProfile = prefs.getBool('roostify.sync.profile') ?? true;
+    if (!syncProfile) return;
+
+    final displayName = googleAccount.displayName?.trim();
+    if (displayName != null && displayName.isNotEmpty) {
+      user.displayName = displayName;
     }
   }
 
@@ -275,6 +485,7 @@ class AppController extends ChangeNotifier {
         return false;
       }
 
+      await _applyGoogleProfileIfSyncEnabled(session.user, googleAccount);
       session.email = googleAccount.email;
       session.photoUrl = googleAccount.photoUrl;
       lastError = null;
@@ -310,6 +521,9 @@ class AppController extends ChangeNotifier {
     required String contactNumber,
     required String address,
     required String facebookContact,
+    required String email,
+    required String farmName,
+    required String shortBio,
   }) {
     final user = userByUsername(username);
     if (user == null) return;
@@ -321,8 +535,30 @@ class AppController extends ChangeNotifier {
     user.contactNumber = contactNumber.trim();
     user.address = address.trim();
     user.facebookContact = facebookContact.trim();
+    user.email = email.trim();
+    user.farmName = farmName.trim();
+    user.shortBio = shortBio.trim();
 
     notifyListeners();
+  }
+
+  /// Sets [username]'s local profile photo to the file already saved at
+  /// [avatarPath], deleting the previous photo file (if different) so picked
+  /// photos don't accumulate on disk.
+  Future<void> updateProfilePhoto(String username, String avatarPath) async {
+    final user = userByUsername(username);
+    if (user == null) return;
+
+    final previousPath = user.avatarPath;
+    user.avatarPath = avatarPath;
+    notifyListeners();
+
+    if (previousPath != null && previousPath != avatarPath) {
+      final previousFile = File(previousPath);
+      if (await previousFile.exists()) {
+        await previousFile.delete();
+      }
+    }
   }
 
   /// Changes [username]'s username and/or password after verifying
@@ -333,6 +569,7 @@ class AppController extends ChangeNotifier {
     String username, {
     String? newUsername,
     String? newPassword,
+    String? recoveryEmail,
     required String currentPassword,
   }) {
     final user = userByUsername(username);
@@ -376,6 +613,9 @@ class AppController extends ChangeNotifier {
 
     if (wantsPasswordChange) {
       user.password = cleanPassword;
+    }
+    if (recoveryEmail != null) {
+      user.email = recoveryEmail.trim();
     }
 
     notifyListeners();
@@ -663,8 +903,20 @@ class AppController extends ChangeNotifier {
       return;
     }
 
+    final wasAlreadyError = stream.inspection.state == CctvInspectionState.error;
     stream.inspection = CctvInspectionResult.error(message);
     notifyListeners();
+
+    if (!wasAlreadyError) {
+      unawaited(
+        _maybeEmitAlert(
+          category: 'cctv_offline',
+          title: 'CCTV camera disconnected',
+          message: message,
+          severity: AlertSeverity.warning,
+        ),
+      );
+    }
   }
 
   Future<void> inspectCctvFrame(
@@ -696,8 +948,29 @@ class AppController extends ChangeNotifier {
         return;
       }
 
+      final previousInspection = currentStream.inspection;
       currentStream.inspection = result;
       notifyListeners();
+
+      final isNewConfirmedDetection =
+          result.state == CctvInspectionState.completed &&
+          result.detected &&
+          (previousInspection.state != CctvInspectionState.completed ||
+              previousInspection.condition != result.condition);
+      if (isNewConfirmedDetection) {
+        unawaited(
+          _maybeEmitAlert(
+            category: 'rooster_detection',
+            title: result.condition == HealthState.abnormal
+                ? 'Abnormal rooster detected'
+                : 'Rooster detection updated',
+            message: result.message,
+            severity: result.condition == HealthState.abnormal
+                ? AlertSeverity.danger
+                : AlertSeverity.info,
+          ),
+        );
+      }
     } catch (error) {
       markCctvInspectionError(
         username,
@@ -803,8 +1076,26 @@ class AppController extends ChangeNotifier {
     final user = userByUsername(username);
     if (user == null || user.isAdmin) return;
 
-    user.monitor = user.monitor.withEnvironmentReading(reading);
+    final previousAlerts = user.monitor.alerts;
+    final updatedMonitor = user.monitor.withEnvironmentReading(reading);
+    user.monitor = updatedMonitor;
     notifyListeners();
+
+    for (final alert in updatedMonitor.alerts) {
+      final isNew = !previousAlerts.any(
+        (old) => old.title == alert.title && old.category == alert.category,
+      );
+      if (isNew && alert.severity != AlertSeverity.info) {
+        unawaited(
+          _maybeEmitAlert(
+            category: 'sensor_alerts',
+            title: alert.title,
+            message: alert.message,
+            severity: alert.severity,
+          ),
+        );
+      }
+    }
   }
 
   SupportThread? threadForUser(String username) {
@@ -900,6 +1191,7 @@ class AppController extends ChangeNotifier {
     _sensorClient.removeListener(notifyListeners);
     _sensorClient.dispose();
     _yoloDetector.close();
+    unawaited(_alertController.close());
     super.dispose();
   }
 }

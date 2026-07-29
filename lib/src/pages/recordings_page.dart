@@ -14,6 +14,8 @@ class RecordingsPage extends StatefulWidget {
 
 class _RecordingsPageState extends State<RecordingsPage> {
   late Future<List<RecordingFile>> _recordingsFuture;
+  _RecordingFilter _filter = _RecordingFilter.today;
+  Set<String> _favoritePaths = {};
 
   bool get _isAdmin => widget.currentUser.isAdmin;
 
@@ -21,6 +23,54 @@ class _RecordingsPageState extends State<RecordingsPage> {
   void initState() {
     super.initState();
     _recordingsFuture = _loadRecordings();
+    unawaited(_loadFavorites());
+  }
+
+  Future<void> _loadFavorites() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _favoritePaths =
+          prefs.getStringList('roostify.recording_favorites')?.toSet() ?? {};
+    });
+  }
+
+  Future<void> _toggleFavorite(RecordingFile recording) async {
+    setState(() {
+      if (!_favoritePaths.add(recording.path)) {
+        _favoritePaths.remove(recording.path);
+      }
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      'roostify.recording_favorites',
+      _favoritePaths.toList(),
+    );
+  }
+
+  Future<void> _copyRecordingPath(RecordingFile recording) async {
+    await Clipboard.setData(ClipboardData(text: recording.path));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Recording path copied for sharing.')),
+    );
+  }
+
+  List<RecordingFile> _filtered(List<RecordingFile> recordings) {
+    final now = DateTime.now();
+    return recordings.where((recording) {
+      final date = recording.modifiedAt.toLocal();
+      return switch (_filter) {
+        _RecordingFilter.today =>
+          date.year == now.year &&
+              date.month == now.month &&
+              date.day == now.day,
+        _RecordingFilter.week =>
+          now.difference(date).inDays >= 0 && now.difference(date).inDays < 7,
+        _RecordingFilter.favorites => _favoritePaths.contains(recording.path),
+        _RecordingFilter.all => true,
+      };
+    }).toList();
   }
 
   Future<List<RecordingFile>> _loadRecordings() {
@@ -86,6 +136,10 @@ class _RecordingsPageState extends State<RecordingsPage> {
     return Scaffold(
       appBar: AppBar(
         title: Text(_isAdmin ? 'All Recordings' : 'My Recordings'),
+        leading: IconButton(
+          onPressed: () => Navigator.of(context).pop(),
+          icon: const Icon(Icons.close_rounded),
+        ),
         actions: [
           IconButton(
             tooltip: 'Refresh',
@@ -119,24 +173,145 @@ class _RecordingsPageState extends State<RecordingsPage> {
             );
           }
 
-          return ListView.separated(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-            itemCount: recordings.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 10),
-            itemBuilder: (context, index) {
-              final recording = recordings[index];
-              return _RecordingTile(
-                recording: recording,
-                showOwner: _isAdmin,
-                onTap: () => _openRecording(recording),
-                onDelete: () => _confirmDelete(recording),
-              );
-            },
+          final visible = _filtered(recordings);
+          final usedBytes = recordings.fold<int>(
+            0,
+            (total, recording) => total + recording.sizeBytes,
+          );
+          const capacityBytes = 10 * 1024 * 1024 * 1024;
+          return ListView(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+            children: [
+              const Text(
+                'Review saved CCTV clips and recordings.',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 14),
+              _RecordingFilterBar(
+                selected: _filter,
+                onSelected: (filter) => setState(() => _filter = filter),
+              ),
+              const SizedBox(height: 16),
+              _RecordingStorageBar(
+                usedBytes: usedBytes,
+                capacityBytes: capacityBytes,
+              ),
+              const SizedBox(height: 14),
+              if (visible.isEmpty)
+                const _RecordingsMessage(
+                  icon: Icons.video_library_outlined,
+                  title: 'No recordings in this filter',
+                  message: 'Try Today, This Week, or Favorites.',
+                )
+              else
+                for (var index = 0; index < visible.length; index++) ...[
+                  if (index > 0) const SizedBox(height: 9),
+                  _RecordingTile(
+                    recording: visible[index],
+                    showOwner: _isAdmin,
+                    favorite: _favoritePaths.contains(visible[index].path),
+                    onTap: () => _openRecording(visible[index]),
+                    onDelete: () => _confirmDelete(visible[index]),
+                    onFavorite: () => _toggleFavorite(visible[index]),
+                    onShare: () => _copyRecordingPath(visible[index]),
+                  ),
+                ],
+              const SizedBox(height: 18),
+              SizedBox(
+                height: 52,
+                child: FilledButton.icon(
+                  onPressed: () =>
+                      setState(() => _filter = _RecordingFilter.all),
+                  icon: const Icon(Icons.video_library_outlined),
+                  label: const Text('Open Recording Library'),
+                ),
+              ),
+            ],
           );
         },
       ),
     );
   }
+}
+
+enum _RecordingFilter { today, week, favorites, all }
+
+class _RecordingFilterBar extends StatelessWidget {
+  const _RecordingFilterBar({required this.selected, required this.onSelected});
+  final _RecordingFilter selected;
+  final ValueChanged<_RecordingFilter> onSelected;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      for (final (filter, label, icon) in const [
+        (_RecordingFilter.today, 'Today', Icons.today_outlined),
+        (_RecordingFilter.week, 'This Week', Icons.calendar_month_outlined),
+        (_RecordingFilter.favorites, 'Favorites', Icons.star_border_rounded),
+      ])
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 3),
+            child: ChoiceChip(
+              selected: selected == filter,
+              onSelected: (_) => onSelected(filter),
+              avatar: Icon(icon, size: 17),
+              label: Text(label),
+            ),
+          ),
+        ),
+    ],
+  );
+}
+
+class _RecordingStorageBar extends StatelessWidget {
+  const _RecordingStorageBar({
+    required this.usedBytes,
+    required this.capacityBytes,
+  });
+  final int usedBytes;
+  final int capacityBytes;
+
+  String _gigabytes(int bytes) =>
+      (bytes / (1024 * 1024 * 1024)).toStringAsFixed(1);
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: context.appColors.surface,
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: context.appColors.border),
+    ),
+    child: Column(
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.storage_rounded, color: _appAccent, size: 19),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text(
+                'Used Storage',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+            Text(
+              '${_gigabytes(usedBytes)} GB of ${_gigabytes(capacityBytes)} GB',
+              style: const TextStyle(fontSize: 11),
+            ),
+          ],
+        ),
+        const SizedBox(height: 9),
+        LinearProgressIndicator(
+          value: (usedBytes / capacityBytes).clamp(0, 1),
+          minHeight: 6,
+          borderRadius: BorderRadius.circular(99),
+          color: _appAccent,
+          backgroundColor: context.appColors.border,
+        ),
+      ],
+    ),
+  );
 }
 
 class _RecordingsMessage extends StatelessWidget {
@@ -183,14 +358,20 @@ class _RecordingTile extends StatelessWidget {
   const _RecordingTile({
     required this.recording,
     required this.showOwner,
+    required this.favorite,
     required this.onTap,
     required this.onDelete,
+    required this.onFavorite,
+    required this.onShare,
   });
 
   final RecordingFile recording;
   final bool showOwner;
+  final bool favorite;
   final VoidCallback onTap;
   final VoidCallback onDelete;
+  final VoidCallback onFavorite;
+  final VoidCallback onShare;
 
   String _formattedDate(DateTime value) {
     final local = value.toLocal();
@@ -213,17 +394,19 @@ class _RecordingTile extends StatelessWidget {
           child: Row(
             children: [
               Container(
-                width: 52,
-                height: 52,
+                width: 84,
+                height: 62,
                 decoration: BoxDecoration(
-                  color: colors.accentSurface,
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF29364B), Color(0xFF101722)],
+                  ),
                   borderRadius: BorderRadius.circular(14),
                 ),
                 alignment: Alignment.center,
                 child: const Icon(
                   Icons.play_circle_fill,
                   color: _appAccent,
-                  size: 30,
+                  size: 28,
                 ),
               ),
               const SizedBox(width: 12),
@@ -266,10 +449,40 @@ class _RecordingTile extends StatelessWidget {
                   ],
                 ),
               ),
-              IconButton(
-                tooltip: 'Delete',
-                onPressed: onDelete,
-                icon: const Icon(Icons.delete_outline),
+              Column(
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        tooltip: favorite ? 'Remove favorite' : 'Add favorite',
+                        onPressed: onFavorite,
+                        icon: Icon(
+                          favorite
+                              ? Icons.star_rounded
+                              : Icons.star_border_rounded,
+                          color: favorite ? const Color(0xFFFFB020) : null,
+                        ),
+                      ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        tooltip: 'Share',
+                        onPressed: onShare,
+                        icon: const Icon(Icons.share_outlined),
+                      ),
+                    ],
+                  ),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Delete',
+                    onPressed: onDelete,
+                    icon: const Icon(
+                      Icons.delete_outline,
+                      color: Color(0xFFFF5A4E),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -356,7 +569,11 @@ class _RecordingPlayerPageState extends State<RecordingPlayerPage> {
                 ),
               )
             : _supportsFijkPlayer && player != null
-            ? FijkView(player: player, fit: FijkFit.contain, color: Colors.black)
+            ? FijkView(
+                player: player,
+                fit: FijkFit.contain,
+                color: Colors.black,
+              )
             : const Padding(
                 padding: EdgeInsets.all(24),
                 child: Text(

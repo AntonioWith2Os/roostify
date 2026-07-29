@@ -28,6 +28,8 @@
     <true/>
     <key>NSCameraUsageDescription</key>
     <string>RoosterWatch uses the camera to show the live monitoring feed in the app.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Roostify uses your photo library to set a profile picture.</string>
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>DominiGo uses Bluetooth to receive live ESP32 farm sensor readings.</string>
     <key>NSAppTransportSecurity</key>

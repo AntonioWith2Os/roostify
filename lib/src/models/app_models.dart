@@ -36,6 +36,10 @@ class AppUser {
     this.contactNumber = '',
     this.address = '',
     this.facebookContact = '',
+    this.email = '',
+    this.farmName = '',
+    this.shortBio = '',
+    this.avatarPath,
     List<LiveCctvStream>? liveCctvStreams,
   }) : liveCctvStreams = liveCctvStreams ?? [];
 
@@ -45,6 +49,12 @@ class AppUser {
   String contactNumber;
   String address;
   String facebookContact;
+  String email;
+  String farmName;
+  String shortBio;
+  // Local file path for a picked profile photo; distinct from Session.photoUrl,
+  // which is a remote Google account picture.
+  String? avatarPath;
   final UserRole role;
   bool cameraAccessEnabled;
   MonitorSnapshot monitor;
@@ -52,6 +62,27 @@ class AppUser {
   final List<LiveCctvStream> liveCctvStreams;
 
   bool get isAdmin => role == UserRole.admin;
+}
+
+/// Emitted by [AppController] when an event matches an enabled Notification
+/// Preference (and isn't muted by quiet hours), for the app shell to surface
+/// as an in-app SnackBar/sound/vibration.
+class AppAlertEvent {
+  const AppAlertEvent({
+    required this.category,
+    required this.title,
+    required this.message,
+    this.severity = AlertSeverity.info,
+    this.playSound = false,
+    this.vibrate = false,
+  });
+
+  final String category;
+  final String title;
+  final String message;
+  final AlertSeverity severity;
+  final bool playSound;
+  final bool vibrate;
 }
 
 /// A single connected live RTSP camera. A user can connect several of these
