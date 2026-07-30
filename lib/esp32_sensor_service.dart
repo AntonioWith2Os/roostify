@@ -23,12 +23,23 @@ class Esp32SensorReading {
     required this.humidityPercent,
     required this.airQualityPpm,
     required this.receivedAt,
+    this.dhtAvailable = true,
+    this.airAvailable = true,
   });
 
   final double temperatureC;
   final double humidityPercent;
   final int airQualityPpm;
   final DateTime receivedAt;
+
+  /// False when the most recent payload reported the DHT sensor as
+  /// unreadable (bad wiring, disconnected, etc). [temperatureC] and
+  /// [humidityPercent] are then carried forward from the last good
+  /// reading rather than being fresh.
+  final bool dhtAvailable;
+
+  /// Same as [dhtAvailable] but for the MQ135 air-quality sensor.
+  final bool airAvailable;
 }
 
 class Esp32SensorClient extends ChangeNotifier {
@@ -308,15 +319,27 @@ class Esp32SensorClient extends ChangeNotifier {
     }
 
     _latestReading = reading;
-    _lastError = null;
+    _lastError = reading.dhtAvailable && reading.airAvailable
+        ? null
+        : _sensorFaultMessage(reading);
     _onReading?.call(reading);
     _notify();
+  }
+
+  String _sensorFaultMessage(Esp32SensorReading reading) {
+    if (!reading.dhtAvailable && !reading.airAvailable) {
+      return 'DHT and air quality sensors are not responding — check the wiring.';
+    }
+    if (!reading.dhtAvailable) {
+      return 'DHT sensor is not responding — check the wiring.';
+    }
+    return 'Air quality sensor is not responding — check the wiring.';
   }
 
   Esp32SensorReading? _parseReading(String payload) {
     try {
       final decoded = jsonDecode(payload);
-      if (decoded is Map<String, dynamic>) {
+      if (decoded is Map<String, dynamic> && decoded.isNotEmpty) {
         final temperature = _numberFrom(decoded, const [
           'temperature',
           'temperatureC',
@@ -336,14 +359,11 @@ class Esp32SensorClient extends ChangeNotifier {
           'aq',
         ]);
 
-        if (temperature != null && humidity != null && airQuality != null) {
-          return Esp32SensorReading(
-            temperatureC: temperature,
-            humidityPercent: humidity,
-            airQualityPpm: airQuality.round(),
-            receivedAt: DateTime.now(),
-          );
-        }
+        return _mergeWithLastKnown(
+          temperature: temperature,
+          humidity: humidity,
+          airQuality: airQuality,
+        );
       }
     } catch (_) {
       return _parseKeyValueReading(payload);
@@ -375,15 +395,49 @@ class Esp32SensorClient extends ChangeNotifier {
       ),
     );
 
-    if (temperature == null || humidity == null || airQuality == null) {
+    return _mergeWithLastKnown(
+      temperature: temperature,
+      humidity: humidity,
+      airQuality: airQuality,
+    );
+  }
+
+  /// The firmware still emits a reading every cycle even when the DHT or the
+  /// MQ135 can't be read (bad wiring, disconnected, etc), reporting the
+  /// affected field(s) as `null` instead of dropping the payload entirely.
+  /// Missing fields fall back to the last known-good value so the rest of
+  /// the app keeps working off real numbers, while [Esp32SensorReading.
+  /// dhtAvailable]/[Esp32SensorReading.airAvailable] tell the UI the value
+  /// is stale rather than pretending it's fresh. If a sensor has *never*
+  /// reported a value (e.g. it's been offline since the very first reading),
+  /// there's no last-known value to fall back to — that alone must not
+  /// blank out the *other*, currently-working sensor, so it falls back to
+  /// 0 instead of discarding the whole reading.
+  Esp32SensorReading? _mergeWithLastKnown({
+    required double? temperature,
+    required double? humidity,
+    required double? airQuality,
+  }) {
+    final last = _latestReading;
+    final dhtAvailable = temperature != null && humidity != null;
+    final airAvailable = airQuality != null;
+
+    if (!dhtAvailable && !airAvailable && last == null) {
+      // Nothing usable in this payload and no history to fall back on.
       return null;
     }
 
+    final resolvedTemperature = temperature ?? last?.temperatureC ?? 0;
+    final resolvedHumidity = humidity ?? last?.humidityPercent ?? 0;
+    final resolvedAir = airQuality?.round() ?? last?.airQualityPpm ?? 0;
+
     return Esp32SensorReading(
-      temperatureC: temperature,
-      humidityPercent: humidity,
-      airQualityPpm: airQuality.round(),
+      temperatureC: resolvedTemperature,
+      humidityPercent: resolvedHumidity,
+      airQualityPpm: resolvedAir,
       receivedAt: DateTime.now(),
+      dhtAvailable: dhtAvailable,
+      airAvailable: airAvailable,
     );
   }
 

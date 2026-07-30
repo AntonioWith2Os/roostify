@@ -147,6 +147,8 @@ class MonitorSnapshot {
     required this.cctvStatus,
     required this.cctvSummary,
     required this.alerts,
+    this.dhtAvailable = true,
+    this.airAvailable = true,
   });
 
   final double temperature;
@@ -160,6 +162,16 @@ class MonitorSnapshot {
   final HealthState cctvStatus;
   final String cctvSummary;
   final List<AlertItem> alerts;
+
+  /// False when the DHT (temperature/humidity) sensor is currently
+  /// unreadable — [temperature]/[humidity] then hold the last known-good
+  /// values rather than a fresh reading. Mirrors
+  /// [Esp32SensorReading.dhtAvailable].
+  final bool dhtAvailable;
+
+  /// Same as [dhtAvailable] but for the MQ135 air-quality sensor. Mirrors
+  /// [Esp32SensorReading.airAvailable].
+  final bool airAvailable;
 
   SensorWarningLevel get temperatureLevel =>
       temperatureLevelFor(temperature, humidity: humidity);
@@ -192,6 +204,8 @@ class MonitorSnapshot {
       cctvStatus: cctvStatus,
       cctvSummary: cctvSummary,
       alerts: [..._environmentAlerts(reading), ...retainedAlerts],
+      dhtAvailable: reading.dhtAvailable,
+      airAvailable: reading.airAvailable,
     );
   }
 
@@ -378,6 +392,32 @@ class MonitorSnapshot {
               'Ammonia reading is ${reading.airQualityPpm} ppm. ${_airStatus(reading.airQualityPpm)}.',
           severity: _alertSeverityFor(airLevel),
           category: 'Air Pollution',
+          time: time,
+        ),
+      );
+    }
+
+    if (!reading.dhtAvailable) {
+      alerts.add(
+        AlertItem(
+          title: 'DHT sensor not responding',
+          message:
+              'Temperature and humidity readings are unavailable — check the DHT sensor wiring. Showing the last known values.',
+          severity: AlertSeverity.warning,
+          category: 'System',
+          time: time,
+        ),
+      );
+    }
+
+    if (!reading.airAvailable) {
+      alerts.add(
+        AlertItem(
+          title: 'Air quality sensor not responding',
+          message:
+              'Ammonia readings are unavailable — check the MQ135 sensor wiring. Showing the last known value.',
+          severity: AlertSeverity.warning,
+          category: 'System',
           time: time,
         ),
       );

@@ -30,6 +30,7 @@ part 'src/app_constants.dart';
 part 'src/rooster_watch_app.dart';
 part 'src/theme/app_theme.dart';
 part 'src/pages/app_pages.dart';
+part 'src/pages/guidelines_redesign.dart';
 part 'src/controllers/app_controller.dart';
 part 'src/models/app_models.dart';
 part 'src/services/on_device_yolo_detector.dart';

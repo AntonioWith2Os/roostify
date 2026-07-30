@@ -341,6 +341,78 @@ class Esp32SensorConnectionCard extends StatelessWidget {
   final AppController controller;
   final String username;
 
+  void _showSensorDetails(BuildContext context) {
+    final reading = controller.latestSensorReading;
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: context.appColors.surface,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(22, 4, 22, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'ESP32 Sensor Details',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                controller.sensorStatusLabel,
+                style: TextStyle(color: context.appColors.mutedText),
+              ),
+              const SizedBox(height: 18),
+              if (reading != null)
+                Row(
+                  children: [
+                    Expanded(
+                      child: SummaryMiniCard(
+                        title: 'Temperature',
+                        value: reading.dhtAvailable
+                            ? '${reading.temperatureC.toStringAsFixed(1)} °C'
+                            : 'Offline',
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: SummaryMiniCard(
+                        title: 'Humidity',
+                        value: reading.dhtAvailable
+                            ? '${reading.humidityPercent.toStringAsFixed(0)}%'
+                            : 'Offline',
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: SummaryMiniCard(
+                        title: 'Air',
+                        value: reading.airAvailable
+                            ? '${reading.airQualityPpm} ppm'
+                            : 'Offline',
+                      ),
+                    ),
+                  ],
+                )
+              else
+                const Text('Waiting for the first sensor reading...'),
+              const SizedBox(height: 18),
+              OutlinedButton.icon(
+                onPressed: () {
+                  Navigator.of(sheetContext).pop();
+                  controller.disconnectEsp32Sensor();
+                },
+                icon: const Icon(Icons.bluetooth_disabled_outlined),
+                label: const Text('Disconnect ESP32'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.appColors;
@@ -368,78 +440,89 @@ class Esp32SensorConnectionCard extends StatelessWidget {
         ? controller.sensorStatusLabel
         : '${controller.sensorStatusLabel} - updated ${_sensorTimeLabel(reading.receivedAt)}';
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final compact = constraints.maxWidth < 430;
-        final action = connected
-            ? OutlinedButton.icon(
-                onPressed: controller.disconnectEsp32Sensor,
-                icon: const Icon(Icons.bluetooth_disabled_outlined),
-                label: const Text('Disconnect'),
-              )
-            : FilledButton.icon(
-                onPressed: busy
-                    ? null
-                    : () => controller.connectEsp32Sensor(username),
-                icon: Icon(
-                  busy
-                      ? Icons.bluetooth_searching_outlined
-                      : Icons.bluetooth_outlined,
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 58,
+                height: 58,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: accent.withValues(alpha: .3)),
                 ),
-                label: Text(busy ? 'Connecting...' : 'Connect ESP32'),
-              );
-
-        final statusContent = Row(
-          children: [
-            CircleAvatar(
-              backgroundColor: accent.withValues(alpha: 0.14),
-              foregroundColor: accent,
-              child: Icon(
-                connected
-                    ? Icons.bluetooth_connected_outlined
-                    : Icons.sensors_outlined,
+                child: Icon(
+                  connected
+                      ? Icons.bluetooth_connected_outlined
+                      : Icons.bluetooth_searching_outlined,
+                  color: accent,
+                  size: 29,
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'ESP32 Sensor',
-                    style: TextStyle(fontWeight: FontWeight.w900),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    detail,
-                    style: TextStyle(
-                      color: error || readIssue
-                          ? const Color(0xFFFF8A98)
-                          : colors.mutedText,
-                      height: 1.35,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        );
-
-        return _GlassCard(
-          child: compact
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [statusContent, const SizedBox(height: 14), action],
-                )
-              : Row(
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(child: statusContent),
-                    const SizedBox(width: 14),
-                    action,
+                    const Text(
+                      'ESP32 Sensor',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      detail,
+                      style: TextStyle(
+                        color: error || readIssue
+                            ? const Color(0xFFFF8A98)
+                            : colors.mutedText,
+                        fontSize: 12,
+                        height: 1.35,
+                      ),
+                    ),
                   ],
                 ),
-        );
-      },
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 52,
+            child: FilledButton.icon(
+              onPressed: busy
+                  ? null
+                  : connected
+                  ? () => _showSensorDetails(context)
+                  : () => controller.connectEsp32Sensor(username),
+              icon: Icon(
+                busy
+                    ? Icons.bluetooth_searching_outlined
+                    : connected
+                    ? Icons.bluetooth_rounded
+                    : Icons.add_link_rounded,
+              ),
+              label: Text(
+                busy
+                    ? 'Connecting...'
+                    : connected
+                    ? 'View Sensor Details'
+                    : 'Connect ESP32 Sensor',
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -457,6 +540,7 @@ class CircularSensorGauge extends StatelessWidget {
     required this.icon,
     required this.status,
     required this.level,
+    required this.accent,
     this.alerts = const [],
   });
 
@@ -467,6 +551,7 @@ class CircularSensorGauge extends StatelessWidget {
   final IconData icon;
   final String status;
   final SensorWarningLevel level;
+  final Color accent;
 
   /// Active warnings that belong to this sensor; shown as a badge on the
   /// ring and in a pop-up when the card is tapped.
@@ -484,7 +569,7 @@ class CircularSensorGauge extends StatelessWidget {
           ),
           title: Row(
             children: [
-              Icon(icon, color: level.color),
+              Icon(icon, color: accent),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -536,7 +621,7 @@ class CircularSensorGauge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.appColors;
-    final statusColor = level.color;
+    final statusColor = accent;
 
     return Tooltip(
       message: '$title: $value $unit - $status',

@@ -218,7 +218,6 @@ class LoginPage extends StatefulWidget {
 
 class _LoginPageState extends State<LoginPage> {
   static const _loginOrange = Color(0xFFFF6A19);
-  static const _loginRed = Color(0xFFF44A12);
 
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
@@ -226,6 +225,7 @@ class _LoginPageState extends State<LoginPage> {
   String? _error;
   bool _signingInWithGoogle = false;
   bool _signingInWithPassword = false;
+  bool _passwordVisible = false;
 
   @override
   void initState() {
@@ -299,221 +299,523 @@ class _LoginPageState extends State<LoginPage> {
     _openSession(session);
   }
 
+  Future<void> _showForgotPassword() async {
+    final recoveryController = TextEditingController(
+      text: _usernameController.text.trim(),
+    );
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Forgot password?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Enter your email or username. An administrator can then help '
+              'you recover access to your Roostify account.',
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: recoveryController,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Email or Username',
+                prefixIcon: Icon(Icons.person_search_outlined),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final account = recoveryController.text.trim();
+              if (account.isEmpty) return;
+              Navigator.of(dialogContext).pop();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    'Recovery request prepared for $account. '
+                    'Contact your administrator to reset the password.',
+                  ),
+                ),
+              );
+            },
+            child: const Text('Request help'),
+          ),
+        ],
+      ),
+    );
+    recoveryController.dispose();
+  }
+
+  void _showPolicy(String title, String body) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: SingleChildScrollView(child: Text(body)),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
     final isAdmin = _selectedRole == UserRole.admin;
     return Scaffold(
-      body: _AuthImageBackground(
-        child: SafeArea(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              return SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 112, 20, 48),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+      resizeToAvoidBottomInset: false,
+      backgroundColor: const Color(0xFF020713),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          Image.asset(
+            'assets/login_background.png',
+            fit: BoxFit.cover,
+            alignment: Alignment.topCenter,
+          ),
+          const ColoredBox(color: Color(0x24000614)),
+          SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final contentWidth = constraints.maxWidth > 584
+                    ? 560.0
+                    : constraints.maxWidth - 24;
+                return Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                   child: Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 560),
-                      child: Container(
-                        padding: const EdgeInsets.fromLTRB(30, 34, 30, 30),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(30),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.28),
-                              blurRadius: 28,
-                              offset: const Offset(0, 14),
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: SizedBox(
+                        width: contentWidth,
+                        child: Column(
+                          children: [
+                            Semantics(
+                              image: true,
+                              label: 'Roostify, Smart Rooster Monitoring',
+                              child: Image.asset(
+                                'assets/roostify_logo_transparent.png',
+                                width: 180,
+                                fit: BoxFit.contain,
+                                filterQuality: FilterQuality.high,
+                              ),
                             ),
-                          ],
-                        ),
-                        child: Theme(
-                          // The login card intentionally stays light over the
-                          // photo. Keep its inherited controls light as well so
-                          // dark mode cannot turn field text and labels white.
-                          data: buildAppTheme(Brightness.light),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              const _LandingBrand(),
-                              const SizedBox(height: 22),
-                              Text(
-                                isAdmin
-                                    ? l10n.loginAdminAccess
-                                    : l10n.loginTitle,
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  color: Color(0xFF17191E),
-                                  fontSize: 26,
-                                  fontWeight: FontWeight.w900,
-                                ),
+                            const SizedBox(height: 12),
+                            Container(
+                              padding: const EdgeInsets.fromLTRB(
+                                20,
+                                20,
+                                20,
+                                18,
                               ),
-                              const SizedBox(height: 6),
-                              Text(
-                                l10n.loginSubtitle,
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  color: Color(0xFF72757C),
-                                  fontSize: 14,
+                              decoration: BoxDecoration(
+                                color: const Color(0xE80A1221),
+                                borderRadius: BorderRadius.circular(28),
+                                border: Border.all(
+                                  color: _loginOrange,
+                                  width: 1.4,
                                 ),
-                              ),
-                              const SizedBox(height: 24),
-                              SegmentedButton<UserRole>(
-                                segments: [
-                                  ButtonSegment(
-                                    value: UserRole.user,
-                                    icon: const Icon(
-                                      Icons.person_outline_rounded,
-                                    ),
-                                    label: Text(l10n.loginUserSegment),
+                                boxShadow: const [
+                                  BoxShadow(
+                                    color: Color(0x66FF6A19),
+                                    blurRadius: 22,
+                                    spreadRadius: -7,
                                   ),
-                                  ButtonSegment(
-                                    value: UserRole.admin,
-                                    icon: const Icon(
-                                      Icons.admin_panel_settings_outlined,
-                                    ),
-                                    label: Text(l10n.loginAdminSegment),
+                                  BoxShadow(
+                                    color: Color(0xB3000000),
+                                    blurRadius: 36,
+                                    offset: Offset(0, 18),
                                   ),
                                 ],
-                                selected: {_selectedRole},
-                                onSelectionChanged: (selection) {
-                                  setState(() {
-                                    _selectedRole = selection.first;
-                                    _error = null;
-                                  });
-                                },
                               ),
-                              const SizedBox(height: 18),
-                              TextField(
-                                controller: _usernameController,
-                                keyboardType: TextInputType.emailAddress,
-                                textInputAction: TextInputAction.next,
-                                decoration: InputDecoration(
-                                  labelText: l10n.loginUsernameLabel,
-                                  prefixIcon: const Icon(
-                                    Icons.person_outline_rounded,
-                                  ),
-                                  fillColor: const Color(0xFFF7F5F2),
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              TextField(
-                                controller: _passwordController,
-                                obscureText: true,
-                                textInputAction: TextInputAction.done,
-                                onSubmitted: (_) => _signingInWithPassword
-                                    ? null
-                                    : _signInWithPassword(),
-                                decoration: InputDecoration(
-                                  labelText: l10n.loginPasswordLabel,
-                                  prefixIcon: const Icon(
-                                    Icons.lock_outline_rounded,
-                                  ),
-                                  fillColor: const Color(0xFFF7F5F2),
-                                ),
-                              ),
-                              if (_error != null) ...[
-                                const SizedBox(height: 14),
-                                Container(
-                                  padding: const EdgeInsets.all(14),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF3A1F2A),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Text(
-                                    _error!,
-                                    style: const TextStyle(
-                                      color: Color(0xFFFF8A98),
-                                      fontWeight: FontWeight.w600,
+                              child: Theme(
+                                data: buildAppTheme(Brightness.dark),
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Container(
+                                          width: 50,
+                                          height: 50,
+                                          decoration: BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            border: Border.all(
+                                              color: _loginOrange,
+                                              width: 1.4,
+                                            ),
+                                          ),
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(9),
+                                            child: Image.asset(
+                                              'assets/roostify_logo_transparent.png',
+                                              fit: BoxFit.cover,
+                                              alignment: Alignment.topCenter,
+                                              filterQuality: FilterQuality.high,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 14),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                isAdmin
+                                                    ? l10n.loginAdminAccess
+                                                    : l10n.loginTitle,
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 23,
+                                                  fontWeight: FontWeight.w900,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                l10n.loginSubtitle,
+                                                style: const TextStyle(
+                                                  color: Color(0xFFADB3C1),
+                                                  fontSize: 13,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                  ),
-                                ),
-                              ],
-                              const SizedBox(height: 22),
-                              FilledButton.icon(
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: _loginRed,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 18,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(22),
-                                    side: const BorderSide(color: _loginRed),
-                                  ),
-                                ),
-                                onPressed: _signingInWithPassword
-                                    ? null
-                                    : _signInWithPassword,
-                                icon: _signingInWithPassword
-                                    ? const SizedBox.square(
-                                        dimension: 18,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
+                                    const SizedBox(height: 14),
+                                    _DarkLoginField(
+                                      controller: _usernameController,
+                                      hintText: 'Email or Username',
+                                      icon: Icons.person_outline_rounded,
+                                      keyboardType: TextInputType.emailAddress,
+                                      textInputAction: TextInputAction.next,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    _DarkLoginField(
+                                      controller: _passwordController,
+                                      hintText: l10n.loginPasswordLabel,
+                                      icon: Icons.lock_outline_rounded,
+                                      obscureText: !_passwordVisible,
+                                      textInputAction: TextInputAction.done,
+                                      onSubmitted: (_) => _signingInWithPassword
+                                          ? null
+                                          : _signInWithPassword(),
+                                      suffixIcon: IconButton(
+                                        tooltip: _passwordVisible
+                                            ? 'Hide password'
+                                            : 'Show password',
+                                        onPressed: () => setState(
+                                          () => _passwordVisible =
+                                              !_passwordVisible,
                                         ),
-                                      )
-                                    : const Icon(Icons.login_rounded),
-                                label: Text(
-                                  _signingInWithPassword
-                                      ? l10n.loginSigningIn
-                                      : isAdmin
-                                      ? l10n.loginButtonAdmin
-                                      : l10n.loginButtonUser,
-                                  style: const TextStyle(
-                                    fontSize: 17,
-                                    fontWeight: FontWeight.w800,
-                                  ),
+                                        icon: Icon(
+                                          _passwordVisible
+                                              ? Icons.visibility_off_outlined
+                                              : Icons.visibility_outlined,
+                                          color: const Color(0xFFA7ADBA),
+                                        ),
+                                      ),
+                                    ),
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: TextButton(
+                                        onPressed: _showForgotPassword,
+                                        child: const Text(
+                                          'Forgot password?',
+                                          style: TextStyle(color: _loginOrange),
+                                        ),
+                                      ),
+                                    ),
+                                    if (_error != null) ...[
+                                      Container(
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0x663A1F2A),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          border: Border.all(
+                                            color: const Color(0xFF9B4355),
+                                          ),
+                                        ),
+                                        child: Text(
+                                          _error!,
+                                          style: const TextStyle(
+                                            color: Color(0xFFFFA4AF),
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                    ],
+                                    SizedBox(
+                                      height: 48,
+                                      child: FilledButton.icon(
+                                        style: FilledButton.styleFrom(
+                                          backgroundColor: _loginOrange,
+                                          foregroundColor: Colors.white,
+                                          shape: const StadiumBorder(),
+                                        ),
+                                        onPressed: _signingInWithPassword
+                                            ? null
+                                            : _signInWithPassword,
+                                        icon: _signingInWithPassword
+                                            ? const SizedBox.square(
+                                                dimension: 19,
+                                                child:
+                                                    CircularProgressIndicator(
+                                                      strokeWidth: 2,
+                                                      color: Colors.white,
+                                                    ),
+                                              )
+                                            : const Icon(Icons.login_rounded),
+                                        label: Text(
+                                          _signingInWithPassword
+                                              ? l10n.loginSigningIn
+                                              : isAdmin
+                                              ? l10n.loginButtonAdmin
+                                              : l10n.loginButtonUser,
+                                          style: const TextStyle(
+                                            fontSize: 17,
+                                            fontWeight: FontWeight.w900,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    const _LoginDivider(),
+                                    const SizedBox(height: 10),
+                                    SizedBox(
+                                      height: 48,
+                                      child: FilledButton.icon(
+                                        style: FilledButton.styleFrom(
+                                          backgroundColor: Colors.white,
+                                          foregroundColor: const Color(
+                                            0xFF141820,
+                                          ),
+                                          shape: const StadiumBorder(),
+                                        ),
+                                        onPressed: _signingInWithGoogle
+                                            ? null
+                                            : _signInWithGoogle,
+                                        icon: _signingInWithGoogle
+                                            ? const SizedBox.square(
+                                                dimension: 19,
+                                                child:
+                                                    CircularProgressIndicator(
+                                                      strokeWidth: 2,
+                                                      color: Color(0xFF4285F4),
+                                                    ),
+                                              )
+                                            : const _GoogleMark(size: 22),
+                                        label: Text(
+                                          _signingInWithGoogle
+                                              ? l10n.loginGoogleOpening
+                                              : l10n.loginGoogleUser,
+                                          style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    const _LoginDivider(),
+                                    const SizedBox(height: 10),
+                                    SizedBox(
+                                      height: 46,
+                                      child: OutlinedButton.icon(
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: _loginOrange,
+                                          side: BorderSide(
+                                            color: isAdmin
+                                                ? Colors.white
+                                                : _loginOrange,
+                                            width: 1.3,
+                                          ),
+                                          shape: const StadiumBorder(),
+                                        ),
+                                        onPressed: () {
+                                          setState(() {
+                                            _selectedRole = isAdmin
+                                                ? UserRole.user
+                                                : UserRole.admin;
+                                            _error = null;
+                                          });
+                                        },
+                                        icon: Icon(
+                                          isAdmin
+                                              ? Icons.person_outline_rounded
+                                              : Icons.shield_outlined,
+                                        ),
+                                        label: Text(
+                                          isAdmin
+                                              ? 'User Access'
+                                              : 'Admin Access',
+                                          style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w900,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 14),
+                                    Wrap(
+                                      alignment: WrapAlignment.center,
+                                      crossAxisAlignment:
+                                          WrapCrossAlignment.center,
+                                      children: [
+                                        const Text(
+                                          'By continuing, you agree to our ',
+                                          style: TextStyle(
+                                            color: Color(0xFFA7ADBA),
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                        GestureDetector(
+                                          onTap: () => _showPolicy(
+                                            'Terms of Service',
+                                            'Use Roostify responsibly and only with '
+                                                'cameras, sensors, and accounts you '
+                                                'are authorized to access.',
+                                          ),
+                                          child: const Text(
+                                            'Terms of Service',
+                                            style: TextStyle(
+                                              color: _loginOrange,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ),
+                                        const Text(
+                                          ' and ',
+                                          style: TextStyle(
+                                            color: Color(0xFFA7ADBA),
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                        GestureDetector(
+                                          onTap: () => _showPolicy(
+                                            'Privacy Policy',
+                                            'Roostify uses account information, '
+                                                'sensor readings, camera settings, '
+                                                'and recordings only to provide app '
+                                                'features and monitoring services.',
+                                          ),
+                                          child: const Text(
+                                            'Privacy Policy.',
+                                            style: TextStyle(
+                                              color: _loginOrange,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
                                 ),
                               ),
-                              const SizedBox(height: 12),
-                              FilledButton.icon(
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: _loginOrange,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 18,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(22),
-                                    side: const BorderSide(color: _loginOrange),
-                                  ),
-                                ),
-                                onPressed: _signingInWithGoogle
-                                    ? null
-                                    : _signInWithGoogle,
-                                icon: _signingInWithGoogle
-                                    ? const SizedBox.square(
-                                        dimension: 18,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : const _GoogleMark(size: 22),
-                                label: Text(
-                                  _signingInWithGoogle
-                                      ? l10n.loginGoogleOpening
-                                      : isAdmin
-                                      ? l10n.loginGoogleAdmin
-                                      : l10n.loginGoogleUser,
-                                  style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DarkLoginField extends StatelessWidget {
+  const _DarkLoginField({
+    required this.controller,
+    required this.hintText,
+    required this.icon,
+    this.keyboardType,
+    this.textInputAction,
+    this.obscureText = false,
+    this.onSubmitted,
+    this.suffixIcon,
+  });
+
+  final TextEditingController controller;
+  final String hintText;
+  final IconData icon;
+  final TextInputType? keyboardType;
+  final TextInputAction? textInputAction;
+  final bool obscureText;
+  final ValueChanged<String>? onSubmitted;
+  final Widget? suffixIcon;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      keyboardType: keyboardType,
+      textInputAction: textInputAction,
+      obscureText: obscureText,
+      onSubmitted: onSubmitted,
+      style: const TextStyle(color: Colors.white),
+      cursorColor: _LoginPageState._loginOrange,
+      decoration: InputDecoration(
+        hintText: hintText,
+        hintStyle: const TextStyle(color: Color(0xFFA7ADBA)),
+        prefixIcon: Icon(icon, color: _LoginPageState._loginOrange),
+        suffixIcon: suffixIcon,
+        filled: true,
+        fillColor: const Color(0xB30B1424),
+        contentPadding: const EdgeInsets.symmetric(vertical: 19),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: const BorderSide(color: Color(0xFF384359)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: const BorderSide(
+            color: _LoginPageState._loginOrange,
+            width: 1.4,
           ),
         ),
       ),
+    );
+  }
+}
+
+class _LoginDivider extends StatelessWidget {
+  const _LoginDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Row(
+      children: [
+        Expanded(child: Divider(color: Color(0xFF30394B))),
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: 14),
+          child: Text('OR', style: TextStyle(color: Color(0xFF858C9B))),
+        ),
+        Expanded(child: Divider(color: Color(0xFF30394B))),
+      ],
     );
   }
 }
@@ -632,11 +934,13 @@ class _AppShellState extends State<AppShell> {
                   session: widget.session,
                 ),
           floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-          bottomNavigationBar: NavigationBar(
-            backgroundColor: Colors.white,
-            selectedIndex: _index,
-            onDestinationSelected: (value) => setState(() => _index = value),
-            destinations: destinations,
+          bottomNavigationBar: Theme(
+            data: isAdmin ? Theme.of(context) : buildAppTheme(Brightness.dark),
+            child: NavigationBar(
+              selectedIndex: _index,
+              onDestinationSelected: (value) => setState(() => _index = value),
+              destinations: destinations,
+            ),
           ),
         );
       },
@@ -719,232 +1023,255 @@ class UserDashboardPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final user = controller.userByUsername(session.user.username)!;
     final monitor = user.monitor;
+    final activeWarningCount = monitor.alerts
+        .where((alert) => alert.severity != AlertSeverity.info)
+        .length;
     unawaited(controller.maybeShowDailySummary(user.username));
 
-    return Scaffold(
-      appBar: AppBar(
-        toolbarHeight: 76,
-        titleSpacing: 16,
-        title: Row(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.asset(
-                'assets/app_icon_square.png',
-                width: 48,
-                height: 48,
-                fit: BoxFit.cover,
+    return Theme(
+      data: buildAppTheme(Brightness.dark),
+      child: Scaffold(
+        appBar: AppBar(
+          toolbarHeight: 76,
+          titleSpacing: 16,
+          title: Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.asset(
+                  'assets/app_icon_square.png',
+                  width: 48,
+                  height: 48,
+                  fit: BoxFit.cover,
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Roostify',
-                  style: TextStyle(fontSize: 23, fontWeight: FontWeight.w900),
-                ),
-                Text(
-                  'Smart Rooster Monitoring',
-                  style: TextStyle(
-                    color: _appAccent,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
+              const SizedBox(width: 12),
+              const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Roostify',
+                    style: TextStyle(fontSize: 23, fontWeight: FontWeight.w900),
                   ),
+                  Text(
+                    'Smart Rooster Monitoring',
+                    style: TextStyle(
+                      color: _appAccent,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: Badge(
+                isLabelVisible: activeWarningCount > 0,
+                label: Text('$activeWarningCount'),
+                child: IconButton.filledTonal(
+                  tooltip: 'View alerts',
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => AlertsPage(alerts: monitor.alerts),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.notifications_none_rounded),
                 ),
-              ],
+              ),
             ),
           ],
         ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: Badge(
-              isLabelVisible: monitor.alerts.isNotEmpty,
-              label: Text('${monitor.alerts.length}'),
-              child: IconButton.filledTonal(
-                tooltip: 'View alerts',
-                onPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => AlertsPage(alerts: monitor.alerts),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.notifications_none_rounded),
-              ),
-            ),
-          ),
-        ],
-      ),
-      body: Builder(
-        builder: (context) {
-          final temperatureAlerts = monitor.alerts
-              .where(
-                (alert) =>
-                    alert.category == 'Temperature' ||
-                    alert.category == 'Environment',
-              )
-              .toList();
-          final humidityAlerts = monitor.alerts
-              .where(
-                (alert) =>
-                    alert.category == 'Humidity' ||
-                    alert.category == 'Environment',
-              )
-              .toList();
-          final airAlerts = monitor.alerts
-              .where(
-                (alert) =>
-                    alert.category == 'Air Pollution' ||
-                    alert.category == 'Air Quality',
-              )
-              .toList();
-          // Count each alert once even when it shows on two cards (the
-          // combined heat-and-humidity warning appears on both).
-          final activeWarnings = monitor.alerts
-              .where((alert) => alert.severity != AlertSeverity.info)
-              .length;
+        body: Builder(
+          builder: (context) {
+            final temperatureAlerts = monitor.alerts
+                .where(
+                  (alert) =>
+                      alert.category == 'Temperature' ||
+                      alert.category == 'Environment',
+                )
+                .toList();
+            final humidityAlerts = monitor.alerts
+                .where(
+                  (alert) =>
+                      alert.category == 'Humidity' ||
+                      alert.category == 'Environment',
+                )
+                .toList();
+            final airAlerts = monitor.alerts
+                .where(
+                  (alert) =>
+                      alert.category == 'Air Pollution' ||
+                      alert.category == 'Air Quality',
+                )
+                .toList();
+            // Count each alert once even when it shows on two cards (the
+            // combined heat-and-humidity warning appears on both).
+            final activeWarnings = activeWarningCount;
+            final sensorOnline =
+                controller.sensorConnectionStatus ==
+                Esp32SensorConnectionStatus.connected;
 
-          return SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _FarmOverviewCard(
-                  cctvCount: user.cctvs.length,
-                  alertCount: activeWarnings,
-                  sensorOnline:
-                      controller.sensorConnectionStatus ==
-                      Esp32SensorConnectionStatus.connected,
-                ),
-                const SizedBox(height: 22),
-                const _DashboardSectionTitle(
-                  title: 'Live Environment',
-                  subtitle: 'Real-time environmental monitoring',
-                  online: true,
-                ),
-                const SizedBox(height: 12),
-                Esp32SensorConnectionCard(
-                  controller: controller,
-                  username: user.username,
-                ),
-                const SizedBox(height: 14),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    return GridView.count(
-                      crossAxisCount: 3,
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      crossAxisSpacing: 10,
-                      mainAxisSpacing: 10,
-                      childAspectRatio: constraints.maxWidth < 420 ? .53 : .72,
+            return SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _FarmOverviewCard(
+                    cctvCount: user.liveCctvStreams.length,
+                    alertCount: activeWarnings,
+                    sensorOnline: sensorOnline,
+                  ),
+                  const SizedBox(height: 22),
+                  _DashboardSectionTitle(
+                    title: 'Live Environment',
+                    subtitle: 'Real-time environmental monitoring',
+                    online: sensorOnline,
+                  ),
+                  const SizedBox(height: 12),
+                  Esp32SensorConnectionCard(
+                    controller: controller,
+                    username: user.username,
+                  ),
+                  const SizedBox(height: 14),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      return GridView.count(
+                        crossAxisCount: 3,
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 10,
+                        childAspectRatio: constraints.maxWidth < 420
+                            ? .53
+                            : .72,
+                        children: [
+                          CircularSensorGauge(
+                            title: 'Temperature',
+                            value: monitor.dhtAvailable
+                                ? monitor.temperature.toStringAsFixed(1)
+                                : 'Offline',
+                            unit: monitor.dhtAvailable ? '°C' : '',
+                            progress: monitor.temperature / 45,
+                            icon: Icons.thermostat_outlined,
+                            status: monitor.dhtAvailable
+                                ? monitor.temperatureStatus
+                                : 'DHT sensor offline — check wiring',
+                            level: monitor.temperatureLevel,
+                            accent: const Color(0xFFFF453A),
+                            alerts: temperatureAlerts,
+                          ),
+                          CircularSensorGauge(
+                            title: 'Humidity',
+                            value: monitor.dhtAvailable
+                                ? monitor.humidity.toStringAsFixed(0)
+                                : 'Offline',
+                            unit: monitor.dhtAvailable ? '%' : '',
+                            progress: monitor.humidity / 100,
+                            icon: Icons.water_drop_outlined,
+                            status: monitor.dhtAvailable
+                                ? monitor.humidityStatus
+                                : 'DHT sensor offline — check wiring',
+                            level: monitor.humidityLevel,
+                            accent: const Color(0xFF3B82F6),
+                            alerts: humidityAlerts,
+                          ),
+                          CircularSensorGauge(
+                            title: 'Air Pollution',
+                            value: monitor.airAvailable
+                                ? '${monitor.airPpm}'
+                                : 'Offline',
+                            unit: monitor.airAvailable ? 'ppm' : '',
+                            progress: monitor.airPpm / 50,
+                            icon: Icons.air_outlined,
+                            status: monitor.airAvailable
+                                ? monitor.airStatus
+                                : 'MQ135 sensor offline — check wiring',
+                            level: monitor.airLevel,
+                            accent: const Color(0xFFFF7A00),
+                            alerts: airAlerts,
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 22),
+                  const _DashboardSectionTitle(
+                    title: 'Farm status',
+                    subtitle: 'Current monitoring summary',
+                  ),
+                  const SizedBox(height: 9),
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: context.appColors.surface,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: context.appColors.border),
+                    ),
+                    child: Row(
                       children: [
-                        CircularSensorGauge(
-                          title: 'Temperature',
-                          value: monitor.temperature.toStringAsFixed(1),
-                          unit: '°C',
-                          progress: monitor.temperature / 45,
-                          icon: Icons.thermostat_outlined,
-                          status: monitor.temperatureStatus,
-                          level: monitor.temperatureLevel,
-                          alerts: temperatureAlerts,
+                        Container(
+                          width: 58,
+                          height: 58,
+                          decoration: BoxDecoration(
+                            color:
+                                (activeWarnings == 0
+                                        ? const Color(0xFF26C281)
+                                        : _appAccent)
+                                    .withValues(alpha: .12),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            activeWarnings == 0
+                                ? Icons.verified_user_outlined
+                                : Icons.gpp_maybe_outlined,
+                            size: 30,
+                            color: activeWarnings == 0
+                                ? const Color(0xFF26C281)
+                                : _appAccent,
+                          ),
                         ),
-                        CircularSensorGauge(
-                          title: 'Humidity',
-                          value: monitor.humidity.toStringAsFixed(0),
-                          unit: '%',
-                          progress: monitor.humidity / 100,
-                          icon: Icons.water_drop_outlined,
-                          status: monitor.humidityStatus,
-                          level: monitor.humidityLevel,
-                          alerts: humidityAlerts,
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            activeWarnings == 0
+                                ? 'Farm conditions look safe. Tap a sensor card to see its details.'
+                                : 'Tap a sensor card with a badge to see its warnings. The Guides tab explains each warning.',
+                            style: TextStyle(
+                              color: context.appColors.mutedText,
+                              fontSize: 12,
+                              height: 1.4,
+                            ),
+                          ),
                         ),
-                        CircularSensorGauge(
-                          title: 'Air Pollution',
-                          value: '${monitor.airPpm}',
-                          unit: 'ppm',
-                          progress: monitor.airPpm / 50,
-                          icon: Icons.air_outlined,
-                          status: monitor.airStatus,
-                          level: monitor.airLevel,
-                          alerts: airAlerts,
+                        const SizedBox(width: 10),
+                        TextButton.icon(
+                          onPressed: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) =>
+                                  AlertsPage(alerts: monitor.alerts),
+                            ),
+                          ),
+                          icon: const Icon(Icons.chevron_right_rounded),
+                          iconAlignment: IconAlignment.end,
+                          label: Text(
+                            activeWarnings == 0
+                                ? 'ALL CLEAR'
+                                : '$activeWarnings ACTIVE',
+                          ),
                         ),
                       ],
-                    );
-                  },
-                ),
-                const SizedBox(height: 22),
-                const _DashboardSectionTitle(
-                  title: 'Farm status',
-                  subtitle: 'Current monitoring summary',
-                ),
-                const SizedBox(height: 9),
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: context.appColors.surface,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: context.appColors.border),
+                    ),
                   ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 58,
-                        height: 58,
-                        decoration: BoxDecoration(
-                          color:
-                              (activeWarnings == 0
-                                      ? const Color(0xFF26C281)
-                                      : _appAccent)
-                                  .withValues(alpha: .12),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          activeWarnings == 0
-                              ? Icons.verified_user_outlined
-                              : Icons.gpp_maybe_outlined,
-                          size: 30,
-                          color: activeWarnings == 0
-                              ? const Color(0xFF26C281)
-                              : _appAccent,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          activeWarnings == 0
-                              ? 'Farm conditions look safe. Tap a sensor card to see its details.'
-                              : 'Tap a sensor card with a badge to see its warnings. The Guides tab explains each warning.',
-                          style: TextStyle(
-                            color: context.appColors.mutedText,
-                            fontSize: 12,
-                            height: 1.4,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      TextButton.icon(
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => AlertsPage(alerts: monitor.alerts),
-                          ),
-                        ),
-                        icon: const Icon(Icons.chevron_right_rounded),
-                        iconAlignment: IconAlignment.end,
-                        label: Text(
-                          activeWarnings == 0
-                              ? 'ALL CLEAR'
-                              : '$activeWarnings ACTIVE',
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }
@@ -1130,6 +1457,28 @@ class _DashboardSectionTitle extends StatelessWidget {
             ],
           ),
         ),
+      if (!online)
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFF5252).withValues(alpha: .1),
+            borderRadius: BorderRadius.circular(99),
+          ),
+          child: const Row(
+            children: [
+              Icon(Icons.circle, color: Color(0xFFFF5252), size: 8),
+              SizedBox(width: 6),
+              Text(
+                'Offline',
+                style: TextStyle(
+                  color: Color(0xFFFF7777),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ),
     ],
   );
 }
@@ -1260,11 +1609,6 @@ class UserCctvPage extends StatelessWidget {
 
         return Scaffold(
           appBar: AppBar(
-            leading: IconButton(
-              tooltip: 'Manage cameras',
-              onPressed: () => _openManageCameras(context, user),
-              icon: const Icon(Icons.menu_rounded),
-            ),
             title: const Text('CCTV Monitoring'),
             actions: [
               if (streams.length >= 2)
@@ -1280,20 +1624,11 @@ class UserCctvPage extends StatelessWidget {
                   },
                   icon: const Icon(Icons.grid_view_outlined),
                 ),
-              IconButton(
-                tooltip: 'Manage cameras',
-                onPressed: () => _openManageCameras(context, user),
-                icon: const Icon(Icons.tune_outlined),
-              ),
             ],
           ),
           body: ListView(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
             children: [
-              _CctvModeSelector(
-                onDevicesTap: () => _openManageCameras(context, user),
-              ),
-              const SizedBox(height: 16),
               _CctvCameraCollection(
                 streams: streams,
                 onScan: () => _openManageCameras(context, user),
@@ -1302,126 +1637,10 @@ class UserCctvPage extends StatelessWidget {
                     _openCamera(context, user, stream, index),
                 onManage: () => _openManageCameras(context, user),
               ),
-              const SizedBox(height: 14),
-              InkWell(
-                borderRadius: BorderRadius.circular(18),
-                onTap: () => _openManageCameras(context, user),
-                child: Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: context.appColors.surface,
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: context.appColors.border),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 52,
-                        height: 52,
-                        decoration: BoxDecoration(
-                          color: _appAccent.withValues(alpha: .1),
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: _appAccent.withValues(alpha: .55),
-                          ),
-                        ),
-                        child: const Icon(
-                          Icons.qr_code_scanner_rounded,
-                          color: _appAccent,
-                        ),
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'How to add a camera',
-                              style: TextStyle(fontWeight: FontWeight.w900),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Scan your network or add an RTSP address manually.',
-                              style: TextStyle(
-                                color: context.appColors.mutedText,
-                                fontSize: 12,
-                                height: 1.35,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Icon(Icons.chevron_right_rounded),
-                    ],
-                  ),
-                ),
-              ),
             ],
           ),
         );
       },
-    );
-  }
-}
-
-class _CctvModeSelector extends StatelessWidget {
-  const _CctvModeSelector({required this.onDevicesTap});
-
-  final VoidCallback onDevicesTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 54,
-      decoration: BoxDecoration(
-        color: context.appColors.surface,
-        borderRadius: BorderRadius.circular(17),
-        border: Border.all(color: context.appColors.border),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Container(
-              height: double.infinity,
-              alignment: Alignment.center,
-              decoration: const BoxDecoration(
-                border: Border(bottom: BorderSide(color: _appAccent, width: 2)),
-              ),
-              child: const Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.videocam_rounded, color: _appAccent, size: 19),
-                  SizedBox(width: 8),
-                  Text(
-                    'Live View',
-                    style: TextStyle(
-                      color: _appAccent,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          Expanded(
-            child: InkWell(
-              borderRadius: BorderRadius.circular(17),
-              onTap: onDevicesTap,
-              child: const Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.qr_code_2_rounded, size: 19),
-                  SizedBox(width: 8),
-                  Text(
-                    'Devices',
-                    style: TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -1807,86 +2026,19 @@ class _UserGuidelinesPageState extends State<UserGuidelinesPage> {
     return AnimatedBuilder(
       animation: widget.controller,
       builder: (context, _) {
-        final colors = context.appColors;
         final query = _query.trim().toLowerCase();
-        final guideItems = _guideGridItems
+        final guideItems = _redesignedGuides
             .where((item) => query.isEmpty || item.matches(query))
             .toList();
 
-        return Scaffold(
-          appBar: AppBar(
-            toolbarHeight: 82,
-            title: const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Guidelines',
-                  style: TextStyle(fontSize: 25, fontWeight: FontWeight.w900),
-                ),
-                SizedBox(height: 3),
-                Text(
-                  'Learn how Roostify works and take care of your rooster.',
-                  style: TextStyle(color: Color(0xFF8E97A8), fontSize: 11),
-                ),
-              ],
-            ),
-          ),
-          body: ListView(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-            children: [
-              const SizedBox(height: 12),
-              TextField(
-                controller: _searchController,
-                onChanged: (value) => setState(() => _query = value),
-                decoration: const InputDecoration(
-                  hintText: 'Search guidelines...',
-                  prefixIcon: Icon(Icons.search_rounded),
-                ),
-              ),
-              const SizedBox(height: 18),
-              if (guideItems.isEmpty)
-                Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(28),
-                    child: Text(
-                      'No guidelines found.',
-                      style: TextStyle(color: colors.mutedText),
-                    ),
-                  ),
-                )
-              else
-                GridView.builder(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
-                    crossAxisSpacing: 12,
-                    mainAxisSpacing: 12,
-                    childAspectRatio: 1.12,
-                  ),
-                  itemCount: guideItems.length,
-                  itemBuilder: (context, index) =>
-                      _GuideGridCard(item: guideItems[index]),
-                ),
-              const SizedBox(height: 28),
-              const _DashboardSectionTitle(
-                title: 'About Roostify',
-                subtitle: 'Smart monitoring, alerts, detection, and care.',
-              ),
-              const SizedBox(height: 12),
-              const _GuidesAboutCard(),
-              const SizedBox(height: 14),
-              _GuidesSupportCard(
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => SupportChatPage(
-                      controller: widget.controller,
-                      session: widget.session,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+        return Theme(
+          data: buildAppTheme(Brightness.dark),
+          child: _RedesignedGuidesHome(
+            controller: widget.controller,
+            session: widget.session,
+            searchController: _searchController,
+            guides: guideItems,
+            onSearchChanged: (value) => setState(() => _query = value),
           ),
         );
       },
@@ -1906,6 +2058,8 @@ class _SystemBracketGuide {
   final List<(String, String)> entries;
 }
 
+// Retained for compatibility with the previous guide layout.
+// ignore: unused_element
 class _GuidesAboutCard extends StatelessWidget {
   const _GuidesAboutCard();
 
@@ -2018,6 +2172,8 @@ class _AboutFeature extends StatelessWidget {
   );
 }
 
+// Retained for compatibility with the previous guide layout.
+// ignore: unused_element
 class _GuidesSupportCard extends StatelessWidget {
   const _GuidesSupportCard({required this.onTap});
   final VoidCallback onTap;
@@ -2146,6 +2302,8 @@ const _systemBracketGuides = [
   ),
 ];
 
+// Retained for compatibility with legacy deep-link guide content.
+// ignore: unused_element
 List<_GuideGridItem> get _guideGridItems => [
   _GuideGridItem.system(
     _systemBracketGuides[0],
@@ -2257,6 +2415,8 @@ class _GuideGridItem {
       description.toLowerCase().contains(query);
 }
 
+// Retained for compatibility with the previous guide grid.
+// ignore: unused_element
 class _GuideGridCard extends StatelessWidget {
   const _GuideGridCard({required this.item});
   final _GuideGridItem item;
@@ -5663,86 +5823,170 @@ class _ProfileSubpageIntro extends StatelessWidget {
   );
 }
 
+/// Shows a single-field modal pre-filled with [controller]'s current text.
+/// On Save, writes the edited text back into [controller] and returns true;
+/// on Cancel, leaves [controller] untouched and returns false. Callers own
+/// [controller] and are expected to `setState` after a `true` result so the
+/// now-locked display field picks up the new value.
+Future<bool> _showFieldEditDialog(
+  BuildContext context, {
+  required String title,
+  required TextEditingController controller,
+  TextInputType? keyboardType,
+  TextCapitalization textCapitalization = TextCapitalization.none,
+  bool isPassword = false,
+}) async {
+  final result = await showDialog<String>(
+    context: context,
+    builder: (_) => _FieldEditDialog(
+      title: title,
+      initialValue: controller.text,
+      keyboardType: keyboardType,
+      textCapitalization: textCapitalization,
+      isPassword: isPassword,
+    ),
+  );
+  if (result == null) return false;
+  controller.text = result;
+  return true;
+}
+
+class _FieldEditDialog extends StatefulWidget {
+  const _FieldEditDialog({
+    required this.title,
+    required this.initialValue,
+    this.keyboardType,
+    this.textCapitalization = TextCapitalization.none,
+    this.isPassword = false,
+  });
+
+  final String title;
+  final String initialValue;
+  final TextInputType? keyboardType;
+  final TextCapitalization textCapitalization;
+  final bool isPassword;
+
+  @override
+  State<_FieldEditDialog> createState() => _FieldEditDialogState();
+}
+
+class _FieldEditDialogState extends State<_FieldEditDialog> {
+  late final TextEditingController _fieldController = TextEditingController(
+    text: widget.initialValue,
+  );
+  late bool _obscure = widget.isPassword;
+
+  @override
+  void dispose() {
+    // Tied to this dialog's own removal from the tree (after its exit
+    // transition finishes), not to the showDialog() await resolving —
+    // Navigator.pop() returns while the popped route is still animating
+    // out, so disposing the controller right after that await would pull
+    // it out from under the still-mounted, still-rebuilding TextField.
+    _fieldController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: TextField(
+        controller: _fieldController,
+        autofocus: true,
+        keyboardType: widget.keyboardType,
+        textCapitalization: widget.textCapitalization,
+        obscureText: _obscure,
+        decoration: InputDecoration(
+          labelText: widget.title,
+          suffixIcon: widget.isPassword
+              ? IconButton(
+                  onPressed: () => setState(() => _obscure = !_obscure),
+                  icon: Icon(
+                    _obscure
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                  ),
+                )
+              : null,
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_fieldController.text),
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
 class _ProfileInfoField extends StatelessWidget {
   const _ProfileInfoField({
     required this.icon,
     required this.label,
-    this.controller,
-    this.value,
-    this.keyboardType,
-    this.textCapitalization = TextCapitalization.none,
+    required this.value,
+    this.onTap,
     this.last = false,
-  }) : assert(controller != null || value != null);
+  });
 
   final IconData icon;
   final String label;
-  final TextEditingController? controller;
-  final String? value;
-  final TextInputType? keyboardType;
-  final TextCapitalization textCapitalization;
+  final String value;
+  final VoidCallback? onTap;
   final bool last;
 
   @override
   Widget build(BuildContext context) {
-    final editable = controller != null;
-    return Container(
-      constraints: const BoxConstraints(minHeight: 62),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-      decoration: BoxDecoration(
-        border: last
-            ? null
-            : Border(
-                bottom: BorderSide(
-                  color: context.appColors.border.withValues(alpha: .8),
+    final editable = onTap != null;
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 62),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          border: last
+              ? null
+              : Border(
+                  bottom: BorderSide(
+                    color: context.appColors.border.withValues(alpha: .8),
+                  ),
+                ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: _appAccent, size: 20),
+            const SizedBox(width: 11),
+            SizedBox(
+              width: 108,
+              child: Text(
+                label,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+            Expanded(
+              child: Text(
+                value,
+                textAlign: TextAlign.end,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: context.appColors.mutedText,
+                  fontSize: 13,
                 ),
               ),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: _appAccent, size: 20),
-          const SizedBox(width: 11),
-          SizedBox(
-            width: 108,
-            child: Text(
-              label,
-              style: const TextStyle(fontWeight: FontWeight.w800),
             ),
-          ),
-          Expanded(
-            child: editable
-                ? TextField(
-                    controller: controller,
-                    keyboardType: keyboardType,
-                    textCapitalization: textCapitalization,
-                    textAlign: TextAlign.end,
-                    style: const TextStyle(fontSize: 13),
-                    decoration: const InputDecoration(
-                      filled: false,
-                      border: InputBorder.none,
-                      enabledBorder: InputBorder.none,
-                      focusedBorder: InputBorder.none,
-                      contentPadding: EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 10,
-                      ),
-                    ),
-                  )
-                : Text(
-                    value!,
-                    textAlign: TextAlign.end,
-                    style: TextStyle(
-                      color: context.appColors.mutedText,
-                      fontSize: 13,
-                    ),
-                  ),
-          ),
-          const SizedBox(width: 8),
-          Icon(
-            editable ? Icons.edit_outlined : Icons.lock_outline_rounded,
-            color: editable ? _appAccent : context.appColors.subtleText,
-            size: 18,
-          ),
-        ],
+            const SizedBox(width: 8),
+            Icon(
+              editable ? Icons.edit_outlined : Icons.lock_outline_rounded,
+              color: editable ? _appAccent : context.appColors.subtleText,
+              size: 18,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -5820,6 +6064,22 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     Navigator.of(context).pop();
   }
 
+  Future<void> _editField({
+    required String title,
+    required TextEditingController controller,
+    TextInputType? keyboardType,
+    TextCapitalization textCapitalization = TextCapitalization.none,
+  }) async {
+    final saved = await _showFieldEditDialog(
+      context,
+      title: title,
+      controller: controller,
+      keyboardType: keyboardType,
+      textCapitalization: textCapitalization,
+    );
+    if (saved && mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -5847,8 +6107,12 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                 _ProfileInfoField(
                   icon: Icons.person_outline_rounded,
                   label: 'Full Name',
-                  controller: _nameController,
-                  textCapitalization: TextCapitalization.words,
+                  value: _nameController.text,
+                  onTap: () => _editField(
+                    title: 'Full Name',
+                    controller: _nameController,
+                    textCapitalization: TextCapitalization.words,
+                  ),
                 ),
                 _ProfileInfoField(
                   icon: Icons.key_rounded,
@@ -5858,32 +6122,52 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                 _ProfileInfoField(
                   icon: Icons.mail_outline_rounded,
                   label: 'Email',
-                  controller: _emailController,
-                  keyboardType: TextInputType.emailAddress,
+                  value: _emailController.text,
+                  onTap: () => _editField(
+                    title: 'Email',
+                    controller: _emailController,
+                    keyboardType: TextInputType.emailAddress,
+                  ),
                 ),
                 _ProfileInfoField(
                   icon: Icons.call_outlined,
                   label: 'Contact Number',
-                  controller: _contactController,
-                  keyboardType: TextInputType.phone,
+                  value: _contactController.text,
+                  onTap: () => _editField(
+                    title: 'Contact Number',
+                    controller: _contactController,
+                    keyboardType: TextInputType.phone,
+                  ),
                 ),
                 _ProfileInfoField(
                   icon: Icons.home_work_outlined,
                   label: 'Farm Name',
-                  controller: _farmNameController,
-                  textCapitalization: TextCapitalization.words,
+                  value: _farmNameController.text,
+                  onTap: () => _editField(
+                    title: 'Farm Name',
+                    controller: _farmNameController,
+                    textCapitalization: TextCapitalization.words,
+                  ),
                 ),
                 _ProfileInfoField(
                   icon: Icons.location_on_outlined,
                   label: 'Location',
-                  controller: _addressController,
-                  textCapitalization: TextCapitalization.sentences,
+                  value: _addressController.text,
+                  onTap: () => _editField(
+                    title: 'Location',
+                    controller: _addressController,
+                    textCapitalization: TextCapitalization.sentences,
+                  ),
                 ),
                 _ProfileInfoField(
                   icon: Icons.description_outlined,
                   label: 'Short Bio',
-                  controller: _bioController,
-                  textCapitalization: TextCapitalization.sentences,
+                  value: _bioController.text,
+                  onTap: () => _editField(
+                    title: 'Short Bio',
+                    controller: _bioController,
+                    textCapitalization: TextCapitalization.sentences,
+                  ),
                   last: true,
                 ),
               ],
@@ -5942,74 +6226,65 @@ class _CredentialTextFieldCard extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.controller,
-    required this.obscureText,
-    this.onVisibilityTap,
-    this.onChanged,
-    this.keyboardType,
+    required this.isPassword,
+    required this.onTap,
     this.footer,
   });
   final IconData icon;
   final String label;
   final TextEditingController controller;
-  final bool obscureText;
-  final VoidCallback? onVisibilityTap;
-  final ValueChanged<String>? onChanged;
-  final TextInputType? keyboardType;
+  final bool isPassword;
+  final VoidCallback onTap;
   final Widget? footer;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.fromLTRB(15, 8, 10, 8),
-    decoration: BoxDecoration(
-      color: context.appColors.surface,
-      borderRadius: BorderRadius.circular(15),
-      border: Border.all(color: context.appColors.border),
-    ),
-    child: Column(
-      children: [
-        Row(
-          children: [
-            Icon(icon, color: _appAccent, size: 21),
-            const SizedBox(width: 12),
-            SizedBox(
-              width: 128,
-              child: Text(
-                label,
-                style: const TextStyle(fontWeight: FontWeight.w800),
+  Widget build(BuildContext context) {
+    final displayValue = controller.text.isEmpty
+        ? 'Not set'
+        : (isPassword ? '•' * controller.text.length : controller.text);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(15, 8, 10, 8),
+      decoration: BoxDecoration(
+        color: context.appColors.surface,
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: context.appColors.border),
+      ),
+      child: Column(
+        children: [
+          InkWell(
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Row(
+                children: [
+                  Icon(icon, color: _appAccent, size: 21),
+                  const SizedBox(width: 12),
+                  SizedBox(
+                    width: 128,
+                    child: Text(
+                      label,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      displayValue,
+                      textAlign: TextAlign.end,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: context.appColors.mutedText),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  const Icon(Icons.edit_outlined, color: _appAccent, size: 18),
+                ],
               ),
             ),
-            Expanded(
-              child: TextField(
-                controller: controller,
-                obscureText: obscureText,
-                keyboardType: keyboardType,
-                onChanged: onChanged,
-                textAlign: TextAlign.end,
-                decoration: const InputDecoration(
-                  filled: false,
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(vertical: 10),
-                ),
-              ),
-            ),
-            if (onVisibilityTap != null)
-              IconButton(
-                onPressed: onVisibilityTap,
-                icon: Icon(
-                  obscureText
-                      ? Icons.visibility_outlined
-                      : Icons.visibility_off_outlined,
-                  size: 20,
-                ),
-              ),
-          ],
-        ),
-        ?footer,
-      ],
-    ),
-  );
+          ),
+          ?footer,
+        ],
+      ),
+    );
+  }
 }
 
 class _PasswordStrengthIndicator extends StatelessWidget {
@@ -6103,9 +6378,6 @@ class _CredentialsEditPageState extends State<CredentialsEditPage> {
             ? '${widget.user.username}@roostify.com'
             : widget.user.email,
       );
-  bool _showCurrentPassword = false;
-  bool _showNewPassword = false;
-  bool _showConfirmPassword = false;
   String? _error;
 
   @override
@@ -6139,6 +6411,22 @@ class _CredentialsEditPageState extends State<CredentialsEditPage> {
     Navigator.of(context).pop();
   }
 
+  Future<void> _editField({
+    required String title,
+    required TextEditingController controller,
+    TextInputType? keyboardType,
+    bool isPassword = false,
+  }) async {
+    final saved = await _showFieldEditDialog(
+      context,
+      title: title,
+      controller: controller,
+      keyboardType: keyboardType,
+      isPassword: isPassword,
+    );
+    if (saved && mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -6168,19 +6456,24 @@ class _CredentialsEditPageState extends State<CredentialsEditPage> {
             icon: Icons.lock_outline_rounded,
             label: 'Current Password',
             controller: _currentPasswordController,
-            obscureText: !_showCurrentPassword,
-            onVisibilityTap: () =>
-                setState(() => _showCurrentPassword = !_showCurrentPassword),
+            isPassword: true,
+            onTap: () => _editField(
+              title: 'Current Password',
+              controller: _currentPasswordController,
+              isPassword: true,
+            ),
           ),
           const SizedBox(height: 10),
           _CredentialTextFieldCard(
             icon: Icons.lock_reset_rounded,
             label: 'New Password',
             controller: _passwordController,
-            obscureText: !_showNewPassword,
-            onChanged: (_) => setState(() {}),
-            onVisibilityTap: () =>
-                setState(() => _showNewPassword = !_showNewPassword),
+            isPassword: true,
+            onTap: () => _editField(
+              title: 'New Password',
+              controller: _passwordController,
+              isPassword: true,
+            ),
             footer: _PasswordStrengthIndicator(
               password: _passwordController.text,
             ),
@@ -6190,17 +6483,24 @@ class _CredentialsEditPageState extends State<CredentialsEditPage> {
             icon: Icons.lock_outline_rounded,
             label: 'Confirm New Password',
             controller: _confirmPasswordController,
-            obscureText: !_showConfirmPassword,
-            onVisibilityTap: () =>
-                setState(() => _showConfirmPassword = !_showConfirmPassword),
+            isPassword: true,
+            onTap: () => _editField(
+              title: 'Confirm New Password',
+              controller: _confirmPasswordController,
+              isPassword: true,
+            ),
           ),
           const SizedBox(height: 10),
           _CredentialTextFieldCard(
             icon: Icons.mail_outline_rounded,
             label: 'Recovery Email',
             controller: _recoveryEmailController,
-            keyboardType: TextInputType.emailAddress,
-            obscureText: false,
+            isPassword: false,
+            onTap: () => _editField(
+              title: 'Recovery Email',
+              controller: _recoveryEmailController,
+              keyboardType: TextInputType.emailAddress,
+            ),
           ),
           if (_error != null) ...[
             const SizedBox(height: 12),
@@ -6905,6 +7205,11 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
           if (detected) ...[
+            Align(
+              alignment: Alignment.centerLeft,
+              child: _RoosterCountBadge(count: _result!.detectionCount),
+            ),
+            const SizedBox(height: 10),
             Row(
               children: [
                 Expanded(
@@ -6959,7 +7264,6 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
                       ),
                     ),
                   ),
-                const _ScanFrameGuide(),
                 Positioned(
                   left: 20,
                   right: 20,
@@ -6998,6 +7302,39 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
                 onTap: _toggleTorch,
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RoosterCountBadge extends StatelessWidget {
+  const _RoosterCountBadge({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      decoration: BoxDecoration(
+        color: _appAccent.withValues(alpha: .12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: _appAccent.withValues(alpha: .4)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.pets_rounded, color: _appAccent, size: 15),
+          const SizedBox(width: 6),
+          Text(
+            count == 1 ? '1 rooster found' : '$count roosters found',
+            style: const TextStyle(
+              color: _appAccent,
+              fontWeight: FontWeight.w800,
+              fontSize: 12,
+            ),
           ),
         ],
       ),
@@ -7051,29 +7388,6 @@ class _ScanStatusCard extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _ScanFrameGuide extends StatelessWidget {
-  const _ScanFrameGuide();
-
-  @override
-  Widget build(BuildContext context) {
-    return IgnorePointer(
-      child: Center(
-        child: Container(
-          width: 250,
-          height: 270,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(
-              color: _appAccent.withValues(alpha: .78),
-              width: 3,
-            ),
-          ),
-        ),
       ),
     );
   }

@@ -1136,10 +1136,6 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          // The PTZ overlay needs enough width for its direction pad; in a
-          // multi-camera grid each tile is far narrower than that, so it
-          // only appears once this card has room to show it usefully.
-          final showPtzOverlay = constraints.maxWidth >= 260;
           return Stack(
             children: [
               Positioned.fill(
@@ -1257,18 +1253,6 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                       selectedProfile: _playbackProfile,
                       onSelected: _selectPlaybackProfile,
                     ),
-                    if (showPtzOverlay) ...[
-                      const SizedBox(width: 8),
-                      _LiveFeedIconButton(
-                        tooltip: _showPtzControls
-                            ? 'Hide PTZ controls'
-                            : 'Show PTZ controls',
-                        icon: _showPtzControls
-                            ? Icons.control_camera
-                            : Icons.control_camera_outlined,
-                        onPressed: _togglePtzControls,
-                      ),
-                    ],
                   ],
                 ),
               ),
@@ -1280,21 +1264,6 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                   color: Color(0xFFFFCE67),
                 ),
               ),
-              if (showPtzOverlay && _showPtzControls)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 12,
-                  child: Center(
-                    child: Theme(
-                      data: buildAppTheme(Brightness.dark),
-                      child: V380PtzControlPanel(
-                        streamUrl: widget.streamUrl,
-                        compactOverlay: true,
-                      ),
-                    ),
-                  ),
-                ),
               Positioned(
                 left: 18,
                 right: 18,
