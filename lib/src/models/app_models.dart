@@ -181,11 +181,13 @@ class MonitorSnapshot {
 
   SensorWarningLevel get airLevel => airLevelFor(airPpm);
 
+  // A live reading always yields at least one alert (falling back to an
+  // "Environment stable" info entry when nothing's wrong), so once real
+  // ESP32 data starts flowing it fully replaces whatever was here before —
+  // including any hardcoded seed alerts (e.g. MonitorSnapshot.sampleOne's
+  // demo "Abnormal CCTV movement" entry) that would otherwise never get
+  // cleared, since this is the only place monitor.alerts is ever updated.
   MonitorSnapshot withEnvironmentReading(Esp32SensorReading reading) {
-    final retainedAlerts = alerts
-        .where((alert) => !_environmentAlertCategories.contains(alert.category))
-        .toList();
-
     return MonitorSnapshot(
       temperature: reading.temperatureC,
       humidity: reading.humidityPercent,
@@ -203,21 +205,11 @@ class MonitorSnapshot {
       movementLabel: movementLabel,
       cctvStatus: cctvStatus,
       cctvSummary: cctvSummary,
-      alerts: [..._environmentAlerts(reading), ...retainedAlerts],
+      alerts: _environmentAlerts(reading),
       dhtAvailable: reading.dhtAvailable,
       airAvailable: reading.airAvailable,
     );
   }
-
-  static const Set<String> _environmentAlertCategories = {
-    'Temperature',
-    'Humidity',
-    'Air Quality',
-    'Air Pollution',
-    'Environment',
-    'System',
-    'Setup',
-  };
 
   static SensorWarningLevel temperatureLevelFor(
     double value, {

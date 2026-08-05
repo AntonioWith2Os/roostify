@@ -838,33 +838,12 @@ class _AppShellState extends State<AppShell> {
     final l10n = AppLocalizations.of(context)!;
     final isAdmin = widget.session.user.isAdmin;
 
-    final pages = isAdmin
-        ? [
-            AdminOverviewPage(controller: widget.controller),
-            AdminUsersPage(controller: widget.controller),
-            AdminCctvPage(controller: widget.controller),
-            SupportInboxPage(controller: widget.controller),
-            ProfilePage(controller: widget.controller, session: widget.session),
-          ]
-        : [
-            UserDashboardPage(
-              controller: widget.controller,
-              session: widget.session,
-            ),
-            UserCctvPage(
-              controller: widget.controller,
-              session: widget.session,
-            ),
-            UserManualCameraTabPage(
-              controller: widget.controller,
-              session: widget.session,
-            ),
-            UserGuidelinesPage(
-              controller: widget.controller,
-              session: widget.session,
-            ),
-            ProfilePage(controller: widget.controller, session: widget.session),
-          ];
+    if (isAdmin) {
+      return AdminRedesignShell(
+        controller: widget.controller,
+        session: widget.session,
+      );
+    }
 
     final destinations = isAdmin
         ? [
@@ -925,6 +904,49 @@ class _AppShellState extends State<AppShell> {
     return AnimatedBuilder(
       animation: widget.controller,
       builder: (context, _) {
+        // Rebuilt on every controller notification (ESP32 sensor readings,
+        // etc.) so the pages themselves pick up fresh data — building this
+        // list outside the AnimatedBuilder would hand it the same widget
+        // instances every time, which Flutter's element diffing treats as
+        // identical and skips rebuilding.
+        final pages = isAdmin
+            ? [
+                AdminOverviewPage(
+                  controller: widget.controller,
+                  adminUser: widget.session.user,
+                  onNavigateToTab: (index) => setState(() => _index = index),
+                ),
+                AdminUsersPage(controller: widget.controller),
+                AdminCctvPage(controller: widget.controller),
+                SupportInboxPage(controller: widget.controller),
+                ProfilePage(
+                  controller: widget.controller,
+                  session: widget.session,
+                ),
+              ]
+            : [
+                UserDashboardPage(
+                  controller: widget.controller,
+                  session: widget.session,
+                ),
+                UserCctvPage(
+                  controller: widget.controller,
+                  session: widget.session,
+                ),
+                UserManualCameraTabPage(
+                  controller: widget.controller,
+                  session: widget.session,
+                ),
+                UserGuidelinesPage(
+                  controller: widget.controller,
+                  session: widget.session,
+                ),
+                ProfilePage(
+                  controller: widget.controller,
+                  session: widget.session,
+                ),
+              ];
+
         return Scaffold(
           body: pages[_index],
           floatingActionButton: isAdmin
@@ -4684,43 +4706,51 @@ class ProfilePage extends StatelessWidget {
   Widget build(BuildContext context) {
     final user = controller.userByUsername(session.user.username)!;
     return Scaffold(
-      appBar: AppBar(
-        toolbarHeight: 74,
-        title: const Text(
-          'Profile',
-          style: TextStyle(fontSize: 27, fontWeight: FontWeight.w900),
-        ),
-        actions: [
-          IconButton(
-            tooltip: 'App settings',
-            onPressed: () => _showProfileContentDialog(
-              context,
-              Scaffold(
-                appBar: AppBar(
-                  title: const Text('App Settings'),
-                  leading: IconButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close_rounded),
-                  ),
-                ),
-                body: ListView(
-                  padding: const EdgeInsets.all(18),
-                  children: [
-                    ThemePreferenceCard(
-                      controller: controller,
-                      username: session.user.username,
-                    ),
-                  ],
-                ),
+      appBar: user.isAdmin
+          ? null
+          : AppBar(
+              toolbarHeight: 74,
+              title: const Text(
+                'Profile',
+                style: TextStyle(fontSize: 27, fontWeight: FontWeight.w900),
               ),
+              actions: [
+                IconButton(
+                  tooltip: 'App settings',
+                  onPressed: () => _showProfileContentDialog(
+                    context,
+                    Scaffold(
+                      appBar: AppBar(
+                        title: const Text('App Settings'),
+                        leading: IconButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                      ),
+                      body: ListView(
+                        padding: const EdgeInsets.all(18),
+                        children: [
+                          ThemePreferenceCard(
+                            controller: controller,
+                            username: session.user.username,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  icon: const Icon(Icons.settings_outlined),
+                ),
+              ],
             ),
-            icon: const Icon(Icons.settings_outlined),
-          ),
-        ],
-      ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        padding: EdgeInsets.fromLTRB(16, user.isAdmin ? 18 : 8, 16, 24),
         children: [
+          if (user.isAdmin)
+            const _AdminPageHeader(
+              title: 'Admin Profile',
+              subtitle: 'Manage your account, preferences, and admin access.',
+              icon: Icons.settings_outlined,
+            ),
           _ProfileSummaryCard(
             controller: controller,
             user: user,
@@ -4816,14 +4846,16 @@ class ProfilePage extends StatelessWidget {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        tooltip: 'Help and support',
-        onPressed: () => _showProfileContentDialog(
-          context,
-          SupportChatPage(controller: controller, session: session),
-        ),
-        child: const Icon(Icons.chat_bubble_outline_rounded),
-      ),
+      floatingActionButton: user.isAdmin
+          ? null
+          : FloatingActionButton(
+              tooltip: 'Help and support',
+              onPressed: () => _showProfileContentDialog(
+                context,
+                SupportChatPage(controller: controller, session: session),
+              ),
+              child: const Icon(Icons.chat_bubble_outline_rounded),
+            ),
     );
   }
 }
@@ -5823,173 +5855,85 @@ class _ProfileSubpageIntro extends StatelessWidget {
   );
 }
 
-/// Shows a single-field modal pre-filled with [controller]'s current text.
-/// On Save, writes the edited text back into [controller] and returns true;
-/// on Cancel, leaves [controller] untouched and returns false. Callers own
-/// [controller] and are expected to `setState` after a `true` result so the
-/// now-locked display field picks up the new value.
-Future<bool> _showFieldEditDialog(
-  BuildContext context, {
-  required String title,
-  required TextEditingController controller,
-  TextInputType? keyboardType,
-  TextCapitalization textCapitalization = TextCapitalization.none,
-  bool isPassword = false,
-}) async {
-  final result = await showDialog<String>(
-    context: context,
-    builder: (_) => _FieldEditDialog(
-      title: title,
-      initialValue: controller.text,
-      keyboardType: keyboardType,
-      textCapitalization: textCapitalization,
-      isPassword: isPassword,
-    ),
-  );
-  if (result == null) return false;
-  controller.text = result;
-  return true;
-}
-
-class _FieldEditDialog extends StatefulWidget {
-  const _FieldEditDialog({
-    required this.title,
-    required this.initialValue,
-    this.keyboardType,
-    this.textCapitalization = TextCapitalization.none,
-    this.isPassword = false,
-  });
-
-  final String title;
-  final String initialValue;
-  final TextInputType? keyboardType;
-  final TextCapitalization textCapitalization;
-  final bool isPassword;
-
-  @override
-  State<_FieldEditDialog> createState() => _FieldEditDialogState();
-}
-
-class _FieldEditDialogState extends State<_FieldEditDialog> {
-  late final TextEditingController _fieldController = TextEditingController(
-    text: widget.initialValue,
-  );
-  late bool _obscure = widget.isPassword;
-
-  @override
-  void dispose() {
-    // Tied to this dialog's own removal from the tree (after its exit
-    // transition finishes), not to the showDialog() await resolving —
-    // Navigator.pop() returns while the popped route is still animating
-    // out, so disposing the controller right after that await would pull
-    // it out from under the still-mounted, still-rebuilding TextField.
-    _fieldController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.title),
-      content: TextField(
-        controller: _fieldController,
-        autofocus: true,
-        keyboardType: widget.keyboardType,
-        textCapitalization: widget.textCapitalization,
-        obscureText: _obscure,
-        decoration: InputDecoration(
-          labelText: widget.title,
-          suffixIcon: widget.isPassword
-              ? IconButton(
-                  onPressed: () => setState(() => _obscure = !_obscure),
-                  icon: Icon(
-                    _obscure
-                        ? Icons.visibility_outlined
-                        : Icons.visibility_off_outlined,
-                  ),
-                )
-              : null,
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.of(context).pop(_fieldController.text),
-          child: const Text('Save'),
-        ),
-      ],
-    );
-  }
-}
-
-class _ProfileInfoField extends StatelessWidget {
-  const _ProfileInfoField({
+class _ProfileFormField extends StatelessWidget {
+  const _ProfileFormField({
     required this.icon,
     required this.label,
-    required this.value,
-    this.onTap,
-    this.last = false,
+    required this.controller,
+    this.keyboardType,
+    this.readOnly = false,
+    this.obscureText = false,
+    this.prefixText,
+    this.suffixIcon,
+    this.onChanged,
   });
 
   final IconData icon;
   final String label;
-  final String value;
-  final VoidCallback? onTap;
-  final bool last;
+  final TextEditingController controller;
+  final TextInputType? keyboardType;
+  final bool readOnly;
+  final bool obscureText;
+  final String? prefixText;
+  final Widget? suffixIcon;
+  final ValueChanged<String>? onChanged;
 
   @override
-  Widget build(BuildContext context) {
-    final editable = onTap != null;
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        constraints: const BoxConstraints(minHeight: 62),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-        decoration: BoxDecoration(
-          border: last
-              ? null
-              : Border(
-                  bottom: BorderSide(
-                    color: context.appColors.border.withValues(alpha: .8),
-                  ),
-                ),
-        ),
-        child: Row(
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 16),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
           children: [
-            Icon(icon, color: _appAccent, size: 20),
-            const SizedBox(width: 11),
-            SizedBox(
-              width: 108,
-              child: Text(
-                label,
-                style: const TextStyle(fontWeight: FontWeight.w800),
-              ),
-            ),
-            Expanded(
-              child: Text(
-                value,
-                textAlign: TextAlign.end,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: context.appColors.mutedText,
-                  fontSize: 13,
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Icon(
-              editable ? Icons.edit_outlined : Icons.lock_outline_rounded,
-              color: editable ? _appAccent : context.appColors.subtleText,
-              size: 18,
+            Icon(icon, color: _appAccent, size: 22),
+            const SizedBox(width: 12),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
             ),
           ],
         ),
-      ),
-    );
-  }
+        const SizedBox(height: 9),
+        Padding(
+          padding: const EdgeInsets.only(left: 40),
+          child: TextField(
+            controller: controller,
+            keyboardType: keyboardType,
+            readOnly: readOnly,
+            obscureText: obscureText,
+            onChanged: onChanged,
+            decoration: InputDecoration(
+              prefixText: prefixText,
+              suffixIcon: suffixIcon,
+              filled: true,
+              fillColor: context.appColors.surface,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 15,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(15),
+                borderSide: BorderSide(
+                  color: _appAccent.withValues(alpha: .75),
+                ),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(15),
+                borderSide: const BorderSide(color: _appAccent, width: 1.7),
+              ),
+              disabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(15),
+                borderSide: BorderSide(
+                  color: _appAccent.withValues(alpha: .35),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class ProfileEditPage extends StatefulWidget {
@@ -6007,14 +5951,16 @@ class ProfileEditPage extends StatefulWidget {
 }
 
 class _ProfileEditPageState extends State<ProfileEditPage> {
+  late final TextEditingController _usernameController = TextEditingController(
+    text: widget.user.username,
+  );
   late final TextEditingController _nameController = TextEditingController(
     text: widget.user.displayName,
   );
   late final TextEditingController _contactController = TextEditingController(
-    text: widget.user.contactNumber,
-  );
-  late final TextEditingController _addressController = TextEditingController(
-    text: widget.user.address,
+    text: widget.user.contactNumber
+        .replaceFirst(RegExp(r'^\s*\+?63\s*'), '')
+        .trim(),
   );
   late final TextEditingController _emailController = TextEditingController(
     text: widget.user.email.isEmpty
@@ -6025,11 +5971,6 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     text: widget.user.farmName.isEmpty
         ? 'Roostify Rooster Farm'
         : widget.user.farmName,
-  );
-  late final TextEditingController _bioController = TextEditingController(
-    text: widget.user.shortBio.isEmpty
-        ? 'Passionate about raising healthy roosters.'
-        : widget.user.shortBio,
   );
 
   @override
@@ -6042,42 +5983,28 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     // ties controller lifetime to the page's actual removal (after its
     // transition finishes) instead of whenComplete()-style early disposal.
     _nameController.dispose();
+    _usernameController.dispose();
     _contactController.dispose();
-    _addressController.dispose();
     _emailController.dispose();
     _farmNameController.dispose();
-    _bioController.dispose();
     super.dispose();
   }
 
-  void _save() {
+  void _persist() {
+    final localNumber = _contactController.text
+        .replaceFirst(RegExp(r'^\s*\+?63\s*'), '')
+        .trim();
     widget.controller.updateProfileDetails(
       widget.user.username,
       displayName: _nameController.text,
-      contactNumber: _contactController.text,
-      address: _addressController.text,
+      contactNumber: localNumber.isEmpty ? '' : '+63 $localNumber',
+      address: widget.user.address,
       facebookContact: widget.user.facebookContact,
       email: _emailController.text,
       farmName: _farmNameController.text,
-      shortBio: _bioController.text,
+      shortBio: widget.user.shortBio,
     );
-    Navigator.of(context).pop();
-  }
-
-  Future<void> _editField({
-    required String title,
-    required TextEditingController controller,
-    TextInputType? keyboardType,
-    TextCapitalization textCapitalization = TextCapitalization.none,
-  }) async {
-    final saved = await _showFieldEditDialog(
-      context,
-      title: title,
-      controller: controller,
-      keyboardType: keyboardType,
-      textCapitalization: textCapitalization,
-    );
-    if (saved && mounted) setState(() {});
+    if (mounted) setState(() {});
   }
 
   @override
@@ -6094,193 +6021,65 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
         children: [
           _ProfileEditorHero(controller: widget.controller, user: widget.user),
-          const SizedBox(height: 18),
-          Container(
-            clipBehavior: Clip.antiAlias,
-            decoration: BoxDecoration(
-              color: context.appColors.surface,
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: context.appColors.border),
-            ),
-            child: Column(
-              children: [
-                _ProfileInfoField(
-                  icon: Icons.person_outline_rounded,
-                  label: 'Full Name',
-                  value: _nameController.text,
-                  onTap: () => _editField(
-                    title: 'Full Name',
-                    controller: _nameController,
-                    textCapitalization: TextCapitalization.words,
-                  ),
-                ),
-                _ProfileInfoField(
-                  icon: Icons.key_rounded,
-                  label: 'Username',
-                  value: '@${widget.user.username}',
-                ),
-                _ProfileInfoField(
-                  icon: Icons.mail_outline_rounded,
-                  label: 'Email',
-                  value: _emailController.text,
-                  onTap: () => _editField(
-                    title: 'Email',
-                    controller: _emailController,
-                    keyboardType: TextInputType.emailAddress,
-                  ),
-                ),
-                _ProfileInfoField(
-                  icon: Icons.call_outlined,
-                  label: 'Contact Number',
-                  value: _contactController.text,
-                  onTap: () => _editField(
-                    title: 'Contact Number',
-                    controller: _contactController,
-                    keyboardType: TextInputType.phone,
-                  ),
-                ),
-                _ProfileInfoField(
-                  icon: Icons.home_work_outlined,
-                  label: 'Farm Name',
-                  value: _farmNameController.text,
-                  onTap: () => _editField(
-                    title: 'Farm Name',
-                    controller: _farmNameController,
-                    textCapitalization: TextCapitalization.words,
-                  ),
-                ),
-                _ProfileInfoField(
-                  icon: Icons.location_on_outlined,
-                  label: 'Location',
-                  value: _addressController.text,
-                  onTap: () => _editField(
-                    title: 'Location',
-                    controller: _addressController,
-                    textCapitalization: TextCapitalization.sentences,
-                  ),
-                ),
-                _ProfileInfoField(
-                  icon: Icons.description_outlined,
-                  label: 'Short Bio',
-                  value: _bioController.text,
-                  onTap: () => _editField(
-                    title: 'Short Bio',
-                    controller: _bioController,
-                    textCapitalization: TextCapitalization.sentences,
-                  ),
-                  last: true,
-                ),
-              ],
-            ),
-          ),
           const SizedBox(height: 24),
-          SizedBox(
-            height: 54,
-            child: FilledButton(
-              onPressed: _save,
-              child: const Text('Save Changes'),
-            ),
+          _ProfileFormField(
+            icon: Icons.person_outline_rounded,
+            label: 'Full Name',
+            controller: _nameController,
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CredentialValueCard extends StatelessWidget {
-  const _CredentialValueCard({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
-  final IconData icon;
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 15),
-    decoration: BoxDecoration(
-      color: context.appColors.surface,
-      borderRadius: BorderRadius.circular(15),
-      border: Border.all(color: context.appColors.border),
-    ),
-    child: Row(
-      children: [
-        Icon(icon, color: _appAccent, size: 21),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Text(
-            label,
-            style: const TextStyle(fontWeight: FontWeight.w800),
+          _ProfileFormField(
+            icon: Icons.key_rounded,
+            label: 'Username',
+            controller: _usernameController,
+            readOnly: true,
           ),
-        ),
-        Text(value, style: TextStyle(color: context.appColors.mutedText)),
-      ],
-    ),
-  );
-}
-
-class _CredentialTextFieldCard extends StatelessWidget {
-  const _CredentialTextFieldCard({
-    required this.icon,
-    required this.label,
-    required this.controller,
-    required this.isPassword,
-    required this.onTap,
-    this.footer,
-  });
-  final IconData icon;
-  final String label;
-  final TextEditingController controller;
-  final bool isPassword;
-  final VoidCallback onTap;
-  final Widget? footer;
-
-  @override
-  Widget build(BuildContext context) {
-    final displayValue = controller.text.isEmpty
-        ? 'Not set'
-        : (isPassword ? '•' * controller.text.length : controller.text);
-    return Container(
-      padding: const EdgeInsets.fromLTRB(15, 8, 10, 8),
-      decoration: BoxDecoration(
-        color: context.appColors.surface,
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: context.appColors.border),
-      ),
-      child: Column(
-        children: [
-          InkWell(
-            onTap: onTap,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              child: Row(
-                children: [
-                  Icon(icon, color: _appAccent, size: 21),
-                  const SizedBox(width: 12),
-                  SizedBox(
-                    width: 128,
-                    child: Text(
-                      label,
-                      style: const TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      displayValue,
-                      textAlign: TextAlign.end,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: context.appColors.mutedText),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  const Icon(Icons.edit_outlined, color: _appAccent, size: 18),
-                ],
+          _ProfileFormField(
+            icon: Icons.mail_outline_rounded,
+            label: 'Email',
+            controller: _emailController,
+            keyboardType: TextInputType.emailAddress,
+          ),
+          _ProfileFormField(
+            icon: Icons.call_outlined,
+            label: 'Contact Number',
+            controller: _contactController,
+            keyboardType: TextInputType.phone,
+            prefixText: '+63 ',
+          ),
+          _ProfileFormField(
+            icon: Icons.home_work_outlined,
+            label: 'Farm Name',
+            controller: _farmNameController,
+          ),
+          const SizedBox(height: 2),
+          FilledButton.icon(
+            onPressed: () {
+              _persist();
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Profile information saved.')),
+              );
+            },
+            icon: const Icon(Icons.check_circle_outline_rounded),
+            label: const Text('Save Changes'),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size.fromHeight(54),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(28),
               ),
             ),
           ),
-          ?footer,
+          const SizedBox(height: 10),
+          OutlinedButton(
+            onPressed: () => Navigator.of(context).pop(),
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(50),
+              side: const BorderSide(color: _appAccent),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(25),
+              ),
+            ),
+            child: const Text('Cancel'),
+          ),
         ],
       ),
     );
@@ -6367,6 +6166,9 @@ class CredentialsEditPage extends StatefulWidget {
 }
 
 class _CredentialsEditPageState extends State<CredentialsEditPage> {
+  late final TextEditingController _usernameController = TextEditingController(
+    text: widget.user.username,
+  );
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _currentPasswordController =
       TextEditingController();
@@ -6379,6 +6181,9 @@ class _CredentialsEditPageState extends State<CredentialsEditPage> {
             : widget.user.email,
       );
   String? _error;
+  bool _showCurrentPassword = false;
+  bool _showNewPassword = false;
+  bool _showConfirmPassword = false;
 
   @override
   void dispose() {
@@ -6387,44 +6192,30 @@ class _CredentialsEditPageState extends State<CredentialsEditPage> {
     // to the page's actual removal, after its transition finishes — see the
     // same note on ProfileEditPage's dispose().
     _passwordController.dispose();
+    _usernameController.dispose();
     _currentPasswordController.dispose();
     _confirmPasswordController.dispose();
     _recoveryEmailController.dispose();
     super.dispose();
   }
 
-  void _save() {
+  void _saveCredentials() {
     if (_passwordController.text != _confirmPasswordController.text) {
       setState(() => _error = 'New passwords do not match.');
       return;
     }
-    final result = widget.controller.updateCredentials(
+    final error = widget.controller.updateCredentials(
       widget.user.username,
       newPassword: _passwordController.text,
       currentPassword: _currentPasswordController.text,
       recoveryEmail: _recoveryEmailController.text,
     );
-    if (result != null) {
-      setState(() => _error = result);
-      return;
+    setState(() => _error = error);
+    if (error == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Username and password settings saved.')),
+      );
     }
-    Navigator.of(context).pop();
-  }
-
-  Future<void> _editField({
-    required String title,
-    required TextEditingController controller,
-    TextInputType? keyboardType,
-    bool isPassword = false,
-  }) async {
-    final saved = await _showFieldEditDialog(
-      context,
-      title: title,
-      controller: controller,
-      keyboardType: keyboardType,
-      isPassword: isPassword,
-    );
-    if (saved && mounted) setState(() {});
   }
 
   @override
@@ -6445,62 +6236,68 @@ class _CredentialsEditPageState extends State<CredentialsEditPage> {
             title: 'Username & Password',
             subtitle: 'Manage your login credentials securely.',
           ),
-          const SizedBox(height: 18),
-          _CredentialValueCard(
+          const SizedBox(height: 24),
+          _ProfileFormField(
             icon: Icons.person_outline_rounded,
             label: 'Current Username',
-            value: '@${widget.user.username}',
+            controller: _usernameController,
+            readOnly: true,
           ),
-          const SizedBox(height: 10),
-          _CredentialTextFieldCard(
+          _ProfileFormField(
             icon: Icons.lock_outline_rounded,
             label: 'Current Password',
             controller: _currentPasswordController,
-            isPassword: true,
-            onTap: () => _editField(
-              title: 'Current Password',
-              controller: _currentPasswordController,
-              isPassword: true,
+            obscureText: !_showCurrentPassword,
+            suffixIcon: IconButton(
+              onPressed: () => setState(
+                () => _showCurrentPassword = !_showCurrentPassword,
+              ),
+              icon: Icon(
+                _showCurrentPassword
+                    ? Icons.visibility_outlined
+                    : Icons.visibility_off_outlined,
+              ),
             ),
           ),
-          const SizedBox(height: 10),
-          _CredentialTextFieldCard(
+          _ProfileFormField(
             icon: Icons.lock_reset_rounded,
             label: 'New Password',
             controller: _passwordController,
-            isPassword: true,
-            onTap: () => _editField(
-              title: 'New Password',
-              controller: _passwordController,
-              isPassword: true,
-            ),
-            footer: _PasswordStrengthIndicator(
-              password: _passwordController.text,
+            obscureText: !_showNewPassword,
+            onChanged: (_) => setState(() {}),
+            suffixIcon: IconButton(
+              onPressed: () =>
+                  setState(() => _showNewPassword = !_showNewPassword),
+              icon: Icon(
+                _showNewPassword
+                    ? Icons.visibility_outlined
+                    : Icons.visibility_off_outlined,
+              ),
             ),
           ),
+          _PasswordStrengthIndicator(password: _passwordController.text),
           const SizedBox(height: 10),
-          _CredentialTextFieldCard(
+          _ProfileFormField(
             icon: Icons.lock_outline_rounded,
             label: 'Confirm New Password',
             controller: _confirmPasswordController,
-            isPassword: true,
-            onTap: () => _editField(
-              title: 'Confirm New Password',
-              controller: _confirmPasswordController,
-              isPassword: true,
+            obscureText: !_showConfirmPassword,
+            suffixIcon: IconButton(
+              onPressed: () => setState(
+                () => _showConfirmPassword = !_showConfirmPassword,
+              ),
+              icon: Icon(
+                _showConfirmPassword
+                    ? Icons.visibility_outlined
+                    : Icons.visibility_off_outlined,
+              ),
             ),
           ),
-          const SizedBox(height: 10),
-          _CredentialTextFieldCard(
+          _ProfileFormField(
             icon: Icons.mail_outline_rounded,
             label: 'Recovery Email',
             controller: _recoveryEmailController,
-            isPassword: false,
-            onTap: () => _editField(
-              title: 'Recovery Email',
-              controller: _recoveryEmailController,
-              keyboardType: TextInputType.emailAddress,
-            ),
+            keyboardType: TextInputType.emailAddress,
           ),
           if (_error != null) ...[
             const SizedBox(height: 12),
@@ -6512,6 +6309,30 @@ class _CredentialsEditPageState extends State<CredentialsEditPage> {
               ),
             ),
           ],
+          const SizedBox(height: 4),
+          FilledButton.icon(
+            onPressed: _saveCredentials,
+            icon: const Icon(Icons.check_circle_outline_rounded),
+            label: const Text('Save Changes'),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size.fromHeight(54),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(28),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton(
+            onPressed: () => Navigator.of(context).pop(),
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(50),
+              side: const BorderSide(color: _appAccent),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(25),
+              ),
+            ),
+            child: const Text('Cancel'),
+          ),
           const SizedBox(height: 16),
           Container(
             padding: const EdgeInsets.all(15),
@@ -6531,14 +6352,6 @@ class _CredentialsEditPageState extends State<CredentialsEditPage> {
                   ),
                 ),
               ],
-            ),
-          ),
-          const SizedBox(height: 24),
-          SizedBox(
-            height: 54,
-            child: FilledButton(
-              onPressed: _save,
-              child: const Text('Update Credentials'),
             ),
           ),
         ],
@@ -6576,75 +6389,831 @@ class _ProfileStat extends StatelessWidget {
   }
 }
 
+class _AdminPageHeader extends StatelessWidget {
+  const _AdminPageHeader({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+  });
+
+  final String title;
+  final String subtitle;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(2, 8, 2, 22),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Row(
+          children: [
+            Icon(Icons.circle, color: _appAccent, size: 13),
+            SizedBox(width: 8),
+            Text(
+              'ROOSTIFY',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.4,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 17),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 30,
+                  height: 1.05,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.all(11),
+              decoration: BoxDecoration(
+                color: context.appColors.surface,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: context.appColors.border),
+              ),
+              child: Icon(icon, color: Colors.white),
+            ),
+          ],
+        ),
+        const SizedBox(height: 7),
+        Text(
+          subtitle,
+          style: TextStyle(color: context.appColors.mutedText, height: 1.4),
+        ),
+      ],
+    ),
+  );
+}
+
+class _AdminMetricCard extends StatelessWidget {
+  const _AdminMetricCard({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.note,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String title;
+  final String value;
+  final String note;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(15),
+    decoration: BoxDecoration(
+      color: context.appColors.surface,
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: color.withValues(alpha: .75)),
+      boxShadow: [
+        BoxShadow(
+          color: color.withValues(alpha: .1),
+          blurRadius: 18,
+          spreadRadius: -5,
+        ),
+      ],
+    ),
+    child: Row(
+      children: [
+        Container(
+          width: 46,
+          height: 46,
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: .1),
+            borderRadius: BorderRadius.circular(13),
+            border: Border.all(color: color.withValues(alpha: .45)),
+          ),
+          child: Icon(icon, color: color),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              Text(
+                value,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 27,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              Text(
+                note,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: context.appColors.mutedText,
+                  fontSize: 11,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _AdminActionTile extends StatelessWidget {
+  const _AdminActionTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    this.onTap,
+    this.color = _appAccent,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback? onTap;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: context.appColors.surfaceRaised,
+    borderRadius: BorderRadius.circular(14),
+    child: InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            Icon(icon, color: color),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      color: context.appColors.mutedText,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.chevron_right_rounded,
+              color: context.appColors.subtleText,
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+class _AdminFeatureCard extends StatelessWidget {
+  const _AdminFeatureCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.color,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: context.appColors.surfaceRaised,
+    borderRadius: BorderRadius.circular(15),
+    child: InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(15),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(icon, color: color, size: 25),
+                const Spacer(),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  color: context.appColors.subtleText,
+                ),
+              ],
+            ),
+            const Spacer(),
+            Text(
+              title,
+              maxLines: 2,
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 3),
+            Text(
+              subtitle,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: context.appColors.mutedText,
+                fontSize: 11,
+                height: 1.25,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+class _AdminPendingRow extends StatelessWidget {
+  const _AdminPendingRow({
+    required this.icon,
+    required this.text,
+    required this.color,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String text;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+    onTap: onTap,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 21),
+          const SizedBox(width: 12),
+          Expanded(child: Text(text)),
+          Icon(Icons.chevron_right_rounded, color: context.appColors.subtleText),
+        ],
+      ),
+    ),
+  );
+}
+
+enum _AdminFeature {
+  manageUsers,
+  scanAccess,
+  supportInbox,
+  systemAlerts,
+  activityLogs,
+  adminProfile,
+}
+
 class AdminOverviewPage extends StatelessWidget {
-  const AdminOverviewPage({super.key, required this.controller});
+  const AdminOverviewPage({
+    super.key,
+    required this.controller,
+    required this.adminUser,
+    this.onNavigateToTab,
+  });
 
   final AppController controller;
+  final AppUser adminUser;
+  final ValueChanged<int>? onNavigateToTab;
+
+  void _showFeatureModal(BuildContext context, _AdminFeature feature) {
+    final (title, subtitle, icon, accent) = switch (feature) {
+      _AdminFeature.manageUsers => (
+        'Manage Users',
+        'Review and manage farm user accounts.',
+        Icons.manage_accounts_outlined,
+        _appAccent,
+      ),
+      _AdminFeature.scanAccess => (
+        'Scan Access Control',
+        'Enable or disable phone camera detection.',
+        Icons.qr_code_scanner_rounded,
+        const Color(0xFF26C281),
+      ),
+      _AdminFeature.supportInbox => (
+        'Support Inbox',
+        'Review and respond to user concerns.',
+        Icons.mark_chat_unread_outlined,
+        const Color(0xFF9B5CFF),
+      ),
+      _AdminFeature.systemAlerts => (
+        'System Alerts',
+        'Important notices and warnings.',
+        Icons.notifications_active_outlined,
+        const Color(0xFFFF4D57),
+      ),
+      _AdminFeature.activityLogs => (
+        'Activity Logs',
+        'Track system and admin activity.',
+        Icons.receipt_long_outlined,
+        const Color(0xFFFFB22C),
+      ),
+      _AdminFeature.adminProfile => (
+        'Admin Profile',
+        'Account and settings.',
+        Icons.admin_panel_settings_outlined,
+        const Color(0xFF21C4F3),
+      ),
+    };
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: .78),
+      builder: (dialogContext) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+        backgroundColor: dialogContext.appColors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(24),
+          side: BorderSide(color: accent.withValues(alpha: .85)),
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720, maxHeight: 760),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 12, 16),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 54,
+                      height: 54,
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: .1),
+                        borderRadius: BorderRadius.circular(15),
+                        border: Border.all(color: accent.withValues(alpha: .55)),
+                      ),
+                      child: Icon(icon, color: accent, size: 28),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            style: const TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            subtitle,
+                            style: TextStyle(
+                              color: dialogContext.appColors.mutedText,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+              ),
+              Divider(height: 1, color: dialogContext.appColors.border),
+              Expanded(
+                child: AnimatedBuilder(
+                  animation: controller,
+                  builder: (context, _) => SingleChildScrollView(
+                    padding: const EdgeInsets.all(18),
+                    child: _featureModalBody(dialogContext, feature, accent),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _featureModalBody(
+    BuildContext context,
+    _AdminFeature feature,
+    Color accent,
+  ) {
+    switch (feature) {
+      case _AdminFeature.manageUsers:
+        return Column(
+          children: controller.farmUsers
+              .map(
+                (user) => AdminUserCard(
+                  user: user,
+                  onCameraToggle: () =>
+                      controller.toggleCameraAccess(user.username),
+                  onRemove: () => controller.removeUser(user.username),
+                ),
+              )
+              .toList(),
+        );
+      case _AdminFeature.scanAccess:
+        return Column(
+          children: [
+            for (final user in controller.farmUsers)
+              Container(
+                margin: const EdgeInsets.only(bottom: 9),
+                decoration: BoxDecoration(
+                  color: context.appColors.surfaceRaised,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: context.appColors.border),
+                ),
+                child: SwitchListTile(
+                  value: user.cameraAccessEnabled,
+                  onChanged: (_) =>
+                      controller.toggleCameraAccess(user.username),
+                  secondary: CircleAvatar(
+                    backgroundColor: accent.withValues(alpha: .12),
+                    child: Text(
+                      user.displayName.isEmpty
+                          ? '?'
+                          : user.displayName.substring(0, 1).toUpperCase(),
+                      style: TextStyle(color: accent),
+                    ),
+                  ),
+                  title: Text(
+                    user.displayName,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  subtitle: Text(
+                    '@${user.username}${user.farmName.isEmpty ? '' : ' • ${user.farmName}'}',
+                  ),
+                ),
+              ),
+            const SizedBox(height: 6),
+            Text(
+              'Access changes are saved immediately and remain available offline.',
+              style: TextStyle(color: context.appColors.mutedText, height: 1.4),
+            ),
+          ],
+        );
+      case _AdminFeature.supportInbox:
+        if (controller.supportThreads.isEmpty) {
+          return const EmptyCard(
+            title: 'No support issues',
+            subtitle: 'New user conversations will appear here.',
+          );
+        }
+        return Column(
+          children: [
+            for (final thread in controller.supportThreads)
+              GestureDetector(
+                onTap: () {
+                  Navigator.of(context).pop();
+                  onNavigateToTab?.call(3);
+                },
+                child: SupportPreviewCard(thread: thread),
+              ),
+          ],
+        );
+      case _AdminFeature.systemAlerts:
+        final alerts = controller.farmUsers
+            .expand((user) => user.monitor.alerts)
+            .toList();
+        if (alerts.isEmpty) {
+          return const EmptyCard(
+            title: 'No system alerts',
+            subtitle: 'Important farm notices will appear here.',
+          );
+        }
+        return Column(
+          children: alerts.map((alert) => AlertCard(alert: alert)).toList(),
+        );
+      case _AdminFeature.activityLogs:
+        return Column(
+          children: [
+            _AdminActionTile(
+              icon: Icons.people_outline,
+              title: '${controller.farmUsers.length} registered users',
+              subtitle: 'Current farm account total',
+            ),
+            const SizedBox(height: 8),
+            _AdminActionTile(
+              icon: Icons.qr_code_scanner_rounded,
+              title:
+                  '${controller.farmUsers.where((user) => user.cameraAccessEnabled).length} scan permissions enabled',
+              subtitle: 'Latest access-control state',
+              color: const Color(0xFF26C281),
+            ),
+            const SizedBox(height: 8),
+            _AdminActionTile(
+              icon: Icons.videocam_outlined,
+              title: '${controller.totalCctvCount} CCTV setups',
+              subtitle: 'Registered camera configurations',
+              color: const Color(0xFF4DA1FF),
+            ),
+            const SizedBox(height: 8),
+            _AdminActionTile(
+              icon: Icons.forum_outlined,
+              title: '${controller.openSupportCount} open support threads',
+              subtitle: 'Conversations requiring attention',
+              color: const Color(0xFF9B5CFF),
+            ),
+          ],
+        );
+      case _AdminFeature.adminProfile:
+        return Column(
+          children: [
+            CircleAvatar(
+              radius: 42,
+              backgroundColor: accent.withValues(alpha: .12),
+              child: Icon(Icons.person_outline_rounded, color: accent, size: 44),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              adminUser.displayName,
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 4),
+            const SeverityTag(label: 'System Administrator', color: _appAccent),
+            const SizedBox(height: 18),
+            _AdminActionTile(
+              icon: Icons.mail_outline_rounded,
+              title: adminUser.email.isEmpty
+                  ? '${adminUser.username}@roostify.com'
+                  : adminUser.email,
+              subtitle: 'Administrator email',
+            ),
+            const SizedBox(height: 8),
+            _AdminActionTile(
+              icon: Icons.phone_outlined,
+              title: adminUser.contactNumber.isEmpty
+                  ? 'No contact number set'
+                  : adminUser.contactNumber,
+              subtitle: 'Contact number',
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.of(context).pop();
+                onNavigateToTab?.call(4);
+              },
+              icon: const Icon(Icons.edit_outlined),
+              label: const Text('Open Profile Settings'),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(52),
+              ),
+            ),
+          ],
+        );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.appColors;
+    final userCount = controller.farmUsers.length;
+    final enabledCount = controller.farmUsers
+        .where((user) => user.cameraAccessEnabled)
+        .length;
+    final disabledCount = userCount - enabledCount;
     return Scaffold(
-      appBar: AppBar(title: const Text('Admin Overview')),
+      appBar: null,
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+        padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
         children: [
-          _GlassCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          const _AdminPageHeader(
+            title: 'Admin Control Center',
+            subtitle: 'Monitor, manage, and support your farm users.',
+            icon: Icons.settings_outlined,
+          ),
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  _appAccent.withValues(alpha: .18),
+                  context.appColors.surface,
+                ],
+              ),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: _appAccent.withValues(alpha: .75)),
+            ),
+            child: const Row(
               children: [
-                const Text(
-                  'Central supervision panel',
-                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  'The admin can manage registered users, decide who may use phone camera detection, review CCTV setup status, and answer troubleshooting concerns from the chat inbox.',
-                  style: TextStyle(color: colors.mutedText, height: 1.5),
+                Icon(Icons.shield_outlined, color: _appAccent, size: 58),
+                SizedBox(width: 18),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "You're in control",
+                        style: TextStyle(
+                          color: _appAccent,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      SizedBox(height: 6),
+                      Text(
+                        'Manage users, camera access, CCTV status, and support messages from one place.',
+                        style: TextStyle(height: 1.45),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 18),
           LayoutBuilder(
             builder: (context, constraints) {
-              final compact = constraints.maxWidth < 640;
               return GridView.count(
-                crossAxisCount: compact ? 1 : 2,
-                childAspectRatio: compact ? 2.4 : 1.7,
+                crossAxisCount: constraints.maxWidth < 700 ? 2 : 4,
+                childAspectRatio: constraints.maxWidth < 420 ? 1.05 : 1.35,
                 mainAxisSpacing: 12,
                 crossAxisSpacing: 12,
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 children: [
-                  SummaryPanel(
+                  _AdminMetricCard(
+                    icon: Icons.group_outlined,
                     title: 'Registered Users',
-                    value: '${controller.farmUsers.length}',
+                    value: '$userCount',
                     note: 'Active farm accounts',
-                    accent: _appAccent,
+                    color: _appAccent,
                   ),
-                  SummaryPanel(
+                  _AdminMetricCard(
+                    icon: Icons.phonelink_lock_outlined,
                     title: 'Camera Access Enabled',
-                    value:
-                        '${controller.farmUsers.where((u) => u.cameraAccessEnabled).length}',
-                    note: 'Users allowed to scan by phone',
-                    accent: const Color(0xFF26C281),
+                    value: '$enabledCount',
+                    note: 'Allowed to scan',
+                    color: const Color(0xFF26C281),
                   ),
-                  SummaryPanel(
-                    title: 'Connected CCTVs',
+                  _AdminMetricCard(
+                    icon: Icons.videocam_outlined,
+                    title: 'CCTV Status',
                     value: '${controller.totalCctvCount}',
-                    note: 'Visible surveillance setups',
-                    accent: const Color(0xFF4DA1FF),
+                    note: 'Connected cameras',
+                    color: const Color(0xFF4DA1FF),
                   ),
-                  SummaryPanel(
+                  _AdminMetricCard(
+                    icon: Icons.forum_outlined,
                     title: 'Open Support Threads',
                     value: '${controller.openSupportCount}',
-                    note: 'Waiting for admin reply',
-                    accent: const Color(0xFFFF6B72),
+                    note: 'Waiting for reply',
+                    color: const Color(0xFFFF4D57),
                   ),
                 ],
               );
             },
+          ),
+          const SizedBox(height: 18),
+          const Text(
+            'Admin Features',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 10),
+          GridView.count(
+            crossAxisCount: 2,
+            childAspectRatio: 1.45,
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            children: [
+              _AdminFeatureCard(
+                icon: Icons.manage_accounts_outlined,
+                title: 'Manage Users',
+                subtitle: 'Create and manage accounts',
+                color: _appAccent,
+                onTap: () =>
+                    _showFeatureModal(context, _AdminFeature.manageUsers),
+              ),
+              _AdminFeatureCard(
+                icon: Icons.qr_code_scanner_rounded,
+                title: 'Scan Access Control',
+                subtitle: 'Enable or disable access',
+                color: const Color(0xFF26C281),
+                onTap: () =>
+                    _showFeatureModal(context, _AdminFeature.scanAccess),
+              ),
+              _AdminFeatureCard(
+                icon: Icons.mark_chat_unread_outlined,
+                title: 'Support Inbox',
+                subtitle: 'Review and respond',
+                color: const Color(0xFF9B5CFF),
+                onTap: () =>
+                    _showFeatureModal(context, _AdminFeature.supportInbox),
+              ),
+              _AdminFeatureCard(
+                icon: Icons.notifications_active_outlined,
+                title: 'System Alerts',
+                subtitle: 'Important farm notices',
+                color: const Color(0xFFFF4D57),
+                onTap: () =>
+                    _showFeatureModal(context, _AdminFeature.systemAlerts),
+              ),
+              _AdminFeatureCard(
+                icon: Icons.receipt_long_outlined,
+                title: 'Activity Logs',
+                subtitle: 'Track system activity',
+                color: const Color(0xFFFFB22C),
+                onTap: () =>
+                    _showFeatureModal(context, _AdminFeature.activityLogs),
+              ),
+              _AdminFeatureCard(
+                icon: Icons.admin_panel_settings_outlined,
+                title: 'Admin Profile',
+                subtitle: 'Account and settings',
+                color: const Color(0xFF21C4F3),
+                onTap: () =>
+                    _showFeatureModal(context, _AdminFeature.adminProfile),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Pending Actions',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _appAccent.withValues(alpha: .13),
+                  borderRadius: BorderRadius.circular(99),
+                  border: Border.all(color: _appAccent.withValues(alpha: .5)),
+                ),
+                child: Text(
+                  '${controller.openSupportCount + disabledCount + (controller.totalCctvCount == 0 ? 1 : 0)}',
+                  style: const TextStyle(
+                    color: _appAccent,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Container(
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: context.appColors.surface,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: context.appColors.border),
+            ),
+            child: Column(
+              children: [
+                _AdminPendingRow(
+                  icon: Icons.forum_outlined,
+                  text: controller.openSupportCount == 0
+                      ? 'No support messages waiting for reply'
+                      : '${controller.openSupportCount} support message${controller.openSupportCount == 1 ? '' : 's'} waiting for reply',
+                  color: const Color(0xFFFF4D57),
+                  onTap: () => onNavigateToTab?.call(3),
+                ),
+                Divider(height: 1, color: context.appColors.border),
+                _AdminPendingRow(
+                  icon: Icons.person_search_outlined,
+                  text: disabledCount == 0
+                      ? 'All users have scan access enabled'
+                      : '$disabledCount user${disabledCount == 1 ? '' : 's'} need scan access review',
+                  color: _appAccent,
+                  onTap: () => onNavigateToTab?.call(1),
+                ),
+                Divider(height: 1, color: context.appColors.border),
+                _AdminPendingRow(
+                  icon: Icons.videocam_off_outlined,
+                  text: controller.totalCctvCount == 0
+                      ? 'CCTV monitoring unavailable: no cameras connected'
+                      : '${controller.totalCctvCount} CCTV setup${controller.totalCctvCount == 1 ? '' : 's'} ready for review',
+                  color: const Color(0xFF4DA1FF),
+                  onTap: () => onNavigateToTab?.call(2),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -6664,12 +7233,14 @@ class AdminUsersPage extends StatefulWidget {
 class _AdminUsersPageState extends State<AdminUsersPage> {
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _displayNameController = TextEditingController();
+  final TextEditingController _searchController = TextEditingController();
   String? _error;
 
   @override
   void dispose() {
     _usernameController.dispose();
     _displayNameController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -6691,17 +7262,74 @@ class _AdminUsersPageState extends State<AdminUsersPage> {
     return AnimatedBuilder(
       animation: widget.controller,
       builder: (context, _) {
+        final query = _searchController.text.trim().toLowerCase();
+        final users = widget.controller.farmUsers.where((user) {
+          return query.isEmpty ||
+              user.displayName.toLowerCase().contains(query) ||
+              user.username.toLowerCase().contains(query) ||
+              user.farmName.toLowerCase().contains(query);
+        }).toList();
+        final approved = widget.controller.farmUsers
+            .where((user) => user.cameraAccessEnabled)
+            .length;
         return Scaffold(
-          appBar: AppBar(title: const Text('Manage Users')),
+          appBar: null,
           body: ListView(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
             children: [
+              const _AdminPageHeader(
+                title: 'Users Management',
+                subtitle: 'Review and manage farm user accounts.',
+                icon: Icons.tune_rounded,
+              ),
+              Row(
+                children: [
+                  Expanded(
+                    child: _AdminMetricCard(
+                      icon: Icons.groups_outlined,
+                      title: 'Total Users',
+                      value: '${widget.controller.farmUsers.length}',
+                      note: 'Registered',
+                      color: _appAccent,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _AdminMetricCard(
+                      icon: Icons.verified_user_outlined,
+                      title: 'Scan Access',
+                      value: '$approved',
+                      note: 'Enabled',
+                      color: const Color(0xFF26C281),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _searchController,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  hintText: 'Search by name, username, or farm...',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  suffixIcon: query.isEmpty
+                      ? null
+                      : IconButton(
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() {});
+                          },
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                ),
+              ),
+              const SizedBox(height: 16),
               _GlassCard(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Register new user',
+                      'Add User Account',
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.w900,
@@ -6737,15 +7365,24 @@ class _AdminUsersPageState extends State<AdminUsersPage> {
                     FilledButton(
                       style: FilledButton.styleFrom(
                         backgroundColor: _appAccent,
+                        minimumSize: const Size.fromHeight(48),
                       ),
                       onPressed: _addUser,
-                      child: const Text('Create User'),
+                      child: const Text('Add User'),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: 16),
-              ...widget.controller.farmUsers.map(
+              const SizedBox(height: 20),
+              Text(
+                '${users.length} user${users.length == 1 ? '' : 's'}',
+                style: TextStyle(
+                  color: context.appColors.mutedText,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 10),
+              ...users.map(
                 (user) => AdminUserCard(
                   user: user,
                   onCameraToggle: () =>
@@ -6772,22 +7409,129 @@ class AdminCctvPage extends StatelessWidget {
     final cctvEntries = controller.farmUsers
         .expand((user) => user.cctvs.map((camera) => (user, camera)))
         .toList();
+    final hasCameras = cctvEntries.isNotEmpty;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('CCTV Monitoring')),
+      appBar: null,
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+        padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
         children: [
-          _GlassCard(
-            child: Text(
-              'All CCTV setups connected to the users can be reviewed here for monitoring and supervision.',
-              style: TextStyle(color: colors.mutedText, height: 1.55),
+          const _AdminPageHeader(
+            title: 'CCTV',
+            subtitle: 'Manage user CCTV cameras and connection status.',
+            icon: Icons.add_rounded,
+          ),
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  _appAccent.withValues(alpha: .14),
+                  colors.surface,
+                ],
+              ),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: _appAccent.withValues(alpha: .55)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 64,
+                  height: 64,
+                  decoration: BoxDecoration(
+                    color: _appAccent.withValues(alpha: .1),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: _appAccent),
+                  ),
+                  child: Icon(
+                    hasCameras
+                        ? Icons.videocam_outlined
+                        : Icons.cloud_off_outlined,
+                    color: hasCameras
+                        ? const Color(0xFF26C281)
+                        : const Color(0xFFFF4D57),
+                    size: 34,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'CCTV Status',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        hasCameras ? 'Connected' : 'Offline',
+                        style: TextStyle(
+                          color: hasCameras
+                              ? const Color(0xFF26C281)
+                              : const Color(0xFFFF4D57),
+                          fontSize: 25,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      Text(
+                        hasCameras
+                            ? '${cctvEntries.length} camera setup${cctvEntries.length == 1 ? '' : 's'} available'
+                            : 'No cameras are currently connected',
+                        style: TextStyle(color: colors.mutedText),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 16),
-          ...cctvEntries.map(
-            (entry) => AdminCctvCard(user: entry.$1, feed: entry.$2),
+          Row(
+            children: [
+              Expanded(
+                child: _AdminMetricCard(
+                  icon: Icons.videocam_outlined,
+                  title: 'Total Cameras',
+                  value: '${cctvEntries.length}',
+                  note: hasCameras ? 'Configured' : 'None added',
+                  color: const Color(0xFF21C4F3),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _AdminMetricCard(
+                  icon: Icons.online_prediction_outlined,
+                  title: 'Farm Accounts',
+                  value:
+                      '${controller.farmUsers.where((user) => user.cctvs.isNotEmpty).length}',
+                  note: 'With CCTV',
+                  color: const Color(0xFF26C281),
+                ),
+              ),
+            ],
           ),
+          const SizedBox(height: 18),
+          _AdminActionTile(
+            icon: Icons.info_outline_rounded,
+            title: 'About CCTV Monitoring',
+            subtitle: hasCameras
+                ? 'Review camera streams and ownership below.'
+                : 'Camera setups appear here after users connect them.',
+            color: const Color(0xFF4DA1FF),
+          ),
+          const SizedBox(height: 12),
+          if (!hasCameras)
+            const EmptyCard(
+              title: 'No CCTV cameras',
+              subtitle: 'Connected user camera setups will appear here.',
+            )
+          else
+            ...cctvEntries.map(
+              (entry) => AdminCctvCard(user: entry.$1, feed: entry.$2),
+            ),
         ],
       ),
     );
@@ -6804,11 +7548,63 @@ class SupportInboxPage extends StatelessWidget {
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
+        final open = controller.supportThreads
+            .where((thread) => !thread.resolved)
+            .length;
+        final resolved = controller.supportThreads.length - open;
         return Scaffold(
-          appBar: AppBar(title: const Text('Support Inbox')),
+          appBar: null,
           body: ListView(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
             children: [
+              const _AdminPageHeader(
+                title: 'Support Inbox',
+                subtitle:
+                    'Review and respond to user reports and system concerns.',
+                icon: Icons.tune_rounded,
+              ),
+              Row(
+                children: [
+                  Expanded(
+                    child: _AdminMetricCard(
+                      icon: Icons.chat_bubble_outline_rounded,
+                      title: 'Open Threads',
+                      value: '$open',
+                      note: 'Needs response',
+                      color: _appAccent,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _AdminMetricCard(
+                      icon: Icons.check_circle_outline_rounded,
+                      title: 'Resolved',
+                      value: '$resolved',
+                      note: 'Completed',
+                      color: const Color(0xFF26C281),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                readOnly: true,
+                decoration: InputDecoration(
+                  hintText: 'Support conversations',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  suffixIcon: Padding(
+                    padding: const EdgeInsets.all(11),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: _appAccent.withValues(alpha: .12),
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                      child: const Icon(Icons.filter_list_rounded, size: 20),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
               if (controller.supportThreads.isEmpty)
                 const EmptyCard(
                   title: 'No support issues',

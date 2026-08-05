@@ -9,7 +9,7 @@ class AppController extends ChangeNotifier {
     : _users = [
         AppUser(
           username: 'admin',
-          password: 'admin123',
+          password: '123456',
           displayName: 'System Admin',
           role: UserRole.admin,
           cameraAccessEnabled: false,
@@ -702,7 +702,14 @@ class AppController extends ChangeNotifier {
     return null;
   }
 
-  bool addUser({required String username, required String displayName}) {
+  bool addUser({
+    required String username,
+    required String displayName,
+    String email = '',
+    String farmName = '',
+    String contactNumber = '',
+    String password = 'farm123',
+  }) {
     final cleanUsername = username.trim();
     final cleanDisplayName = displayName.trim();
 
@@ -721,8 +728,11 @@ class AppController extends ChangeNotifier {
     _users.add(
       AppUser(
         username: cleanUsername,
-        password: 'farm123',
+        password: password.trim().isEmpty ? 'farm123' : password.trim(),
         displayName: cleanDisplayName,
+        email: email.trim(),
+        farmName: farmName.trim(),
+        contactNumber: contactNumber.trim(),
         role: UserRole.user,
         cameraAccessEnabled: true,
         monitor: MonitorSnapshot.newUser(cleanDisplayName),
