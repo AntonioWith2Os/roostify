@@ -40,9 +40,16 @@ class AppUser {
     this.farmName = '',
     this.shortBio = '',
     this.avatarPath,
+    this.firstLoginAt,
+    this.tempPasswordIssued = false,
+    String? accountId,
     List<LiveCctvStream>? liveCctvStreams,
-  }) : liveCctvStreams = liveCctvStreams ?? [];
+  }) : accountId = accountId ?? username,
+       liveCctvStreams = liveCctvStreams ?? [];
 
+  // Stable identity used to match this account against persisted data across
+  // restarts, independent of [username] (which the user/admin can change).
+  final String accountId;
   String username;
   String password;
   String displayName;
@@ -60,8 +67,58 @@ class AppUser {
   MonitorSnapshot monitor;
   final List<CctvFeed> cctvs;
   final List<LiveCctvStream> liveCctvStreams;
+  // Set the moment this account first signs in, so a temp password issued by
+  // an admin can be locked for a grace period (see tempPasswordIssued)
+  // without also restricting long-lived seeded/demo accounts.
+  DateTime? firstLoginAt;
+  // True only for accounts created through the admin "Add User" flow, whose
+  // password is a temporary one the admin chose.
+  bool tempPasswordIssued;
 
   bool get isAdmin => role == UserRole.admin;
+
+  /// Encodes the account fields that can change after creation and should
+  /// survive an app restart. Deliberately excludes [monitor], [cctvs], and
+  /// [liveCctvStreams]: monitor/cctvs are demo sensor data reset per seed,
+  /// and live CCTV streams already persist separately per-user.
+  Map<String, dynamic> toAccountJson() => {
+    'accountId': accountId,
+    'username': username,
+    'password': password,
+    'displayName': displayName,
+    'role': role.name,
+    'cameraAccessEnabled': cameraAccessEnabled,
+    'contactNumber': contactNumber,
+    'address': address,
+    'facebookContact': facebookContact,
+    'email': email,
+    'farmName': farmName,
+    'shortBio': shortBio,
+    'avatarPath': avatarPath,
+    'firstLoginAt': firstLoginAt?.toIso8601String(),
+    'tempPasswordIssued': tempPasswordIssued,
+  };
+
+  /// Applies persisted account fields on top of this user (a freshly seeded
+  /// or freshly constructed [AppUser]), leaving [monitor]/[cctvs] untouched.
+  void applyAccountJson(Map<String, dynamic> json) {
+    username = json['username'] as String? ?? username;
+    password = json['password'] as String? ?? password;
+    displayName = json['displayName'] as String? ?? displayName;
+    cameraAccessEnabled =
+        json['cameraAccessEnabled'] as bool? ?? cameraAccessEnabled;
+    contactNumber = json['contactNumber'] as String? ?? contactNumber;
+    address = json['address'] as String? ?? address;
+    facebookContact = json['facebookContact'] as String? ?? facebookContact;
+    email = json['email'] as String? ?? email;
+    farmName = json['farmName'] as String? ?? farmName;
+    shortBio = json['shortBio'] as String? ?? shortBio;
+    avatarPath = json['avatarPath'] as String?;
+    final firstLogin = json['firstLoginAt'] as String?;
+    firstLoginAt = firstLogin == null ? null : DateTime.tryParse(firstLogin);
+    tempPasswordIssued =
+        json['tempPasswordIssued'] as bool? ?? tempPasswordIssued;
+  }
 }
 
 /// Emitted by [AppController] when an event matches an enabled Notification
@@ -588,12 +645,37 @@ class SupportThread {
     required this.username,
     required this.messages,
     required this.resolved,
+    this.unreadByAdmin = false,
   });
 
   final String id;
   String username;
   final List<SupportMessage> messages;
   bool resolved;
+  // True once the user has sent a message the admin hasn't opened yet.
+  // Distinct from [resolved]: a thread can be read but still unresolved,
+  // or resolved and later reopened without being unread.
+  bool unreadByAdmin;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'username': username,
+    'resolved': resolved,
+    'unreadByAdmin': unreadByAdmin,
+    'messages': messages.map((m) => m.toJson()).toList(),
+  };
+
+  factory SupportThread.fromJson(Map<String, dynamic> json) {
+    return SupportThread(
+      id: json['id'] as String,
+      username: json['username'] as String,
+      resolved: json['resolved'] as bool? ?? false,
+      unreadByAdmin: json['unreadByAdmin'] as bool? ?? false,
+      messages: (json['messages'] as List<dynamic>? ?? [])
+          .map((m) => SupportMessage.fromJson(m as Map<String, dynamic>))
+          .toList(),
+    );
+  }
 }
 
 class SupportMessage {
@@ -606,6 +688,23 @@ class SupportMessage {
   final UserRole senderRole;
   final String text;
   final String timestamp;
+
+  Map<String, dynamic> toJson() => {
+    'senderRole': senderRole.name,
+    'text': text,
+    'timestamp': timestamp,
+  };
+
+  factory SupportMessage.fromJson(Map<String, dynamic> json) {
+    return SupportMessage(
+      senderRole: UserRole.values.firstWhere(
+        (r) => r.name == json['senderRole'],
+        orElse: () => UserRole.user,
+      ),
+      text: json['text'] as String,
+      timestamp: json['timestamp'] as String,
+    );
+  }
 }
 
 class GuidelineItem {

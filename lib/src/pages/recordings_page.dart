@@ -297,7 +297,7 @@ class _RecordingStorageBar extends StatelessWidget {
             ),
             Text(
               '${_gigabytes(usedBytes)} GB of ${_gigabytes(capacityBytes)} GB',
-              style: const TextStyle(fontSize: 11),
+              style: const TextStyle(fontSize: 13),
             ),
           ],
         ),
@@ -423,7 +423,7 @@ class _RecordingTile extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       '${_formattedDate(recording.modifiedAt)} · ${recording.sizeLabel}',
-                      style: TextStyle(color: colors.mutedText, fontSize: 12),
+                      style: TextStyle(color: colors.mutedText, fontSize: 13),
                     ),
                     if (showOwner) ...[
                       const SizedBox(height: 6),
@@ -440,7 +440,7 @@ class _RecordingTile extends StatelessWidget {
                           recording.ownerUsername,
                           style: const TextStyle(
                             color: _appAccent,
-                            fontSize: 11,
+                            fontSize: 13,
                             fontWeight: FontWeight.w800,
                           ),
                         ),

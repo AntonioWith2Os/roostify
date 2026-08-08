@@ -80,7 +80,7 @@ class ChickenDetectionPainter extends CustomPainter {
           text: label,
           style: const TextStyle(
             color: Colors.white,
-            fontSize: 12,
+            fontSize: 13,
             fontWeight: FontWeight.w800,
           ),
         ),
@@ -1078,7 +1078,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: Colors.white70,
-                    fontSize: 12,
+                    fontSize: 13,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -1285,7 +1285,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: Colors.white70,
-                        fontSize: 12,
+                        fontSize: 13,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -1316,7 +1316,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 12,
+                          fontSize: 13,
                           fontWeight: FontWeight.w600,
                           height: 1.3,
                         ),
@@ -1439,7 +1439,7 @@ class _RecordingIndicator extends StatelessWidget {
             'REC',
             style: TextStyle(
               color: Colors.white,
-              fontSize: 12,
+              fontSize: 13,
               fontWeight: FontWeight.w900,
               letterSpacing: 0.5,
             ),
@@ -1449,7 +1449,7 @@ class _RecordingIndicator extends StatelessWidget {
             label,
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 12,
+              fontSize: 13,
               fontWeight: FontWeight.w700,
               fontFeatures: [FontFeature.tabularFigures()],
             ),
@@ -1503,7 +1503,7 @@ class _LiveFeedPlaybackMenu extends StatelessWidget {
                 selectedProfile.label,
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 12,
+                  fontSize: 13,
                   fontWeight: FontWeight.w800,
                 ),
               ),
@@ -1681,7 +1681,7 @@ class _LiveFeedManualStartState extends StatelessWidget {
               style: const TextStyle(
                 color: Colors.white70,
                 fontWeight: FontWeight.w700,
-                fontSize: 12,
+                fontSize: 13,
               ),
             ),
           ],
@@ -1745,7 +1745,7 @@ class _LiveFeedErrorState extends StatelessWidget {
             textAlign: TextAlign.center,
             style: const TextStyle(
               color: Colors.white70,
-              fontSize: 12,
+              fontSize: 13,
               height: 1.4,
             ),
           ),

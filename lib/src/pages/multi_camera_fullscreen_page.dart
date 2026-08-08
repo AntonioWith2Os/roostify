@@ -215,7 +215,7 @@ class _LiveMosaicTileState extends State<_LiveMosaicTile> {
                 widget.displayLabel,
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 11,
+                  fontSize: 13,
                   fontWeight: FontWeight.w800,
                 ),
               ),

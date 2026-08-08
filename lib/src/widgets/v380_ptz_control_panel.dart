@@ -401,7 +401,7 @@ class _V380PtzControlPanelState extends State<V380PtzControlPanel> {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: mutedTextColor,
-                  fontSize: 12,
+                  fontSize: 13,
                   fontWeight: FontWeight.w700,
                   shadows: overlayTextShadow,
                 ),
@@ -450,7 +450,7 @@ class _V380PtzControlPanelState extends State<V380PtzControlPanel> {
                     : widget.compactOverlay
                     ? Colors.white70
                     : colors.mutedText,
-                fontSize: 12,
+                fontSize: 13,
                 fontWeight: FontWeight.w700,
                 height: 1.35,
                 shadows: overlayTextShadow,

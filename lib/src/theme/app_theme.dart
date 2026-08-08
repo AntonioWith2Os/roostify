@@ -77,7 +77,7 @@ ThemeData buildAppTheme(Brightness brightness) {
               ? seed
               : colors.mutedText,
           fontWeight: FontWeight.w800,
-          fontSize: 10,
+          fontSize: 13,
         );
       }),
       iconTheme: WidgetStateProperty.resolveWith((states) {

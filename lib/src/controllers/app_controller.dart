@@ -107,6 +107,7 @@ class AppController extends ChangeNotifier {
     _sensorClient.addListener(notifyListeners);
     unawaited(_loadThemePreference());
     unawaited(_loadLanguagePreference());
+    _persistedStateLoaded = _loadPersistedAccountsAndThreads();
   }
 
   final List<CameraDescription> cameras;
@@ -130,10 +131,20 @@ class AppController extends ChangeNotifier {
   String? lastError;
   Session? _session;
   int _streamIdCounter = 0;
+  int _accountIdCounter = 0;
+  int _threadIdCounter = 0;
+
+  // Resolves once accounts and support threads have been restored from disk.
+  // Awaited by [restoreRememberedSession] so an auto-login can't run against
+  // stale seed data while a previous session's edits are still loading.
+  late final Future<void> _persistedStateLoaded;
 
   static const _notificationPrefsPrefix = 'roostify.notification.';
   static const _rememberUsernameKey = 'roostify.remember.username';
   static const _rememberRoleKey = 'roostify.remember.role';
+  static const _accountsPrefKey = 'roostify.accounts';
+  static const _supportThreadsPrefKey = 'roostify.support_threads';
+  static const _tempPasswordLockDays = 7;
 
   List<AppUser> get farmUsers =>
       List.unmodifiable(_users.where((user) => !user.isAdmin));
@@ -141,9 +152,11 @@ class AppController extends ChangeNotifier {
       List.unmodifiable(_supportThreads.reversed);
   Session? get session => _session;
   int get totalCctvCount =>
-      farmUsers.fold<int>(0, (sum, user) => sum + user.cctvs.length);
+      farmUsers.fold<int>(0, (sum, user) => sum + user.liveCctvStreams.length);
   int get openSupportCount =>
       _supportThreads.where((thread) => !thread.resolved).length;
+  int get unreadSupportCount =>
+      _supportThreads.where((thread) => thread.unreadByAdmin).length;
   Esp32SensorConnectionStatus get sensorConnectionStatus =>
       _sensorClient.status;
   Esp32SensorReading? get latestSensorReading => _sensorClient.latestReading;
@@ -209,6 +222,109 @@ class AppController extends ChangeNotifier {
     await prefs.setString('roostify.app.language', languageName);
   }
 
+  /// Restores accounts (Add/Remove User, camera-access toggles, credential
+  /// and profile edits) and support-thread state saved by a previous
+  /// session. Without this, every admin write silently reverted to the
+  /// hardcoded demo seed on the next app launch.
+  Future<void> _loadPersistedAccountsAndThreads() async {
+    final prefs = await SharedPreferences.getInstance();
+    _applyPersistedAccounts(prefs);
+    _applyPersistedSupportThreads(prefs);
+    notifyListeners();
+  }
+
+  void _applyPersistedAccounts(SharedPreferences prefs) {
+    final raw = prefs.getString(_accountsPrefKey);
+    if (raw == null) return;
+
+    try {
+      final persisted = (jsonDecode(raw) as List<dynamic>)
+          .map((item) => item as Map<String, dynamic>)
+          .toList();
+      final persistedIds = persisted
+          .map((json) => json['accountId'] as String)
+          .toSet();
+
+      // An account present in the seed but missing from persisted state was
+      // removed by an admin in a previous session; drop it (never the admin
+      // account itself, which is always seeded fresh and never persisted
+      // out of existence).
+      _users.removeWhere(
+        (user) => !user.isAdmin && !persistedIds.contains(user.accountId),
+      );
+
+      for (final json in persisted) {
+        final accountId = json['accountId'] as String;
+        final existing = _users
+            .where((user) => user.accountId == accountId)
+            .firstOrNull;
+        if (existing != null) {
+          existing.applyAccountJson(json);
+          continue;
+        }
+
+        // Created at runtime in a previous session (Add User or Google
+        // sign-in) and isn't part of the hardcoded seed.
+        final displayName =
+            json['displayName'] as String? ?? json['username'] as String;
+        _users.add(
+          AppUser(
+            accountId: accountId,
+            username: json['username'] as String,
+            password: '',
+            displayName: displayName,
+            role: UserRole.user,
+            cameraAccessEnabled: true,
+            monitor: MonitorSnapshot.newUser(displayName),
+            cctvs: const [
+              CctvFeed(
+                name: 'Camera A',
+                location: 'New Coop',
+                status: HealthState.normal,
+                online: false,
+                note: 'Waiting for the first live feed connection.',
+              ),
+            ],
+          )..applyAccountJson(json),
+        );
+      }
+    } catch (_) {
+      // Ignore corrupted persisted data; keep the in-memory seed.
+    }
+  }
+
+  void _applyPersistedSupportThreads(SharedPreferences prefs) {
+    final raw = prefs.getString(_supportThreadsPrefKey);
+    if (raw == null) return;
+
+    try {
+      final threads = (jsonDecode(raw) as List<dynamic>)
+          .map((item) => SupportThread.fromJson(item as Map<String, dynamic>))
+          .toList();
+      _supportThreads
+        ..clear()
+        ..addAll(threads);
+    } catch (_) {
+      // Ignore corrupted persisted data; keep the in-memory seed.
+    }
+  }
+
+  Future<void> _persistAccounts() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _accountsPrefKey,
+      jsonEncode(_users.map((user) => user.toAccountJson()).toList()),
+    );
+  }
+
+  Future<void> _persistSupportThreads() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _supportThreadsPrefKey,
+      jsonEncode(_supportThreads.map((thread) => thread.toJson()).toList()),
+    );
+  }
+
   /// Persists the currently signed-in [username]/[role] so the next app
   /// launch can skip straight back in, per the "Remember this device"
   /// checkbox shown when logging out. No password is stored.
@@ -231,6 +347,11 @@ class AppController extends ChangeNotifier {
     final username = prefs.getString(_rememberUsernameKey);
     final roleName = prefs.getString(_rememberRoleKey);
     if (username == null || roleName == null) return null;
+
+    // Wait for a previous session's persisted account edits (renames,
+    // removals, credential changes) to finish loading before checking who
+    // this username actually is now.
+    await _persistedStateLoaded;
 
     final role = UserRole.values.where((r) => r.name == roleName).firstOrNull;
     final user = userByUsername(username);
@@ -407,6 +528,10 @@ class AppController extends ChangeNotifier {
 
     lastError = null;
     _session = Session(user: user);
+    if (user.firstLoginAt == null) {
+      user.firstLoginAt = DateTime.now();
+      unawaited(_persistAccounts());
+    }
     notifyListeners();
     return _session;
   }
@@ -540,6 +665,7 @@ class AppController extends ChangeNotifier {
     user.shortBio = shortBio.trim();
 
     notifyListeners();
+    unawaited(_persistAccounts());
   }
 
   /// Sets [username]'s local profile photo to the file already saved at
@@ -552,6 +678,7 @@ class AppController extends ChangeNotifier {
     final previousPath = user.avatarPath;
     user.avatarPath = avatarPath;
     notifyListeners();
+    unawaited(_persistAccounts());
 
     if (previousPath != null && previousPath != avatarPath) {
       final previousFile = File(previousPath);
@@ -594,6 +721,21 @@ class AppController extends ChangeNotifier {
       return 'Enter a new username or password to update.';
     }
 
+    if (wantsPasswordChange &&
+        user.tempPasswordIssued &&
+        user.firstLoginAt != null) {
+      final unlocksAt = user.firstLoginAt!.add(
+        const Duration(days: _tempPasswordLockDays),
+      );
+      if (DateTime.now().isBefore(unlocksAt)) {
+        final unlocksLabel =
+            '${unlocksAt.month}/${unlocksAt.day}/${unlocksAt.year}';
+        return 'Your temporary password can be changed starting '
+            '$unlocksLabel ($_tempPasswordLockDays days after your first '
+            'login).';
+      }
+    }
+
     if (wantsUsernameChange &&
         _users.any((other) => other.username == cleanUsername)) {
       return 'That username is already taken.';
@@ -619,6 +761,7 @@ class AppController extends ChangeNotifier {
     }
 
     notifyListeners();
+    unawaited(_persistAccounts());
     return null;
   }
 
@@ -655,6 +798,7 @@ class AppController extends ChangeNotifier {
         ? account.email
         : displayName;
     final user = AppUser(
+      accountId: _generateAccountId(),
       username: username,
       password: '',
       displayName: resolvedDisplayName,
@@ -672,6 +816,7 @@ class AppController extends ChangeNotifier {
       ],
     );
     _users.add(user);
+    unawaited(_persistAccounts());
     return user;
   }
 
@@ -727,6 +872,7 @@ class AppController extends ChangeNotifier {
 
     _users.add(
       AppUser(
+        accountId: _generateAccountId(),
         username: cleanUsername,
         password: password.trim().isEmpty ? 'farm123' : password.trim(),
         displayName: cleanDisplayName,
@@ -735,6 +881,7 @@ class AppController extends ChangeNotifier {
         contactNumber: contactNumber.trim(),
         role: UserRole.user,
         cameraAccessEnabled: true,
+        tempPasswordIssued: true,
         monitor: MonitorSnapshot.newUser(cleanDisplayName),
         cctvs: const [
           CctvFeed(
@@ -749,7 +896,13 @@ class AppController extends ChangeNotifier {
     );
     lastError = null;
     notifyListeners();
+    unawaited(_persistAccounts());
     return true;
+  }
+
+  String _generateAccountId() {
+    _accountIdCounter += 1;
+    return 'acct-${DateTime.now().microsecondsSinceEpoch}-$_accountIdCounter';
   }
 
   void removeUser(String username) {
@@ -757,6 +910,8 @@ class AppController extends ChangeNotifier {
     _supportThreads.removeWhere((thread) => thread.username == username);
     _clearCctvFiltersForUser(username);
     notifyListeners();
+    unawaited(_persistAccounts());
+    unawaited(_persistSupportThreads());
     unawaited(
       SharedPreferences.getInstance().then(
         (prefs) => prefs.remove(_liveCctvStreamsPrefKey(username)),
@@ -769,6 +924,33 @@ class AppController extends ChangeNotifier {
     if (user == null || user.isAdmin) return;
     user.cameraAccessEnabled = !user.cameraAccessEnabled;
     notifyListeners();
+    unawaited(_persistAccounts());
+  }
+
+  /// Issues [username] a new temporary password on the admin's behalf, no
+  /// current-password check required. Restarts the 7-day temp-password
+  /// grace period tracked by [AppUser.firstLoginAt].
+  bool adminResetPassword(String username, String newPassword) {
+    final user = userByUsername(username);
+    final cleanPassword = newPassword.trim();
+    if (user == null || user.isAdmin) {
+      lastError = 'Account not found.';
+      notifyListeners();
+      return false;
+    }
+    if (cleanPassword.isEmpty) {
+      lastError = 'Enter a temporary password.';
+      notifyListeners();
+      return false;
+    }
+
+    user.password = cleanPassword;
+    user.tempPasswordIssued = true;
+    user.firstLoginAt = null;
+    lastError = null;
+    notifyListeners();
+    unawaited(_persistAccounts());
+    return true;
   }
 
   LiveCctvStream? _liveStreamById(AppUser user, String streamId) {
@@ -1136,9 +1318,9 @@ class AppController extends ChangeNotifier {
     var thread = threadForUser(username);
     if (thread == null) {
       thread = SupportThread(
-        id: 'thread-${_supportThreads.length + 1}',
+        id: _generateThreadId(),
         username: username,
-        messages: const [],
+        messages: [],
         resolved: false,
       );
       _supportThreads.add(thread);
@@ -1152,7 +1334,14 @@ class AppController extends ChangeNotifier {
       ),
     );
     thread.resolved = false;
+    thread.unreadByAdmin = true;
     notifyListeners();
+    unawaited(_persistSupportThreads());
+  }
+
+  String _generateThreadId() {
+    _threadIdCounter += 1;
+    return 'thread-${DateTime.now().microsecondsSinceEpoch}-$_threadIdCounter';
   }
 
   void sendAdminSupportMessage({
@@ -1172,15 +1361,32 @@ class AppController extends ChangeNotifier {
         timestamp: _timestampLabel(),
       ),
     );
+    thread.unreadByAdmin = false;
     notifyListeners();
+    unawaited(_persistSupportThreads());
   }
 
-  void resolveThread(String threadId) {
+  /// Marks [threadId] as opened by the admin, clearing the Inbox's "New"
+  /// badge without affecting whether it's resolved.
+  void markThreadRead(String threadId) {
     final thread = threadById(threadId);
-    if (thread == null) return;
-    thread.resolved = true;
+    if (thread == null || !thread.unreadByAdmin) return;
+    thread.unreadByAdmin = false;
     notifyListeners();
+    unawaited(_persistSupportThreads());
   }
+
+  void setThreadResolved(String threadId, {required bool resolved}) {
+    final thread = threadById(threadId);
+    if (thread == null || thread.resolved == resolved) return;
+    thread.resolved = resolved;
+    notifyListeners();
+    unawaited(_persistSupportThreads());
+  }
+
+  /// Kept for callers that only ever mark a thread resolved.
+  void resolveThread(String threadId) =>
+      setThreadResolved(threadId, resolved: true);
 
   /// Fallback result shown when the phone camera preview isn't available
   /// (e.g. on an emulator), so the Scan tab has something to display without

@@ -295,7 +295,7 @@ class ChatBubble extends StatelessWidget {
               message.timestamp,
               style: TextStyle(
                 color: mine ? Colors.white70 : colors.subtleText,
-                fontSize: 12,
+                fontSize: 13,
               ),
             ),
           ],
@@ -722,7 +722,7 @@ class _SettingsActionRow extends StatelessWidget {
                   subtitle,
                   style: TextStyle(
                     color: context.appColors.mutedText,
-                    fontSize: 10,
+                    fontSize: 13,
                   ),
                 ),
               ],

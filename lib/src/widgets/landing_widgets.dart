@@ -115,7 +115,7 @@ class _LandingBrand extends StatelessWidget {
           style: TextStyle(
             color: Color(0xFFFF6A32),
             fontWeight: FontWeight.w800,
-            fontSize: 10,
+            fontSize: 13,
             letterSpacing: .45,
           ),
         ),
@@ -277,7 +277,7 @@ class AppPill extends StatelessWidget {
                   subtitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: colors.mutedText, fontSize: 11),
+                  style: TextStyle(color: colors.mutedText, fontSize: 13),
                 ),
               ],
             ),
@@ -487,7 +487,7 @@ class Esp32SensorConnectionCard extends StatelessWidget {
                         color: error || readIssue
                             ? const Color(0xFFFF8A98)
                             : colors.mutedText,
-                        fontSize: 12,
+                        fontSize: 13,
                         height: 1.35,
                       ),
                     ),
@@ -599,7 +599,7 @@ class CircularSensorGauge extends StatelessWidget {
                     'and what to do about it.',
                     style: TextStyle(
                       color: colors.subtleText,
-                      fontSize: 12,
+                      fontSize: 13,
                       height: 1.4,
                     ),
                   ),
@@ -634,7 +634,7 @@ class CircularSensorGauge extends StatelessWidget {
             borderRadius: BorderRadius.circular(20),
             onTap: () => _showWarnings(context),
             child: Container(
-              padding: const EdgeInsets.fromLTRB(8, 14, 8, 12),
+              padding: const EdgeInsets.fromLTRB(8, 10, 8, 8),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(color: colors.border),
@@ -648,71 +648,76 @@ class CircularSensorGauge extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
                     style: const TextStyle(
-                      fontSize: 12,
+                      fontSize: 13,
                       fontWeight: FontWeight.w900,
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  AspectRatio(
-                    aspectRatio: 1,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        SizedBox.expand(
-                          child: CircularProgressIndicator(
-                            value: progress.clamp(0.0, 1.0),
-                            strokeWidth: 8,
-                            strokeCap: StrokeCap.round,
-                            color: statusColor,
-                            backgroundColor: statusColor.withValues(alpha: .12),
-                          ),
-                        ),
-                        Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(icon, color: statusColor, size: 21),
-                            FittedBox(
-                              fit: BoxFit.scaleDown,
-                              child: Text(
-                                value,
-                                style: const TextStyle(
-                                  fontSize: 23,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                            ),
-                            Text(
-                              unit,
-                              style: TextStyle(
-                                color: colors.mutedText,
-                                fontSize: 9,
-                              ),
-                            ),
-                          ],
-                        ),
-                        if (alerts.isNotEmpty)
-                          Positioned(
-                            top: 1,
-                            right: 1,
-                            child: CircleAvatar(
-                              radius: 10,
-                              backgroundColor: statusColor,
-                              foregroundColor: Colors.white,
-                              child: Text(
-                                '${alerts.length}',
-                                style: const TextStyle(
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w900,
-                                ),
+                  const SizedBox(height: 6),
+                  FractionallySizedBox(
+                    widthFactor: 0.8,
+                    child: AspectRatio(
+                      aspectRatio: 1,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          SizedBox.expand(
+                            child: CircularProgressIndicator(
+                              value: progress.clamp(0.0, 1.0),
+                              strokeWidth: 8,
+                              strokeCap: StrokeCap.round,
+                              color: statusColor,
+                              backgroundColor: statusColor.withValues(
+                                alpha: .12,
                               ),
                             ),
                           ),
-                      ],
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(icon, color: statusColor, size: 18),
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  value,
+                                  style: const TextStyle(
+                                    fontSize: 23,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                unit,
+                                style: TextStyle(
+                                  color: colors.mutedText,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (alerts.isNotEmpty)
+                            Positioned(
+                              top: 1,
+                              right: 1,
+                              child: CircleAvatar(
+                                radius: 12,
+                                backgroundColor: statusColor,
+                                foregroundColor: Colors.white,
+                                child: Text(
+                                  '${alerts.length}',
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  SensorLevelTag(level: level, compact: true),
                   const SizedBox(height: 6),
+                  SensorLevelTag(level: level, compact: true),
+                  const SizedBox(height: 4),
                   Text(
                     status,
                     maxLines: 2,
@@ -720,7 +725,7 @@ class CircularSensorGauge extends StatelessWidget {
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: colors.mutedText,
-                      fontSize: 9,
+                      fontSize: 13,
                       height: 1.2,
                     ),
                   ),
@@ -813,7 +818,7 @@ class SensorCard extends StatelessWidget {
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 color: colors.mutedText,
-                                fontSize: 12,
+                                fontSize: 13,
                                 fontWeight: FontWeight.w800,
                               ),
                             ),
@@ -898,7 +903,7 @@ class SensorLevelTag extends StatelessWidget {
           level.label,
           style: TextStyle(
             color: color,
-            fontSize: compact ? 9 : 10,
+            fontSize: 13,
             fontWeight: FontWeight.w900,
           ),
         ),

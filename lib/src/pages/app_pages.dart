@@ -300,9 +300,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> _showForgotPassword() async {
-    final recoveryController = TextEditingController(
-      text: _usernameController.text.trim(),
-    );
+    var recoveryAccount = _usernameController.text.trim();
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -316,9 +314,14 @@ class _LoginPageState extends State<LoginPage> {
               'you recover access to your Roostify account.',
             ),
             const SizedBox(height: 16),
-            TextField(
-              controller: recoveryController,
-              autofocus: true,
+            TextFormField(
+              initialValue: recoveryAccount,
+              onChanged: (value) => recoveryAccount = value,
+              // Not autofocused: requesting focus while showDialog()'s
+              // barrier + fade/scale entrance transition is still animating
+              // races the keyboard's own show animation for frame budget,
+              // which can drop the soft keyboard mid-word (see the same
+              // fix on ProfileEditPage's dispose()).
               decoration: const InputDecoration(
                 labelText: 'Email or Username',
                 prefixIcon: Icon(Icons.person_search_outlined),
@@ -333,7 +336,7 @@ class _LoginPageState extends State<LoginPage> {
           ),
           FilledButton(
             onPressed: () {
-              final account = recoveryController.text.trim();
+              final account = recoveryAccount.trim();
               if (account.isEmpty) return;
               Navigator.of(dialogContext).pop();
               ScaffoldMessenger.of(context).showSnackBar(
@@ -350,7 +353,6 @@ class _LoginPageState extends State<LoginPage> {
         ],
       ),
     );
-    recoveryController.dispose();
   }
 
   void _showPolicy(String title, String body) {
@@ -520,6 +522,16 @@ class _LoginPageState extends State<LoginPage> {
                                         tooltip: _passwordVisible
                                             ? 'Hide password'
                                             : 'Show password',
+                                        // Explicit constraints: the login
+                                        // card is scaled down by the
+                                        // surrounding FittedBox to fit small
+                                        // screens, which shrank the default
+                                        // 48x48 tap target just under the
+                                        // accessibility minimum.
+                                        constraints: const BoxConstraints(
+                                          minWidth: 52,
+                                          minHeight: 52,
+                                        ),
                                         onPressed: () => setState(
                                           () => _passwordVisible =
                                               !_passwordVisible,
@@ -535,6 +547,9 @@ class _LoginPageState extends State<LoginPage> {
                                     Align(
                                       alignment: Alignment.centerRight,
                                       child: TextButton(
+                                        style: TextButton.styleFrom(
+                                          minimumSize: const Size(48, 52),
+                                        ),
                                         onPressed: _showForgotPassword,
                                         child: const Text(
                                           'Forgot password?',
@@ -564,36 +579,52 @@ class _LoginPageState extends State<LoginPage> {
                                       ),
                                       const SizedBox(height: 8),
                                     ],
-                                    SizedBox(
-                                      height: 48,
-                                      child: FilledButton.icon(
-                                        style: FilledButton.styleFrom(
-                                          backgroundColor: _loginOrange,
-                                          foregroundColor: Colors.white,
-                                          shape: const StadiumBorder(),
-                                        ),
-                                        onPressed: _signingInWithPassword
-                                            ? null
-                                            : _signInWithPassword,
-                                        icon: _signingInWithPassword
-                                            ? const SizedBox.square(
-                                                dimension: 19,
-                                                child:
-                                                    CircularProgressIndicator(
-                                                      strokeWidth: 2,
-                                                      color: Colors.white,
-                                                    ),
-                                              )
-                                            : const Icon(Icons.login_rounded),
-                                        label: Text(
-                                          _signingInWithPassword
-                                              ? l10n.loginSigningIn
-                                              : isAdmin
-                                              ? l10n.loginButtonAdmin
-                                              : l10n.loginButtonUser,
-                                          style: const TextStyle(
-                                            fontSize: 17,
-                                            fontWeight: FontWeight.w900,
+                                    Semantics(
+                                      button: true,
+                                      // Distinct from the "Log in" card
+                                      // heading above: identical speakable
+                                      // text on a heading and a button
+                                      // confuses screen-reader navigation.
+                                      label: isAdmin
+                                          ? 'Log in as administrator'
+                                          : 'Log in to your account',
+                                      excludeSemantics: true,
+                                      onTap: _signingInWithPassword
+                                          ? null
+                                          : _signInWithPassword,
+                                      child: SizedBox(
+                                        height: 52,
+                                        child: FilledButton.icon(
+                                          style: FilledButton.styleFrom(
+                                            backgroundColor: _loginOrange,
+                                            foregroundColor: Colors.white,
+                                            shape: const StadiumBorder(),
+                                          ),
+                                          onPressed: _signingInWithPassword
+                                              ? null
+                                              : _signInWithPassword,
+                                          icon: _signingInWithPassword
+                                              ? const SizedBox.square(
+                                                  dimension: 19,
+                                                  child:
+                                                      CircularProgressIndicator(
+                                                        strokeWidth: 2,
+                                                        color: Colors.white,
+                                                      ),
+                                                )
+                                              : const Icon(
+                                                  Icons.login_rounded,
+                                                ),
+                                          label: Text(
+                                            _signingInWithPassword
+                                                ? l10n.loginSigningIn
+                                                : isAdmin
+                                                ? l10n.loginButtonAdmin
+                                                : l10n.loginButtonUser,
+                                            style: const TextStyle(
+                                              fontSize: 17,
+                                              fontWeight: FontWeight.w900,
+                                            ),
                                           ),
                                         ),
                                       ),
@@ -602,7 +633,7 @@ class _LoginPageState extends State<LoginPage> {
                                     const _LoginDivider(),
                                     const SizedBox(height: 10),
                                     SizedBox(
-                                      height: 48,
+                                      height: 52,
                                       child: FilledButton.icon(
                                         style: FilledButton.styleFrom(
                                           backgroundColor: Colors.white,
@@ -639,7 +670,7 @@ class _LoginPageState extends State<LoginPage> {
                                     const _LoginDivider(),
                                     const SizedBox(height: 10),
                                     SizedBox(
-                                      height: 46,
+                                      height: 52,
                                       child: OutlinedButton.icon(
                                         style: OutlinedButton.styleFrom(
                                           foregroundColor: _loginOrange,
@@ -685,21 +716,34 @@ class _LoginPageState extends State<LoginPage> {
                                           'By continuing, you agree to our ',
                                           style: TextStyle(
                                             color: Color(0xFFA7ADBA),
-                                            fontSize: 12,
+                                            fontSize: 13,
                                           ),
                                         ),
                                         GestureDetector(
+                                          // The button's visible text stays
+                                          // small (matches the surrounding
+                                          // legal copy), but its actual tap
+                                          // target grows to the 48dp
+                                          // accessibility minimum via the
+                                          // invisible padding below.
+                                          behavior: HitTestBehavior.opaque,
                                           onTap: () => _showPolicy(
                                             'Terms of Service',
                                             'Use Roostify responsibly and only with '
                                                 'cameras, sensors, and accounts you '
                                                 'are authorized to access.',
                                           ),
-                                          child: const Text(
-                                            'Terms of Service',
-                                            style: TextStyle(
-                                              color: _loginOrange,
-                                              fontSize: 12,
+                                          child: Container(
+                                            constraints: const BoxConstraints(
+                                              minHeight: 48,
+                                            ),
+                                            alignment: Alignment.center,
+                                            child: const Text(
+                                              'Terms of Service',
+                                              style: TextStyle(
+                                                color: _loginOrange,
+                                                fontSize: 13,
+                                              ),
                                             ),
                                           ),
                                         ),
@@ -707,10 +751,11 @@ class _LoginPageState extends State<LoginPage> {
                                           ' and ',
                                           style: TextStyle(
                                             color: Color(0xFFA7ADBA),
-                                            fontSize: 12,
+                                            fontSize: 13,
                                           ),
                                         ),
                                         GestureDetector(
+                                          behavior: HitTestBehavior.opaque,
                                           onTap: () => _showPolicy(
                                             'Privacy Policy',
                                             'Roostify uses account information, '
@@ -718,11 +763,17 @@ class _LoginPageState extends State<LoginPage> {
                                                 'and recordings only to provide app '
                                                 'features and monitoring services.',
                                           ),
-                                          child: const Text(
-                                            'Privacy Policy.',
-                                            style: TextStyle(
-                                              color: _loginOrange,
-                                              fontSize: 12,
+                                          child: Container(
+                                            constraints: const BoxConstraints(
+                                              minHeight: 48,
+                                            ),
+                                            alignment: Alignment.center,
+                                            child: const Text(
+                                              'Privacy Policy.',
+                                              style: TextStyle(
+                                                color: _loginOrange,
+                                                fontSize: 13,
+                                              ),
                                             ),
                                           ),
                                         ),
@@ -807,15 +858,20 @@ class _LoginDivider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Row(
-      children: [
-        Expanded(child: Divider(color: Color(0xFF30394B))),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: 14),
-          child: Text('OR', style: TextStyle(color: Color(0xFF858C9B))),
-        ),
-        Expanded(child: Divider(color: Color(0xFF30394B))),
-      ],
+    // Purely decorative, and used twice on the same screen: with no way to
+    // tell the two apart, a screen reader announcing "OR" at both is just
+    // noise between buttons that already describe themselves.
+    return const ExcludeSemantics(
+      child: Row(
+        children: [
+          Expanded(child: Divider(color: Color(0xFF30394B))),
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 14),
+            child: Text('OR', style: TextStyle(color: Color(0xFF858C9B))),
+          ),
+          Expanded(child: Divider(color: Color(0xFF30394B))),
+        ],
+      ),
     );
   }
 }
@@ -836,70 +892,41 @@ class _AppShellState extends State<AppShell> {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
-    final isAdmin = widget.session.user.isAdmin;
 
-    if (isAdmin) {
+    if (widget.session.user.isAdmin) {
       return AdminRedesignShell(
         controller: widget.controller,
         session: widget.session,
       );
     }
 
-    final destinations = isAdmin
-        ? [
-            NavigationDestination(
-              icon: const Icon(Icons.space_dashboard_outlined),
-              selectedIcon: const Icon(Icons.space_dashboard),
-              label: l10n.navOverview,
-            ),
-            NavigationDestination(
-              icon: const Icon(Icons.group_outlined),
-              selectedIcon: const Icon(Icons.group),
-              label: l10n.navUsers,
-            ),
-            NavigationDestination(
-              icon: const Icon(Icons.videocam_outlined),
-              selectedIcon: const Icon(Icons.videocam),
-              label: l10n.navCctv,
-            ),
-            NavigationDestination(
-              icon: const Icon(Icons.forum_outlined),
-              selectedIcon: const Icon(Icons.forum),
-              label: l10n.navInbox,
-            ),
-            NavigationDestination(
-              icon: const Icon(Icons.person_outline),
-              selectedIcon: const Icon(Icons.person),
-              label: l10n.navProfile,
-            ),
-          ]
-        : [
-            NavigationDestination(
-              icon: const Icon(Icons.home_outlined),
-              selectedIcon: const Icon(Icons.home),
-              label: l10n.navDashboard,
-            ),
-            NavigationDestination(
-              icon: const Icon(Icons.videocam_outlined),
-              selectedIcon: const Icon(Icons.videocam),
-              label: l10n.navCctv,
-            ),
-            NavigationDestination(
-              icon: const Icon(Icons.camera_alt_outlined),
-              selectedIcon: const Icon(Icons.camera_alt),
-              label: l10n.navScan,
-            ),
-            NavigationDestination(
-              icon: const Icon(Icons.menu_book_outlined),
-              selectedIcon: const Icon(Icons.menu_book),
-              label: l10n.navGuides,
-            ),
-            NavigationDestination(
-              icon: const Icon(Icons.person_outline),
-              selectedIcon: const Icon(Icons.person),
-              label: l10n.navProfile,
-            ),
-          ];
+    final destinations = [
+      NavigationDestination(
+        icon: const Icon(Icons.home_outlined),
+        selectedIcon: const Icon(Icons.home),
+        label: l10n.navDashboard,
+      ),
+      NavigationDestination(
+        icon: const Icon(Icons.videocam_outlined),
+        selectedIcon: const Icon(Icons.videocam),
+        label: l10n.navCctv,
+      ),
+      NavigationDestination(
+        icon: const Icon(Icons.camera_alt_outlined),
+        selectedIcon: const Icon(Icons.camera_alt),
+        label: l10n.navScan,
+      ),
+      NavigationDestination(
+        icon: const Icon(Icons.menu_book_outlined),
+        selectedIcon: const Icon(Icons.menu_book),
+        label: l10n.navGuides,
+      ),
+      NavigationDestination(
+        icon: const Icon(Icons.person_outline),
+        selectedIcon: const Icon(Icons.person),
+        label: l10n.navProfile,
+      ),
+    ];
 
     return AnimatedBuilder(
       animation: widget.controller,
@@ -909,55 +936,38 @@ class _AppShellState extends State<AppShell> {
         // list outside the AnimatedBuilder would hand it the same widget
         // instances every time, which Flutter's element diffing treats as
         // identical and skips rebuilding.
-        final pages = isAdmin
-            ? [
-                AdminOverviewPage(
-                  controller: widget.controller,
-                  adminUser: widget.session.user,
-                  onNavigateToTab: (index) => setState(() => _index = index),
-                ),
-                AdminUsersPage(controller: widget.controller),
-                AdminCctvPage(controller: widget.controller),
-                SupportInboxPage(controller: widget.controller),
-                ProfilePage(
-                  controller: widget.controller,
-                  session: widget.session,
-                ),
-              ]
-            : [
-                UserDashboardPage(
-                  controller: widget.controller,
-                  session: widget.session,
-                ),
-                UserCctvPage(
-                  controller: widget.controller,
-                  session: widget.session,
-                ),
-                UserManualCameraTabPage(
-                  controller: widget.controller,
-                  session: widget.session,
-                ),
-                UserGuidelinesPage(
-                  controller: widget.controller,
-                  session: widget.session,
-                ),
-                ProfilePage(
-                  controller: widget.controller,
-                  session: widget.session,
-                ),
-              ];
+        final pages = [
+          UserDashboardPage(
+            controller: widget.controller,
+            session: widget.session,
+          ),
+          UserCctvPage(
+            controller: widget.controller,
+            session: widget.session,
+          ),
+          UserManualCameraTabPage(
+            controller: widget.controller,
+            session: widget.session,
+          ),
+          UserGuidelinesPage(
+            controller: widget.controller,
+            session: widget.session,
+          ),
+          ProfilePage(
+            controller: widget.controller,
+            session: widget.session,
+          ),
+        ];
 
         return Scaffold(
           body: pages[_index],
-          floatingActionButton: isAdmin
-              ? null
-              : _SupportChatBubble(
-                  controller: widget.controller,
-                  session: widget.session,
-                ),
+          floatingActionButton: _SupportChatBubble(
+            controller: widget.controller,
+            session: widget.session,
+          ),
           floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
           bottomNavigationBar: Theme(
-            data: isAdmin ? Theme.of(context) : buildAppTheme(Brightness.dark),
+            data: buildAppTheme(Brightness.dark),
             child: NavigationBar(
               selectedIndex: _index,
               onDestinationSelected: (value) => setState(() => _index = value),
@@ -1020,7 +1030,7 @@ class _SupportChatBubble extends StatelessWidget {
                 messageCount > 99 ? '99+' : '$messageCount',
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 11,
+                  fontSize: 13,
                   fontWeight: FontWeight.w900,
                 ),
               ),
@@ -1079,7 +1089,7 @@ class UserDashboardPage extends StatelessWidget {
                     'Smart Rooster Monitoring',
                     style: TextStyle(
                       color: _appAccent,
-                      fontSize: 10,
+                      fontSize: 13,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -1169,8 +1179,8 @@ class UserDashboardPage extends StatelessWidget {
                         crossAxisSpacing: 10,
                         mainAxisSpacing: 10,
                         childAspectRatio: constraints.maxWidth < 420
-                            ? .53
-                            : .72,
+                            ? .44
+                            : .6,
                         children: [
                           CircularSensorGauge(
                             title: 'Temperature',
@@ -1265,7 +1275,7 @@ class UserDashboardPage extends StatelessWidget {
                                 : 'Tap a sensor card with a badge to see its warnings. The Guides tab explains each warning.',
                             style: TextStyle(
                               color: context.appColors.mutedText,
-                              fontSize: 12,
+                              fontSize: 13,
                               height: 1.4,
                             ),
                           ),
@@ -1395,7 +1405,7 @@ class _OverviewMetric extends StatelessWidget {
           label,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 11),
+          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
         ),
         const SizedBox(height: 5),
         Text(
@@ -1408,7 +1418,7 @@ class _OverviewMetric extends StatelessWidget {
             color: detail == 'Online'
                 ? const Color(0xFF26C281)
                 : context.appColors.mutedText,
-            fontSize: 9,
+            fontSize: 13,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -1451,7 +1461,7 @@ class _DashboardSectionTitle extends StatelessWidget {
               subtitle,
               style: TextStyle(
                 color: context.appColors.mutedText,
-                fontSize: 11,
+                fontSize: 13,
               ),
             ),
           ],
@@ -1472,7 +1482,7 @@ class _DashboardSectionTitle extends StatelessWidget {
                 'Online',
                 style: TextStyle(
                   color: Color(0xFF23BF75),
-                  fontSize: 11,
+                  fontSize: 13,
                   fontWeight: FontWeight.w800,
                 ),
               ),
@@ -1494,7 +1504,7 @@ class _DashboardSectionTitle extends StatelessWidget {
                 'Offline',
                 style: TextStyle(
                   color: Color(0xFFFF7777),
-                  fontSize: 11,
+                  fontSize: 13,
                   fontWeight: FontWeight.w800,
                 ),
               ),
@@ -1712,7 +1722,7 @@ class _CctvCameraCollection extends StatelessWidget {
                       'Manage and monitor your CCTV cameras',
                       style: TextStyle(
                         color: context.appColors.mutedText,
-                        fontSize: 11,
+                        fontSize: 13,
                       ),
                     ),
                   ],
@@ -1819,7 +1829,7 @@ class _CctvCameraCard extends StatelessWidget {
                       'Online',
                       style: TextStyle(
                         color: Colors.white,
-                        fontSize: 8,
+                        fontSize: 13,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
@@ -1858,7 +1868,7 @@ class _CctvCameraCard extends StatelessWidget {
                   'V380 Pro • CH${(index + 1).toString().padLeft(2, '0')}',
                   style: TextStyle(
                     color: context.appColors.mutedText,
-                    fontSize: 11,
+                    fontSize: 13,
                   ),
                 ),
                 const SizedBox(height: 3),
@@ -1866,7 +1876,7 @@ class _CctvCameraCard extends StatelessWidget {
                   endpoint,
                   style: TextStyle(
                     color: context.appColors.mutedText,
-                    fontSize: 11,
+                    fontSize: 13,
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -1957,7 +1967,7 @@ class _CctvViewerPage extends StatelessWidget {
                   'Live',
                   style: TextStyle(
                     color: Color(0xFF26C281),
-                    fontSize: 11,
+                    fontSize: 13,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -2188,7 +2198,7 @@ class _AboutFeature extends StatelessWidget {
       Text(
         label,
         textAlign: TextAlign.center,
-        style: TextStyle(color: context.appColors.mutedText, fontSize: 9),
+        style: TextStyle(color: context.appColors.mutedText, fontSize: 13),
       ),
     ],
   );
@@ -2503,7 +2513,7 @@ class _GuideGridCard extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: colors.mutedText,
-                    fontSize: 11,
+                    fontSize: 13,
                     height: 1.35,
                   ),
                 ),
@@ -3060,7 +3070,7 @@ class _GuideModeTabs extends StatelessWidget {
             style: TextStyle(
               color: _appAccent,
               fontWeight: FontWeight.w800,
-              fontSize: 12,
+              fontSize: 13,
             ),
           ),
         ),
@@ -3076,7 +3086,7 @@ class _GuideModeTabs extends StatelessWidget {
           ),
           child: const Text(
             'Movement Cues',
-            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
           ),
         ),
       ),
@@ -3236,7 +3246,7 @@ class _FunctionalChickenStateGuideState
                 : 'Posture is most useful when the full body is visible and the camera view is clear.',
             style: TextStyle(
               color: colors.mutedText,
-              fontSize: 12,
+              fontSize: 13,
               height: 1.45,
             ),
           ),
@@ -3275,7 +3285,7 @@ class _StateTab extends StatelessWidget {
               style: TextStyle(
                 color: selected ? _appAccent : colors.mutedText,
                 fontWeight: FontWeight.w800,
-                fontSize: 12,
+                fontSize: 13,
               ),
             ),
           ),
@@ -3559,7 +3569,7 @@ class _SensorsGuidePage extends StatelessWidget {
             'Tap any sensor to learn more about readings and recommendations.',
             style: TextStyle(
               color: colors.mutedText,
-              fontSize: 12,
+              fontSize: 13,
               height: 1.45,
             ),
           ),
@@ -3607,7 +3617,7 @@ class _SensorRangeCard extends StatelessWidget {
               child: Row(
                 children: [
                   Container(
-                    width: 68,
+                    width: 76,
                     padding: const EdgeInsets.symmetric(vertical: 7),
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
@@ -3619,7 +3629,7 @@ class _SensorRangeCard extends StatelessWidget {
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: levelColor,
-                        fontSize: 10,
+                        fontSize: 13,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
@@ -3638,7 +3648,7 @@ class _SensorRangeCard extends StatelessWidget {
                           note,
                           style: TextStyle(
                             color: colors.mutedText,
-                            fontSize: 12,
+                            fontSize: 13,
                           ),
                         ),
                       ],
@@ -3748,7 +3758,7 @@ class _FunctionalSensorsGuide extends StatelessWidget {
             'Tap a sensor to expand its reference chart and the action for each level.',
             style: TextStyle(
               color: colors.mutedText,
-              fontSize: 12,
+              fontSize: 13,
               height: 1.45,
             ),
           ),
@@ -3808,7 +3818,7 @@ class _FunctionalSensorGuideCard extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 color: colors.mutedText,
-                fontSize: 12,
+                fontSize: 13,
                 height: 1.35,
               ),
             ),
@@ -3825,7 +3835,7 @@ class _FunctionalSensorGuideCard extends StatelessWidget {
                   child: Row(
                     children: [
                       Container(
-                        width: 68,
+                        width: 76,
                         padding: const EdgeInsets.symmetric(vertical: 6),
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
@@ -3836,7 +3846,7 @@ class _FunctionalSensorGuideCard extends StatelessWidget {
                           level,
                           style: TextStyle(
                             color: color,
-                            fontSize: 10,
+                            fontSize: 13,
                             fontWeight: FontWeight.w900,
                           ),
                         ),
@@ -3858,7 +3868,7 @@ class _FunctionalSensorGuideCard extends StatelessWidget {
                               action,
                               style: TextStyle(
                                 color: colors.mutedText,
-                                fontSize: 12,
+                                fontSize: 13,
                               ),
                             ),
                           ],
@@ -4184,7 +4194,7 @@ class _SensorWarningGuideCard extends StatelessWidget {
                         Text(
                           range,
                           style: const TextStyle(
-                            fontSize: 12,
+                            fontSize: 13,
                             fontWeight: FontWeight.w800,
                           ),
                         ),
@@ -4193,7 +4203,7 @@ class _SensorWarningGuideCard extends StatelessWidget {
                           advice,
                           style: TextStyle(
                             color: colors.mutedText,
-                            fontSize: 12,
+                            fontSize: 13,
                             height: 1.4,
                           ),
                         ),
@@ -4244,7 +4254,7 @@ class _PostureGuideRow extends StatelessWidget {
                 Text(
                   posture,
                   style: const TextStyle(
-                    fontSize: 12,
+                    fontSize: 13,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
@@ -4253,7 +4263,7 @@ class _PostureGuideRow extends StatelessWidget {
                   meaning,
                   style: TextStyle(
                     color: colors.mutedText,
-                    fontSize: 12,
+                    fontSize: 13,
                     height: 1.4,
                   ),
                 ),
@@ -4423,7 +4433,7 @@ class _SupportChatPageState extends State<SupportChatPage> {
                   SizedBox(width: 8),
                   Text(
                     'Typical response time: 5–10 minutes.',
-                    style: TextStyle(fontSize: 11),
+                    style: TextStyle(fontSize: 13),
                   ),
                 ],
               ),
@@ -4517,7 +4527,7 @@ class _SupportHubRow extends StatelessWidget {
                   subtitle,
                   style: TextStyle(
                     color: context.appColors.mutedText,
-                    fontSize: 10,
+                    fontSize: 13,
                   ),
                 ),
               ],
@@ -4660,7 +4670,7 @@ class ProfilePage extends StatelessWidget {
                     Expanded(
                       child: Text(
                         'You can sign back in using your username, password, or connected Google account.',
-                        style: TextStyle(fontSize: 12, height: 1.4),
+                        style: TextStyle(fontSize: 13, height: 1.4),
                       ),
                     ),
                   ],
@@ -4825,14 +4835,18 @@ class ProfilePage extends StatelessWidget {
                   ),
                 ),
               ),
-              _ProfileMenuRow(
-                icon: Icons.help_outline_rounded,
-                label: 'Help & Support',
-                onTap: () => _showProfileContentDialog(
-                  context,
-                  SupportChatPage(controller: controller, session: session),
+              // Admin's own support requests would create a self-addressed
+              // thread that then shows up in their own Inbox tab; admins
+              // handle user reports through the Inbox instead.
+              if (!user.isAdmin)
+                _ProfileMenuRow(
+                  icon: Icons.help_outline_rounded,
+                  label: 'Help & Support',
+                  onTap: () => _showProfileContentDialog(
+                    context,
+                    SupportChatPage(controller: controller, session: session),
+                  ),
                 ),
-              ),
             ],
           ),
           const SizedBox(height: 16),
@@ -5045,14 +5059,14 @@ class _ConnectedAccountCard extends StatelessWidget {
                       const SizedBox(height: 3),
                       Text(
                         email!,
-                        style: TextStyle(color: colors.mutedText, fontSize: 12),
+                        style: TextStyle(color: colors.mutedText, fontSize: 13),
                       ),
                       const SizedBox(height: 4),
                       const Text(
                         'Manage',
                         style: TextStyle(
                           color: _appAccent,
-                          fontSize: 11,
+                          fontSize: 13,
                           fontWeight: FontWeight.w800,
                         ),
                       ),
@@ -5060,7 +5074,7 @@ class _ConnectedAccountCard extends StatelessWidget {
                       const SizedBox(height: 3),
                       Text(
                         'Not connected',
-                        style: TextStyle(color: colors.mutedText, fontSize: 12),
+                        style: TextStyle(color: colors.mutedText, fontSize: 13),
                       ),
                     ],
                   ],
@@ -5080,7 +5094,7 @@ class _ConnectedAccountCard extends StatelessWidget {
                     'Connected',
                     style: TextStyle(
                       color: Color(0xFF26C281),
-                      fontSize: 10,
+                      fontSize: 13,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
@@ -5137,7 +5151,7 @@ class _SwitchConnectedAccountRow extends StatelessWidget {
                     // Roostify only keeps one linked Google account at a
                     // time; this replaces it rather than adding a second.
                     'Replace this with a different Google account',
-                    style: TextStyle(fontSize: 11),
+                    style: TextStyle(fontSize: 13),
                   ),
                 ],
               ),
@@ -5278,7 +5292,7 @@ class _NotificationPreferencesPageState
                 Expanded(
                   child: Text(
                     'Critical alerts will still be delivered during quiet hours.',
-                    style: TextStyle(fontSize: 11),
+                    style: TextStyle(fontSize: 13),
                   ),
                 ),
               ],
@@ -5406,7 +5420,7 @@ class _NotificationOptionRow extends StatelessWidget {
         ),
         subtitle: Text(
           option.description,
-          style: TextStyle(color: colors.mutedText, fontSize: 10),
+          style: TextStyle(color: colors.mutedText, fontSize: 13),
         ),
         value: value,
         activeThumbColor: const Color(0xFF26C281),
@@ -5451,7 +5465,7 @@ class _QuietHoursRow extends StatelessWidget {
           ),
           Text(
             value,
-            style: TextStyle(color: context.appColors.mutedText, fontSize: 11),
+            style: TextStyle(color: context.appColors.mutedText, fontSize: 13),
           ),
           const SizedBox(width: 4),
           const Icon(Icons.chevron_right_rounded, size: 19),
@@ -5531,7 +5545,7 @@ class _ProfileSummaryCard extends StatelessWidget {
                       session.email ?? '@${user.username}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: colors.mutedText, fontSize: 12),
+                      style: TextStyle(color: colors.mutedText, fontSize: 13),
                     ),
                     const SizedBox(height: 3),
                     Text(
@@ -5540,7 +5554,7 @@ class _ProfileSummaryCard extends StatelessWidget {
                           : 'Backyard rooster farm user',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: colors.subtleText, fontSize: 12),
+                      style: TextStyle(color: colors.subtleText, fontSize: 13),
                     ),
                   ],
                 ),
@@ -5776,7 +5790,7 @@ class _ProfileEditorHeroState extends State<_ProfileEditorHero> {
                       : 'Backyard rooster farm user',
                   style: TextStyle(
                     color: context.appColors.subtleText,
-                    fontSize: 11,
+                    fontSize: 13,
                   ),
                 ),
               ],
@@ -6124,14 +6138,14 @@ class _PasswordStrengthIndicator extends StatelessWidget {
                 'Password Strength: ',
                 style: TextStyle(
                   color: context.appColors.mutedText,
-                  fontSize: 11,
+                  fontSize: 13,
                 ),
               ),
               Text(
                 label,
                 style: TextStyle(
                   color: color,
-                  fontSize: 11,
+                  fontSize: 13,
                   fontWeight: FontWeight.w800,
                 ),
               ),
@@ -6380,7 +6394,7 @@ class _ProfileStat extends StatelessWidget {
           label,
           style: TextStyle(
             color: colors.mutedText,
-            fontSize: 12,
+            fontSize: 13,
             fontWeight: FontWeight.w700,
           ),
         ),
@@ -6454,1187 +6468,6 @@ class _AdminPageHeader extends StatelessWidget {
   );
 }
 
-class _AdminMetricCard extends StatelessWidget {
-  const _AdminMetricCard({
-    required this.icon,
-    required this.title,
-    required this.value,
-    required this.note,
-    required this.color,
-  });
-
-  final IconData icon;
-  final String title;
-  final String value;
-  final String note;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(15),
-    decoration: BoxDecoration(
-      color: context.appColors.surface,
-      borderRadius: BorderRadius.circular(18),
-      border: Border.all(color: color.withValues(alpha: .75)),
-      boxShadow: [
-        BoxShadow(
-          color: color.withValues(alpha: .1),
-          blurRadius: 18,
-          spreadRadius: -5,
-        ),
-      ],
-    ),
-    child: Row(
-      children: [
-        Container(
-          width: 46,
-          height: 46,
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: .1),
-            borderRadius: BorderRadius.circular(13),
-            border: Border.all(color: color.withValues(alpha: .45)),
-          ),
-          child: Icon(icon, color: color),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w800),
-              ),
-              Text(
-                value,
-                style: TextStyle(
-                  color: color,
-                  fontSize: 27,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              Text(
-                note,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: context.appColors.mutedText,
-                  fontSize: 11,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-class _AdminActionTile extends StatelessWidget {
-  const _AdminActionTile({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    this.onTap,
-    this.color = _appAccent,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final VoidCallback? onTap;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) => Material(
-    color: context.appColors.surfaceRaised,
-    borderRadius: BorderRadius.circular(14),
-    child: InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          children: [
-            Icon(icon, color: color),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      color: context.appColors.mutedText,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Icon(
-              Icons.chevron_right_rounded,
-              color: context.appColors.subtleText,
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
-class _AdminFeatureCard extends StatelessWidget {
-  const _AdminFeatureCard({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.color,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final Color color;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => Material(
-    color: context.appColors.surfaceRaised,
-    borderRadius: BorderRadius.circular(15),
-    child: InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(15),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, color: color, size: 25),
-                const Spacer(),
-                Icon(
-                  Icons.chevron_right_rounded,
-                  color: context.appColors.subtleText,
-                ),
-              ],
-            ),
-            const Spacer(),
-            Text(
-              title,
-              maxLines: 2,
-              style: const TextStyle(fontWeight: FontWeight.w900),
-            ),
-            const SizedBox(height: 3),
-            Text(
-              subtitle,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: context.appColors.mutedText,
-                fontSize: 11,
-                height: 1.25,
-              ),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
-class _AdminPendingRow extends StatelessWidget {
-  const _AdminPendingRow({
-    required this.icon,
-    required this.text,
-    required this.color,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String text;
-  final Color color;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => InkWell(
-    onTap: onTap,
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-      child: Row(
-        children: [
-          Icon(icon, color: color, size: 21),
-          const SizedBox(width: 12),
-          Expanded(child: Text(text)),
-          Icon(Icons.chevron_right_rounded, color: context.appColors.subtleText),
-        ],
-      ),
-    ),
-  );
-}
-
-enum _AdminFeature {
-  manageUsers,
-  scanAccess,
-  supportInbox,
-  systemAlerts,
-  activityLogs,
-  adminProfile,
-}
-
-class AdminOverviewPage extends StatelessWidget {
-  const AdminOverviewPage({
-    super.key,
-    required this.controller,
-    required this.adminUser,
-    this.onNavigateToTab,
-  });
-
-  final AppController controller;
-  final AppUser adminUser;
-  final ValueChanged<int>? onNavigateToTab;
-
-  void _showFeatureModal(BuildContext context, _AdminFeature feature) {
-    final (title, subtitle, icon, accent) = switch (feature) {
-      _AdminFeature.manageUsers => (
-        'Manage Users',
-        'Review and manage farm user accounts.',
-        Icons.manage_accounts_outlined,
-        _appAccent,
-      ),
-      _AdminFeature.scanAccess => (
-        'Scan Access Control',
-        'Enable or disable phone camera detection.',
-        Icons.qr_code_scanner_rounded,
-        const Color(0xFF26C281),
-      ),
-      _AdminFeature.supportInbox => (
-        'Support Inbox',
-        'Review and respond to user concerns.',
-        Icons.mark_chat_unread_outlined,
-        const Color(0xFF9B5CFF),
-      ),
-      _AdminFeature.systemAlerts => (
-        'System Alerts',
-        'Important notices and warnings.',
-        Icons.notifications_active_outlined,
-        const Color(0xFFFF4D57),
-      ),
-      _AdminFeature.activityLogs => (
-        'Activity Logs',
-        'Track system and admin activity.',
-        Icons.receipt_long_outlined,
-        const Color(0xFFFFB22C),
-      ),
-      _AdminFeature.adminProfile => (
-        'Admin Profile',
-        'Account and settings.',
-        Icons.admin_panel_settings_outlined,
-        const Color(0xFF21C4F3),
-      ),
-    };
-    showDialog<void>(
-      context: context,
-      barrierColor: Colors.black.withValues(alpha: .78),
-      builder: (dialogContext) => Dialog(
-        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-        backgroundColor: dialogContext.appColors.surface,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-          side: BorderSide(color: accent.withValues(alpha: .85)),
-        ),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 720, maxHeight: 760),
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 20, 12, 16),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 54,
-                      height: 54,
-                      decoration: BoxDecoration(
-                        color: accent.withValues(alpha: .1),
-                        borderRadius: BorderRadius.circular(15),
-                        border: Border.all(color: accent.withValues(alpha: .55)),
-                      ),
-                      child: Icon(icon, color: accent, size: 28),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            title,
-                            style: const TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                          const SizedBox(height: 3),
-                          Text(
-                            subtitle,
-                            style: TextStyle(
-                              color: dialogContext.appColors.mutedText,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: () => Navigator.of(dialogContext).pop(),
-                      icon: const Icon(Icons.close_rounded),
-                    ),
-                  ],
-                ),
-              ),
-              Divider(height: 1, color: dialogContext.appColors.border),
-              Expanded(
-                child: AnimatedBuilder(
-                  animation: controller,
-                  builder: (context, _) => SingleChildScrollView(
-                    padding: const EdgeInsets.all(18),
-                    child: _featureModalBody(dialogContext, feature, accent),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _featureModalBody(
-    BuildContext context,
-    _AdminFeature feature,
-    Color accent,
-  ) {
-    switch (feature) {
-      case _AdminFeature.manageUsers:
-        return Column(
-          children: controller.farmUsers
-              .map(
-                (user) => AdminUserCard(
-                  user: user,
-                  onCameraToggle: () =>
-                      controller.toggleCameraAccess(user.username),
-                  onRemove: () => controller.removeUser(user.username),
-                ),
-              )
-              .toList(),
-        );
-      case _AdminFeature.scanAccess:
-        return Column(
-          children: [
-            for (final user in controller.farmUsers)
-              Container(
-                margin: const EdgeInsets.only(bottom: 9),
-                decoration: BoxDecoration(
-                  color: context.appColors.surfaceRaised,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: context.appColors.border),
-                ),
-                child: SwitchListTile(
-                  value: user.cameraAccessEnabled,
-                  onChanged: (_) =>
-                      controller.toggleCameraAccess(user.username),
-                  secondary: CircleAvatar(
-                    backgroundColor: accent.withValues(alpha: .12),
-                    child: Text(
-                      user.displayName.isEmpty
-                          ? '?'
-                          : user.displayName.substring(0, 1).toUpperCase(),
-                      style: TextStyle(color: accent),
-                    ),
-                  ),
-                  title: Text(
-                    user.displayName,
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  subtitle: Text(
-                    '@${user.username}${user.farmName.isEmpty ? '' : ' • ${user.farmName}'}',
-                  ),
-                ),
-              ),
-            const SizedBox(height: 6),
-            Text(
-              'Access changes are saved immediately and remain available offline.',
-              style: TextStyle(color: context.appColors.mutedText, height: 1.4),
-            ),
-          ],
-        );
-      case _AdminFeature.supportInbox:
-        if (controller.supportThreads.isEmpty) {
-          return const EmptyCard(
-            title: 'No support issues',
-            subtitle: 'New user conversations will appear here.',
-          );
-        }
-        return Column(
-          children: [
-            for (final thread in controller.supportThreads)
-              GestureDetector(
-                onTap: () {
-                  Navigator.of(context).pop();
-                  onNavigateToTab?.call(3);
-                },
-                child: SupportPreviewCard(thread: thread),
-              ),
-          ],
-        );
-      case _AdminFeature.systemAlerts:
-        final alerts = controller.farmUsers
-            .expand((user) => user.monitor.alerts)
-            .toList();
-        if (alerts.isEmpty) {
-          return const EmptyCard(
-            title: 'No system alerts',
-            subtitle: 'Important farm notices will appear here.',
-          );
-        }
-        return Column(
-          children: alerts.map((alert) => AlertCard(alert: alert)).toList(),
-        );
-      case _AdminFeature.activityLogs:
-        return Column(
-          children: [
-            _AdminActionTile(
-              icon: Icons.people_outline,
-              title: '${controller.farmUsers.length} registered users',
-              subtitle: 'Current farm account total',
-            ),
-            const SizedBox(height: 8),
-            _AdminActionTile(
-              icon: Icons.qr_code_scanner_rounded,
-              title:
-                  '${controller.farmUsers.where((user) => user.cameraAccessEnabled).length} scan permissions enabled',
-              subtitle: 'Latest access-control state',
-              color: const Color(0xFF26C281),
-            ),
-            const SizedBox(height: 8),
-            _AdminActionTile(
-              icon: Icons.videocam_outlined,
-              title: '${controller.totalCctvCount} CCTV setups',
-              subtitle: 'Registered camera configurations',
-              color: const Color(0xFF4DA1FF),
-            ),
-            const SizedBox(height: 8),
-            _AdminActionTile(
-              icon: Icons.forum_outlined,
-              title: '${controller.openSupportCount} open support threads',
-              subtitle: 'Conversations requiring attention',
-              color: const Color(0xFF9B5CFF),
-            ),
-          ],
-        );
-      case _AdminFeature.adminProfile:
-        return Column(
-          children: [
-            CircleAvatar(
-              radius: 42,
-              backgroundColor: accent.withValues(alpha: .12),
-              child: Icon(Icons.person_outline_rounded, color: accent, size: 44),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              adminUser.displayName,
-              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
-            ),
-            const SizedBox(height: 4),
-            const SeverityTag(label: 'System Administrator', color: _appAccent),
-            const SizedBox(height: 18),
-            _AdminActionTile(
-              icon: Icons.mail_outline_rounded,
-              title: adminUser.email.isEmpty
-                  ? '${adminUser.username}@roostify.com'
-                  : adminUser.email,
-              subtitle: 'Administrator email',
-            ),
-            const SizedBox(height: 8),
-            _AdminActionTile(
-              icon: Icons.phone_outlined,
-              title: adminUser.contactNumber.isEmpty
-                  ? 'No contact number set'
-                  : adminUser.contactNumber,
-              subtitle: 'Contact number',
-            ),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: () {
-                Navigator.of(context).pop();
-                onNavigateToTab?.call(4);
-              },
-              icon: const Icon(Icons.edit_outlined),
-              label: const Text('Open Profile Settings'),
-              style: FilledButton.styleFrom(
-                minimumSize: const Size.fromHeight(52),
-              ),
-            ),
-          ],
-        );
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final userCount = controller.farmUsers.length;
-    final enabledCount = controller.farmUsers
-        .where((user) => user.cameraAccessEnabled)
-        .length;
-    final disabledCount = userCount - enabledCount;
-    return Scaffold(
-      appBar: null,
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
-        children: [
-          const _AdminPageHeader(
-            title: 'Admin Control Center',
-            subtitle: 'Monitor, manage, and support your farm users.',
-            icon: Icons.settings_outlined,
-          ),
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  _appAccent.withValues(alpha: .18),
-                  context.appColors.surface,
-                ],
-              ),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: _appAccent.withValues(alpha: .75)),
-            ),
-            child: const Row(
-              children: [
-                Icon(Icons.shield_outlined, color: _appAccent, size: 58),
-                SizedBox(width: 18),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        "You're in control",
-                        style: TextStyle(
-                          color: _appAccent,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      SizedBox(height: 6),
-                      Text(
-                        'Manage users, camera access, CCTV status, and support messages from one place.',
-                        style: TextStyle(height: 1.45),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 18),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              return GridView.count(
-                crossAxisCount: constraints.maxWidth < 700 ? 2 : 4,
-                childAspectRatio: constraints.maxWidth < 420 ? 1.05 : 1.35,
-                mainAxisSpacing: 12,
-                crossAxisSpacing: 12,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                children: [
-                  _AdminMetricCard(
-                    icon: Icons.group_outlined,
-                    title: 'Registered Users',
-                    value: '$userCount',
-                    note: 'Active farm accounts',
-                    color: _appAccent,
-                  ),
-                  _AdminMetricCard(
-                    icon: Icons.phonelink_lock_outlined,
-                    title: 'Camera Access Enabled',
-                    value: '$enabledCount',
-                    note: 'Allowed to scan',
-                    color: const Color(0xFF26C281),
-                  ),
-                  _AdminMetricCard(
-                    icon: Icons.videocam_outlined,
-                    title: 'CCTV Status',
-                    value: '${controller.totalCctvCount}',
-                    note: 'Connected cameras',
-                    color: const Color(0xFF4DA1FF),
-                  ),
-                  _AdminMetricCard(
-                    icon: Icons.forum_outlined,
-                    title: 'Open Support Threads',
-                    value: '${controller.openSupportCount}',
-                    note: 'Waiting for reply',
-                    color: const Color(0xFFFF4D57),
-                  ),
-                ],
-              );
-            },
-          ),
-          const SizedBox(height: 18),
-          const Text(
-            'Admin Features',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 10),
-          GridView.count(
-            crossAxisCount: 2,
-            childAspectRatio: 1.45,
-            mainAxisSpacing: 10,
-            crossAxisSpacing: 10,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            children: [
-              _AdminFeatureCard(
-                icon: Icons.manage_accounts_outlined,
-                title: 'Manage Users',
-                subtitle: 'Create and manage accounts',
-                color: _appAccent,
-                onTap: () =>
-                    _showFeatureModal(context, _AdminFeature.manageUsers),
-              ),
-              _AdminFeatureCard(
-                icon: Icons.qr_code_scanner_rounded,
-                title: 'Scan Access Control',
-                subtitle: 'Enable or disable access',
-                color: const Color(0xFF26C281),
-                onTap: () =>
-                    _showFeatureModal(context, _AdminFeature.scanAccess),
-              ),
-              _AdminFeatureCard(
-                icon: Icons.mark_chat_unread_outlined,
-                title: 'Support Inbox',
-                subtitle: 'Review and respond',
-                color: const Color(0xFF9B5CFF),
-                onTap: () =>
-                    _showFeatureModal(context, _AdminFeature.supportInbox),
-              ),
-              _AdminFeatureCard(
-                icon: Icons.notifications_active_outlined,
-                title: 'System Alerts',
-                subtitle: 'Important farm notices',
-                color: const Color(0xFFFF4D57),
-                onTap: () =>
-                    _showFeatureModal(context, _AdminFeature.systemAlerts),
-              ),
-              _AdminFeatureCard(
-                icon: Icons.receipt_long_outlined,
-                title: 'Activity Logs',
-                subtitle: 'Track system activity',
-                color: const Color(0xFFFFB22C),
-                onTap: () =>
-                    _showFeatureModal(context, _AdminFeature.activityLogs),
-              ),
-              _AdminFeatureCard(
-                icon: Icons.admin_panel_settings_outlined,
-                title: 'Admin Profile',
-                subtitle: 'Account and settings',
-                color: const Color(0xFF21C4F3),
-                onTap: () =>
-                    _showFeatureModal(context, _AdminFeature.adminProfile),
-              ),
-            ],
-          ),
-          const SizedBox(height: 18),
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Pending Actions',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _appAccent.withValues(alpha: .13),
-                  borderRadius: BorderRadius.circular(99),
-                  border: Border.all(color: _appAccent.withValues(alpha: .5)),
-                ),
-                child: Text(
-                  '${controller.openSupportCount + disabledCount + (controller.totalCctvCount == 0 ? 1 : 0)}',
-                  style: const TextStyle(
-                    color: _appAccent,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Container(
-            clipBehavior: Clip.antiAlias,
-            decoration: BoxDecoration(
-              color: context.appColors.surface,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: context.appColors.border),
-            ),
-            child: Column(
-              children: [
-                _AdminPendingRow(
-                  icon: Icons.forum_outlined,
-                  text: controller.openSupportCount == 0
-                      ? 'No support messages waiting for reply'
-                      : '${controller.openSupportCount} support message${controller.openSupportCount == 1 ? '' : 's'} waiting for reply',
-                  color: const Color(0xFFFF4D57),
-                  onTap: () => onNavigateToTab?.call(3),
-                ),
-                Divider(height: 1, color: context.appColors.border),
-                _AdminPendingRow(
-                  icon: Icons.person_search_outlined,
-                  text: disabledCount == 0
-                      ? 'All users have scan access enabled'
-                      : '$disabledCount user${disabledCount == 1 ? '' : 's'} need scan access review',
-                  color: _appAccent,
-                  onTap: () => onNavigateToTab?.call(1),
-                ),
-                Divider(height: 1, color: context.appColors.border),
-                _AdminPendingRow(
-                  icon: Icons.videocam_off_outlined,
-                  text: controller.totalCctvCount == 0
-                      ? 'CCTV monitoring unavailable: no cameras connected'
-                      : '${controller.totalCctvCount} CCTV setup${controller.totalCctvCount == 1 ? '' : 's'} ready for review',
-                  color: const Color(0xFF4DA1FF),
-                  onTap: () => onNavigateToTab?.call(2),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class AdminUsersPage extends StatefulWidget {
-  const AdminUsersPage({super.key, required this.controller});
-
-  final AppController controller;
-
-  @override
-  State<AdminUsersPage> createState() => _AdminUsersPageState();
-}
-
-class _AdminUsersPageState extends State<AdminUsersPage> {
-  final TextEditingController _usernameController = TextEditingController();
-  final TextEditingController _displayNameController = TextEditingController();
-  final TextEditingController _searchController = TextEditingController();
-  String? _error;
-
-  @override
-  void dispose() {
-    _usernameController.dispose();
-    _displayNameController.dispose();
-    _searchController.dispose();
-    super.dispose();
-  }
-
-  void _addUser() {
-    final ok = widget.controller.addUser(
-      username: _usernameController.text,
-      displayName: _displayNameController.text,
-    );
-
-    setState(() => _error = ok ? null : widget.controller.lastError);
-    if (ok) {
-      _usernameController.clear();
-      _displayNameController.clear();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: widget.controller,
-      builder: (context, _) {
-        final query = _searchController.text.trim().toLowerCase();
-        final users = widget.controller.farmUsers.where((user) {
-          return query.isEmpty ||
-              user.displayName.toLowerCase().contains(query) ||
-              user.username.toLowerCase().contains(query) ||
-              user.farmName.toLowerCase().contains(query);
-        }).toList();
-        final approved = widget.controller.farmUsers
-            .where((user) => user.cameraAccessEnabled)
-            .length;
-        return Scaffold(
-          appBar: null,
-          body: ListView(
-            padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
-            children: [
-              const _AdminPageHeader(
-                title: 'Users Management',
-                subtitle: 'Review and manage farm user accounts.',
-                icon: Icons.tune_rounded,
-              ),
-              Row(
-                children: [
-                  Expanded(
-                    child: _AdminMetricCard(
-                      icon: Icons.groups_outlined,
-                      title: 'Total Users',
-                      value: '${widget.controller.farmUsers.length}',
-                      note: 'Registered',
-                      color: _appAccent,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _AdminMetricCard(
-                      icon: Icons.verified_user_outlined,
-                      title: 'Scan Access',
-                      value: '$approved',
-                      note: 'Enabled',
-                      color: const Color(0xFF26C281),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _searchController,
-                onChanged: (_) => setState(() {}),
-                decoration: InputDecoration(
-                  hintText: 'Search by name, username, or farm...',
-                  prefixIcon: const Icon(Icons.search_rounded),
-                  suffixIcon: query.isEmpty
-                      ? null
-                      : IconButton(
-                          onPressed: () {
-                            _searchController.clear();
-                            setState(() {});
-                          },
-                          icon: const Icon(Icons.close_rounded),
-                        ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              _GlassCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Add User Account',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _displayNameController,
-                      decoration: const InputDecoration(
-                        labelText: 'Display name',
-                        prefixIcon: Icon(Icons.badge_outlined),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _usernameController,
-                      decoration: const InputDecoration(
-                        labelText: 'Username',
-                        prefixIcon: Icon(Icons.person_add_alt_1_outlined),
-                      ),
-                    ),
-                    if (_error != null) ...[
-                      const SizedBox(height: 12),
-                      Text(
-                        _error!,
-                        style: const TextStyle(
-                          color: Color(0xFFFF6B72),
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 14),
-                    FilledButton(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: _appAccent,
-                        minimumSize: const Size.fromHeight(48),
-                      ),
-                      onPressed: _addUser,
-                      child: const Text('Add User'),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 20),
-              Text(
-                '${users.length} user${users.length == 1 ? '' : 's'}',
-                style: TextStyle(
-                  color: context.appColors.mutedText,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 10),
-              ...users.map(
-                (user) => AdminUserCard(
-                  user: user,
-                  onCameraToggle: () =>
-                      widget.controller.toggleCameraAccess(user.username),
-                  onRemove: () => widget.controller.removeUser(user.username),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-}
-
-class AdminCctvPage extends StatelessWidget {
-  const AdminCctvPage({super.key, required this.controller});
-
-  final AppController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.appColors;
-    final cctvEntries = controller.farmUsers
-        .expand((user) => user.cctvs.map((camera) => (user, camera)))
-        .toList();
-    final hasCameras = cctvEntries.isNotEmpty;
-
-    return Scaffold(
-      appBar: null,
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
-        children: [
-          const _AdminPageHeader(
-            title: 'CCTV',
-            subtitle: 'Manage user CCTV cameras and connection status.',
-            icon: Icons.add_rounded,
-          ),
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  _appAccent.withValues(alpha: .14),
-                  colors.surface,
-                ],
-              ),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: _appAccent.withValues(alpha: .55)),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 64,
-                  height: 64,
-                  decoration: BoxDecoration(
-                    color: _appAccent.withValues(alpha: .1),
-                    shape: BoxShape.circle,
-                    border: Border.all(color: _appAccent),
-                  ),
-                  child: Icon(
-                    hasCameras
-                        ? Icons.videocam_outlined
-                        : Icons.cloud_off_outlined,
-                    color: hasCameras
-                        ? const Color(0xFF26C281)
-                        : const Color(0xFFFF4D57),
-                    size: 34,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'CCTV Status',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        hasCameras ? 'Connected' : 'Offline',
-                        style: TextStyle(
-                          color: hasCameras
-                              ? const Color(0xFF26C281)
-                              : const Color(0xFFFF4D57),
-                          fontSize: 25,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      Text(
-                        hasCameras
-                            ? '${cctvEntries.length} camera setup${cctvEntries.length == 1 ? '' : 's'} available'
-                            : 'No cameras are currently connected',
-                        style: TextStyle(color: colors.mutedText),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: _AdminMetricCard(
-                  icon: Icons.videocam_outlined,
-                  title: 'Total Cameras',
-                  value: '${cctvEntries.length}',
-                  note: hasCameras ? 'Configured' : 'None added',
-                  color: const Color(0xFF21C4F3),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _AdminMetricCard(
-                  icon: Icons.online_prediction_outlined,
-                  title: 'Farm Accounts',
-                  value:
-                      '${controller.farmUsers.where((user) => user.cctvs.isNotEmpty).length}',
-                  note: 'With CCTV',
-                  color: const Color(0xFF26C281),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 18),
-          _AdminActionTile(
-            icon: Icons.info_outline_rounded,
-            title: 'About CCTV Monitoring',
-            subtitle: hasCameras
-                ? 'Review camera streams and ownership below.'
-                : 'Camera setups appear here after users connect them.',
-            color: const Color(0xFF4DA1FF),
-          ),
-          const SizedBox(height: 12),
-          if (!hasCameras)
-            const EmptyCard(
-              title: 'No CCTV cameras',
-              subtitle: 'Connected user camera setups will appear here.',
-            )
-          else
-            ...cctvEntries.map(
-              (entry) => AdminCctvCard(user: entry.$1, feed: entry.$2),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class SupportInboxPage extends StatelessWidget {
-  const SupportInboxPage({super.key, required this.controller});
-
-  final AppController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: controller,
-      builder: (context, _) {
-        final open = controller.supportThreads
-            .where((thread) => !thread.resolved)
-            .length;
-        final resolved = controller.supportThreads.length - open;
-        return Scaffold(
-          appBar: null,
-          body: ListView(
-            padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
-            children: [
-              const _AdminPageHeader(
-                title: 'Support Inbox',
-                subtitle:
-                    'Review and respond to user reports and system concerns.',
-                icon: Icons.tune_rounded,
-              ),
-              Row(
-                children: [
-                  Expanded(
-                    child: _AdminMetricCard(
-                      icon: Icons.chat_bubble_outline_rounded,
-                      title: 'Open Threads',
-                      value: '$open',
-                      note: 'Needs response',
-                      color: _appAccent,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _AdminMetricCard(
-                      icon: Icons.check_circle_outline_rounded,
-                      title: 'Resolved',
-                      value: '$resolved',
-                      note: 'Completed',
-                      color: const Color(0xFF26C281),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                readOnly: true,
-                decoration: InputDecoration(
-                  hintText: 'Support conversations',
-                  prefixIcon: const Icon(Icons.search_rounded),
-                  suffixIcon: Padding(
-                    padding: const EdgeInsets.all(11),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: _appAccent.withValues(alpha: .12),
-                        borderRadius: BorderRadius.circular(9),
-                      ),
-                      child: const Icon(Icons.filter_list_rounded, size: 20),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              if (controller.supportThreads.isEmpty)
-                const EmptyCard(
-                  title: 'No support issues',
-                  subtitle:
-                      'User bug reports and repair schedules appear here.',
-                )
-              else
-                ...controller.supportThreads.map(
-                  (thread) => GestureDetector(
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => AdminThreadPage(
-                            controller: controller,
-                            threadId: thread.id,
-                          ),
-                        ),
-                      );
-                    },
-                    child: SupportPreviewCard(thread: thread),
-                  ),
-                ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-}
-
 class AdminThreadPage extends StatefulWidget {
   const AdminThreadPage({
     super.key,
@@ -7651,6 +6484,12 @@ class AdminThreadPage extends StatefulWidget {
 
 class _AdminThreadPageState extends State<AdminThreadPage> {
   final TextEditingController _replyController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.markThreadRead(widget.threadId);
+  }
 
   @override
   void dispose() {
@@ -7673,7 +6512,10 @@ class _AdminThreadPageState extends State<AdminThreadPage> {
             title: Text(thread.username),
             actions: [
               TextButton(
-                onPressed: () => widget.controller.resolveThread(thread.id),
+                onPressed: () => widget.controller.setThreadResolved(
+                  thread.id,
+                  resolved: !thread.resolved,
+                ),
                 child: Text(thread.resolved ? 'Resolved' : 'Mark Resolved'),
               ),
             ],
@@ -7978,7 +6820,7 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
             SizedBox(height: 3),
             Text(
               'Point your camera to scan the area',
-              style: TextStyle(color: Color(0xFF8E97A8), fontSize: 11),
+              style: TextStyle(color: Color(0xFF8E97A8), fontSize: 13),
             ),
           ],
         ),
@@ -8069,7 +6911,7 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
                         ? 'Keep the rooster clearly inside the frame'
                         : 'Bring the rooster into the frame for better detection',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white70, fontSize: 11),
+                    style: const TextStyle(color: Colors.white70, fontSize: 13),
                   ),
                 ),
               ],
@@ -8129,7 +6971,7 @@ class _RoosterCountBadge extends StatelessWidget {
             style: const TextStyle(
               color: _appAccent,
               fontWeight: FontWeight.w800,
-              fontSize: 12,
+              fontSize: 13,
             ),
           ),
         ],
@@ -8245,7 +7087,7 @@ class _ScanTipsCard extends StatelessWidget {
                             tip,
                             style: TextStyle(
                               color: context.appColors.mutedText,
-                              fontSize: 11,
+                              fontSize: 13,
                             ),
                           ),
                         ),
@@ -8295,7 +7137,7 @@ class _ScanControlButton extends StatelessWidget {
               label,
               style: TextStyle(
                 color: context.appColors.mutedText,
-                fontSize: 10,
+                fontSize: 13,
                 height: 1.3,
               ),
             ),
@@ -8352,7 +7194,7 @@ class _ScanNowButton extends StatelessWidget {
               analyzing ? 'SCANNING' : 'SCAN NOW',
               style: const TextStyle(
                 color: Colors.white,
-                fontSize: 11,
+                fontSize: 13,
                 fontWeight: FontWeight.w900,
               ),
             ),

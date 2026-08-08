@@ -5,6 +5,7 @@ const _guideGreen = Color(0xFF48D66D);
 const _guideBlue = Color(0xFF6794FF);
 const _guideRed = Color(0xFFFF4D3A);
 const _guideAmber = Color(0xFFFFAE00);
+const _guideReadableMuted = Color(0xFFC5CEDA);
 
 class _RedesignedGuide {
   const _RedesignedGuide(
@@ -104,7 +105,11 @@ class _RedesignedGuidesHome extends StatelessWidget {
                 ),
                 Text(
                   'Smart Rooster Monitoring',
-                  style: TextStyle(color: _guideOrange, fontSize: 10),
+                  style: TextStyle(
+                    color: _guideOrange,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ],
             ),
@@ -136,23 +141,58 @@ class _RedesignedGuidesHome extends StatelessWidget {
           const SizedBox(height: 5),
           Text(
             'Learn how detection, sensors, and rooster care work.',
-            style: TextStyle(color: context.appColors.mutedText, height: 1.4),
+            style: const TextStyle(
+              color: _guideReadableMuted,
+              fontSize: 16,
+              height: 1.45,
+            ),
           ),
           const SizedBox(height: 22),
           TextField(
             controller: searchController,
             onChanged: onSearchChanged,
+            cursorColor: _guideOrange,
+            style: const TextStyle(
+              color: Color(0xFFF8FAFC),
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+            ),
             decoration: const InputDecoration(
               hintText: 'Search guides...',
-              prefixIcon: Icon(Icons.search_rounded),
+              hintStyle: TextStyle(
+                color: _guideReadableMuted,
+                fontSize: 16,
+              ),
+              prefixIcon: Icon(
+                Icons.search_rounded,
+                color: Color(0xFFE2E8F0),
+              ),
               suffixIcon: Icon(Icons.filter_alt_outlined, color: _guideOrange),
+              filled: true,
+              fillColor: Color(0xFF121A2A),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.all(Radius.circular(12)),
+                borderSide: BorderSide(color: Color(0xFF657187), width: 1.5),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.all(Radius.circular(12)),
+                borderSide: BorderSide(color: _guideOrange, width: 2),
+              ),
             ),
           ),
           const SizedBox(height: 18),
           if (guides.isEmpty)
             const Padding(
               padding: EdgeInsets.all(32),
-              child: Center(child: Text('No guides found.')),
+              child: Center(
+                child: Text(
+                  'No guides found.',
+                  style: TextStyle(
+                    color: _guideReadableMuted,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
             )
           else
             for (var index = 0; index < guides.length; index++)
@@ -213,24 +253,31 @@ class _GuideIndexRow extends StatelessWidget {
               Text(
                 '$number. ${guide.title}',
                 style: const TextStyle(
-                  fontSize: 16,
+                  fontSize: 18,
                   fontWeight: FontWeight.w900,
                 ),
               ),
               const SizedBox(height: 5),
               Text(
                 guide.subtitle,
-                style: TextStyle(
-                  color: context.appColors.mutedText,
-                  fontSize: 12,
-                  height: 1.35,
+                style: const TextStyle(
+                  color: _guideReadableMuted,
+                  fontSize: 15,
+                  height: 1.4,
                 ),
               ),
             ],
           ),
         ),
         const SizedBox(width: 8),
-        const Text('Read more', style: TextStyle(color: _guideOrange)),
+        const Text(
+          'Read more',
+          style: TextStyle(
+            color: _guideOrange,
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
         const Icon(Icons.chevron_right_rounded),
       ],
     ),
@@ -949,7 +996,7 @@ class _WarningLevel extends StatelessWidget {
         Text(
           text,
           textAlign: TextAlign.center,
-          style: TextStyle(color: context.appColors.mutedText, fontSize: 10),
+          style: TextStyle(color: context.appColors.mutedText, fontSize: 13),
         ),
       ],
     ),
