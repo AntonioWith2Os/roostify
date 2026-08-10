@@ -454,9 +454,9 @@ class _ThemePreferenceCardState extends State<ThemePreferenceCard> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _clearingCache = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not clear cache: $error')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not clear cache: $error')));
     }
   }
 
@@ -489,9 +489,9 @@ class _ThemePreferenceCardState extends State<ThemePreferenceCard> {
     setState(() => _cameraPermissionStatus = result);
 
     if (result.isGranted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Camera access granted.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Camera access granted.')));
     } else if (result.isPermanentlyDenied) {
       final opened = await openAppSettings();
       if (!mounted) return;
@@ -505,9 +505,9 @@ class _ThemePreferenceCardState extends State<ThemePreferenceCard> {
         ),
       );
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Camera access denied.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Camera access denied.')));
     }
   }
 
@@ -515,15 +515,15 @@ class _ThemePreferenceCardState extends State<ThemePreferenceCard> {
     switch (_cameraPermissionStatus) {
       case PermissionStatus.granted:
       case PermissionStatus.limited:
-        return 'Granted — tap to open device settings';
+        return 'Granted — opens device settings';
       case PermissionStatus.permanentlyDenied:
-        return 'Blocked — tap to open device settings';
+        return 'Blocked — opens device settings';
       case PermissionStatus.denied:
-        return 'Not granted — tap to allow';
+        return 'Not granted — allow in device settings';
       case PermissionStatus.restricted:
         return 'Restricted by the device';
       case PermissionStatus.provisional:
-        return 'Granted — tap to open device settings';
+        return 'Granted — opens device settings';
       case null:
         return 'Checking permission...';
     }
@@ -562,11 +562,13 @@ class _ThemePreferenceCardState extends State<ThemePreferenceCard> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            l10n.settingsTitle,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w900,
+                          ExcludeSemantics(
+                            child: Text(
+                              l10n.settingsTitle,
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w900,
+                              ),
                             ),
                           ),
                           const SizedBox(height: 4),
@@ -806,6 +808,7 @@ class AdminUserCard extends StatelessWidget {
             children: [
               const Expanded(child: SizedBox.shrink()),
               IconButton(
+                tooltip: 'Remove',
                 onPressed: onRemove,
                 icon: const Icon(Icons.delete_outline),
               ),

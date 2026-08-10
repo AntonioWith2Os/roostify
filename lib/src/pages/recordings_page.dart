@@ -137,6 +137,7 @@ class _RecordingsPageState extends State<RecordingsPage> {
       appBar: AppBar(
         title: Text(_isAdmin ? 'All Recordings' : 'My Recordings'),
         leading: IconButton(
+          tooltip: 'Close',
           onPressed: () => Navigator.of(context).pop(),
           icon: const Icon(Icons.close_rounded),
         ),

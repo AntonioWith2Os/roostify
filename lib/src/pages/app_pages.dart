@@ -322,9 +322,16 @@ class _LoginPageState extends State<LoginPage> {
               // races the keyboard's own show animation for frame budget,
               // which can drop the soft keyboard mid-word (see the same
               // fix on ProfileEditPage's dispose()).
-              decoration: const InputDecoration(
+              // Explicit label/icon color: the default (muted) input theme
+              // color falls under the accessibility-minimum contrast ratio
+              // against this dialog's tinted surface.
+              decoration: InputDecoration(
                 labelText: 'Email or Username',
-                prefixIcon: Icon(Icons.person_search_outlined),
+                labelStyle: TextStyle(color: dialogContext.appColors.text),
+                prefixIcon: Icon(
+                  Icons.person_search_outlined,
+                  color: dialogContext.appColors.text,
+                ),
               ),
             ),
           ],
@@ -398,392 +405,409 @@ class _LoginPageState extends State<LoginPage> {
                     horizontal: 12,
                     vertical: 10,
                   ),
-                  child: Center(
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: SizedBox(
-                        width: contentWidth,
-                        child: Column(
-                          children: [
-                            Semantics(
-                              image: true,
-                              label: 'Roostify, Smart Rooster Monitoring',
-                              child: Image.asset(
-                                'assets/roostify_logo_transparent.png',
-                                width: 180,
-                                fit: BoxFit.contain,
-                                filterQuality: FilterQuality.high,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Container(
-                              padding: const EdgeInsets.fromLTRB(
-                                20,
-                                20,
-                                20,
-                                18,
-                              ),
-                              decoration: BoxDecoration(
-                                color: const Color(0xE80A1221),
-                                borderRadius: BorderRadius.circular(28),
-                                border: Border.all(
-                                  color: _loginOrange,
-                                  width: 1.4,
+                  // Scrollable instead of FittedBox-scaled: FittedBox
+                  // shrinks its child uniformly to fit, which was shrinking
+                  // buttons/links below the 48dp accessibility minimum
+                  // touch-target size on shorter screens. Scrolling keeps
+                  // every control at its true declared size.
+                  child: SingleChildScrollView(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minHeight: constraints.maxHeight,
+                      ),
+                      child: Center(
+                        child: SizedBox(
+                          width: contentWidth,
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Semantics(
+                                image: true,
+                                label: 'Roostify, Smart Rooster Monitoring',
+                                child: Image.asset(
+                                  'assets/roostify_logo_transparent.png',
+                                  width: 180,
+                                  fit: BoxFit.contain,
+                                  filterQuality: FilterQuality.high,
                                 ),
-                                boxShadow: const [
-                                  BoxShadow(
-                                    color: Color(0x66FF6A19),
-                                    blurRadius: 22,
-                                    spreadRadius: -7,
-                                  ),
-                                  BoxShadow(
-                                    color: Color(0xB3000000),
-                                    blurRadius: 36,
-                                    offset: Offset(0, 18),
-                                  ),
-                                ],
                               ),
-                              child: Theme(
-                                data: buildAppTheme(Brightness.dark),
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Container(
-                                          width: 50,
-                                          height: 50,
-                                          decoration: BoxDecoration(
-                                            shape: BoxShape.circle,
-                                            border: Border.all(
-                                              color: _loginOrange,
-                                              width: 1.4,
+                              const SizedBox(height: 12),
+                              Container(
+                                padding: const EdgeInsets.fromLTRB(
+                                  20,
+                                  20,
+                                  20,
+                                  18,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xE80A1221),
+                                  borderRadius: BorderRadius.circular(28),
+                                  border: Border.all(
+                                    color: _loginOrange,
+                                    width: 1.4,
+                                  ),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                      color: Color(0x66FF6A19),
+                                      blurRadius: 22,
+                                      spreadRadius: -7,
+                                    ),
+                                    BoxShadow(
+                                      color: Color(0xB3000000),
+                                      blurRadius: 36,
+                                      offset: Offset(0, 18),
+                                    ),
+                                  ],
+                                ),
+                                child: Theme(
+                                  data: buildAppTheme(Brightness.dark),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Container(
+                                            width: 50,
+                                            height: 50,
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              border: Border.all(
+                                                color: _loginOrange,
+                                                width: 1.4,
+                                              ),
+                                            ),
+                                            child: Padding(
+                                              padding: const EdgeInsets.all(9),
+                                              child: Image.asset(
+                                                'assets/roostify_logo_transparent.png',
+                                                fit: BoxFit.cover,
+                                                alignment: Alignment.topCenter,
+                                                filterQuality:
+                                                    FilterQuality.high,
+                                              ),
                                             ),
                                           ),
-                                          child: Padding(
-                                            padding: const EdgeInsets.all(9),
-                                            child: Image.asset(
-                                              'assets/roostify_logo_transparent.png',
-                                              fit: BoxFit.cover,
-                                              alignment: Alignment.topCenter,
-                                              filterQuality: FilterQuality.high,
+                                          const SizedBox(width: 14),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  isAdmin
+                                                      ? l10n.loginAdminAccess
+                                                      : l10n.loginTitle,
+                                                  style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 23,
+                                                    fontWeight: FontWeight.w900,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  l10n.loginSubtitle,
+                                                  style: const TextStyle(
+                                                    color: Color(0xFFADB3C1),
+                                                    fontSize: 13,
+                                                  ),
+                                                ),
+                                              ],
                                             ),
                                           ),
-                                        ),
-                                        const SizedBox(width: 14),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                isAdmin
-                                                    ? l10n.loginAdminAccess
-                                                    : l10n.loginTitle,
-                                                style: const TextStyle(
-                                                  color: Colors.white,
-                                                  fontSize: 23,
-                                                  fontWeight: FontWeight.w900,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 4),
-                                              Text(
-                                                l10n.loginSubtitle,
-                                                style: const TextStyle(
-                                                  color: Color(0xFFADB3C1),
-                                                  fontSize: 13,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 14),
-                                    _DarkLoginField(
-                                      controller: _usernameController,
-                                      hintText: 'Email or Username',
-                                      icon: Icons.person_outline_rounded,
-                                      keyboardType: TextInputType.emailAddress,
-                                      textInputAction: TextInputAction.next,
-                                    ),
-                                    const SizedBox(height: 8),
-                                    _DarkLoginField(
-                                      controller: _passwordController,
-                                      hintText: l10n.loginPasswordLabel,
-                                      icon: Icons.lock_outline_rounded,
-                                      obscureText: !_passwordVisible,
-                                      textInputAction: TextInputAction.done,
-                                      onSubmitted: (_) => _signingInWithPassword
-                                          ? null
-                                          : _signInWithPassword(),
-                                      suffixIcon: IconButton(
-                                        tooltip: _passwordVisible
-                                            ? 'Hide password'
-                                            : 'Show password',
-                                        // Explicit constraints: the login
-                                        // card is scaled down by the
-                                        // surrounding FittedBox to fit small
-                                        // screens, which shrank the default
-                                        // 48x48 tap target just under the
-                                        // accessibility minimum.
-                                        constraints: const BoxConstraints(
-                                          minWidth: 52,
-                                          minHeight: 52,
-                                        ),
-                                        onPressed: () => setState(
-                                          () => _passwordVisible =
-                                              !_passwordVisible,
-                                        ),
-                                        icon: Icon(
-                                          _passwordVisible
-                                              ? Icons.visibility_off_outlined
-                                              : Icons.visibility_outlined,
-                                          color: const Color(0xFFA7ADBA),
-                                        ),
+                                        ],
                                       ),
-                                    ),
-                                    Align(
-                                      alignment: Alignment.centerRight,
-                                      child: TextButton(
-                                        style: TextButton.styleFrom(
-                                          minimumSize: const Size(48, 52),
-                                        ),
-                                        onPressed: _showForgotPassword,
-                                        child: const Text(
-                                          'Forgot password?',
-                                          style: TextStyle(color: _loginOrange),
-                                        ),
-                                      ),
-                                    ),
-                                    if (_error != null) ...[
-                                      Container(
-                                        padding: const EdgeInsets.all(12),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0x663A1F2A),
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
-                                          border: Border.all(
-                                            color: const Color(0xFF9B4355),
-                                          ),
-                                        ),
-                                        child: Text(
-                                          _error!,
-                                          style: const TextStyle(
-                                            color: Color(0xFFFFA4AF),
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
+                                      const SizedBox(height: 14),
+                                      _DarkLoginField(
+                                        controller: _usernameController,
+                                        hintText: 'Email or Username',
+                                        icon: Icons.person_outline_rounded,
+                                        keyboardType:
+                                            TextInputType.emailAddress,
+                                        textInputAction: TextInputAction.next,
                                       ),
                                       const SizedBox(height: 8),
-                                    ],
-                                    Semantics(
-                                      button: true,
-                                      // Distinct from the "Log in" card
-                                      // heading above: identical speakable
-                                      // text on a heading and a button
-                                      // confuses screen-reader navigation.
-                                      label: isAdmin
-                                          ? 'Log in as administrator'
-                                          : 'Log in to your account',
-                                      excludeSemantics: true,
-                                      onTap: _signingInWithPassword
-                                          ? null
-                                          : _signInWithPassword,
-                                      child: SizedBox(
+                                      _DarkLoginField(
+                                        controller: _passwordController,
+                                        hintText: l10n.loginPasswordLabel,
+                                        icon: Icons.lock_outline_rounded,
+                                        obscureText: !_passwordVisible,
+                                        textInputAction: TextInputAction.done,
+                                        onSubmitted: (_) =>
+                                            _signingInWithPassword
+                                            ? null
+                                            : _signInWithPassword(),
+                                        suffixIcon: IconButton(
+                                          tooltip: _passwordVisible
+                                              ? 'Hide password'
+                                              : 'Show password',
+                                          // Explicit constraints: the login
+                                          // card is scaled down by the
+                                          // surrounding FittedBox to fit small
+                                          // screens, which shrank the default
+                                          // 48x48 tap target just under the
+                                          // accessibility minimum.
+                                          constraints: const BoxConstraints(
+                                            minWidth: 52,
+                                            minHeight: 52,
+                                          ),
+                                          onPressed: () => setState(
+                                            () => _passwordVisible =
+                                                !_passwordVisible,
+                                          ),
+                                          icon: Icon(
+                                            _passwordVisible
+                                                ? Icons.visibility_off_outlined
+                                                : Icons.visibility_outlined,
+                                            color: const Color(0xFFA7ADBA),
+                                          ),
+                                        ),
+                                      ),
+                                      Align(
+                                        alignment: Alignment.centerRight,
+                                        child: TextButton(
+                                          style: TextButton.styleFrom(
+                                            minimumSize: const Size(48, 52),
+                                          ),
+                                          onPressed: _showForgotPassword,
+                                          child: const Text(
+                                            'Forgot password?',
+                                            style: TextStyle(
+                                              color: _loginOrange,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      if (_error != null) ...[
+                                        Container(
+                                          padding: const EdgeInsets.all(12),
+                                          decoration: BoxDecoration(
+                                            color: const Color(0x663A1F2A),
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                            border: Border.all(
+                                              color: const Color(0xFF9B4355),
+                                            ),
+                                          ),
+                                          child: Text(
+                                            _error!,
+                                            style: const TextStyle(
+                                              color: Color(0xFFFFA4AF),
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                      ],
+                                      Semantics(
+                                        button: true,
+                                        // Distinct from the "Log in" card
+                                        // heading above: identical speakable
+                                        // text on a heading and a button
+                                        // confuses screen-reader navigation.
+                                        label: isAdmin
+                                            ? 'Log in as administrator'
+                                            : 'Log in to your account',
+                                        excludeSemantics: true,
+                                        onTap: _signingInWithPassword
+                                            ? null
+                                            : _signInWithPassword,
+                                        child: SizedBox(
+                                          height: 52,
+                                          child: FilledButton.icon(
+                                            style: FilledButton.styleFrom(
+                                              backgroundColor: _loginOrange,
+                                              foregroundColor: Colors.white,
+                                              shape: const StadiumBorder(),
+                                            ),
+                                            onPressed: _signingInWithPassword
+                                                ? null
+                                                : _signInWithPassword,
+                                            icon: _signingInWithPassword
+                                                ? const SizedBox.square(
+                                                    dimension: 19,
+                                                    child:
+                                                        CircularProgressIndicator(
+                                                          strokeWidth: 2,
+                                                          color: Colors.white,
+                                                        ),
+                                                  )
+                                                : const Icon(
+                                                    Icons.login_rounded,
+                                                  ),
+                                            label: Text(
+                                              _signingInWithPassword
+                                                  ? l10n.loginSigningIn
+                                                  : isAdmin
+                                                  ? l10n.loginButtonAdmin
+                                                  : l10n.loginButtonUser,
+                                              style: const TextStyle(
+                                                fontSize: 17,
+                                                fontWeight: FontWeight.w900,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 10),
+                                      const _LoginDivider(),
+                                      const SizedBox(height: 10),
+                                      SizedBox(
                                         height: 52,
                                         child: FilledButton.icon(
                                           style: FilledButton.styleFrom(
-                                            backgroundColor: _loginOrange,
-                                            foregroundColor: Colors.white,
+                                            backgroundColor: Colors.white,
+                                            foregroundColor: const Color(
+                                              0xFF141820,
+                                            ),
                                             shape: const StadiumBorder(),
                                           ),
-                                          onPressed: _signingInWithPassword
+                                          onPressed: _signingInWithGoogle
                                               ? null
-                                              : _signInWithPassword,
-                                          icon: _signingInWithPassword
+                                              : _signInWithGoogle,
+                                          icon: _signingInWithGoogle
                                               ? const SizedBox.square(
                                                   dimension: 19,
                                                   child:
                                                       CircularProgressIndicator(
                                                         strokeWidth: 2,
-                                                        color: Colors.white,
+                                                        color: Color(
+                                                          0xFF4285F4,
+                                                        ),
                                                       ),
                                                 )
-                                              : const Icon(
-                                                  Icons.login_rounded,
-                                                ),
+                                              : const _GoogleMark(size: 22),
                                           label: Text(
-                                            _signingInWithPassword
-                                                ? l10n.loginSigningIn
-                                                : isAdmin
-                                                ? l10n.loginButtonAdmin
-                                                : l10n.loginButtonUser,
+                                            _signingInWithGoogle
+                                                ? l10n.loginGoogleOpening
+                                                : l10n.loginGoogleUser,
                                             style: const TextStyle(
-                                              fontSize: 17,
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 10),
+                                      const _LoginDivider(),
+                                      const SizedBox(height: 10),
+                                      SizedBox(
+                                        height: 52,
+                                        child: OutlinedButton.icon(
+                                          style: OutlinedButton.styleFrom(
+                                            foregroundColor: _loginOrange,
+                                            side: BorderSide(
+                                              color: isAdmin
+                                                  ? Colors.white
+                                                  : _loginOrange,
+                                              width: 1.3,
+                                            ),
+                                            shape: const StadiumBorder(),
+                                          ),
+                                          onPressed: () {
+                                            setState(() {
+                                              _selectedRole = isAdmin
+                                                  ? UserRole.user
+                                                  : UserRole.admin;
+                                              _error = null;
+                                            });
+                                          },
+                                          icon: Icon(
+                                            isAdmin
+                                                ? Icons.person_outline_rounded
+                                                : Icons.shield_outlined,
+                                          ),
+                                          label: Text(
+                                            isAdmin
+                                                ? 'User Access'
+                                                : 'Admin Access',
+                                            style: const TextStyle(
+                                              fontSize: 16,
                                               fontWeight: FontWeight.w900,
                                             ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                    const SizedBox(height: 10),
-                                    const _LoginDivider(),
-                                    const SizedBox(height: 10),
-                                    SizedBox(
-                                      height: 52,
-                                      child: FilledButton.icon(
-                                        style: FilledButton.styleFrom(
-                                          backgroundColor: Colors.white,
-                                          foregroundColor: const Color(
-                                            0xFF141820,
-                                          ),
-                                          shape: const StadiumBorder(),
-                                        ),
-                                        onPressed: _signingInWithGoogle
-                                            ? null
-                                            : _signInWithGoogle,
-                                        icon: _signingInWithGoogle
-                                            ? const SizedBox.square(
-                                                dimension: 19,
-                                                child:
-                                                    CircularProgressIndicator(
-                                                      strokeWidth: 2,
-                                                      color: Color(0xFF4285F4),
-                                                    ),
-                                              )
-                                            : const _GoogleMark(size: 22),
-                                        label: Text(
-                                          _signingInWithGoogle
-                                              ? l10n.loginGoogleOpening
-                                              : l10n.loginGoogleUser,
-                                          style: const TextStyle(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.w800,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 10),
-                                    const _LoginDivider(),
-                                    const SizedBox(height: 10),
-                                    SizedBox(
-                                      height: 52,
-                                      child: OutlinedButton.icon(
-                                        style: OutlinedButton.styleFrom(
-                                          foregroundColor: _loginOrange,
-                                          side: BorderSide(
-                                            color: isAdmin
-                                                ? Colors.white
-                                                : _loginOrange,
-                                            width: 1.3,
-                                          ),
-                                          shape: const StadiumBorder(),
-                                        ),
-                                        onPressed: () {
-                                          setState(() {
-                                            _selectedRole = isAdmin
-                                                ? UserRole.user
-                                                : UserRole.admin;
-                                            _error = null;
-                                          });
-                                        },
-                                        icon: Icon(
-                                          isAdmin
-                                              ? Icons.person_outline_rounded
-                                              : Icons.shield_outlined,
-                                        ),
-                                        label: Text(
-                                          isAdmin
-                                              ? 'User Access'
-                                              : 'Admin Access',
-                                          style: const TextStyle(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.w900,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 14),
-                                    Wrap(
-                                      alignment: WrapAlignment.center,
-                                      crossAxisAlignment:
-                                          WrapCrossAlignment.center,
-                                      children: [
-                                        const Text(
-                                          'By continuing, you agree to our ',
-                                          style: TextStyle(
-                                            color: Color(0xFFA7ADBA),
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                        GestureDetector(
-                                          // The button's visible text stays
-                                          // small (matches the surrounding
-                                          // legal copy), but its actual tap
-                                          // target grows to the 48dp
-                                          // accessibility minimum via the
-                                          // invisible padding below.
-                                          behavior: HitTestBehavior.opaque,
-                                          onTap: () => _showPolicy(
-                                            'Terms of Service',
-                                            'Use Roostify responsibly and only with '
-                                                'cameras, sensors, and accounts you '
-                                                'are authorized to access.',
-                                          ),
-                                          child: Container(
-                                            constraints: const BoxConstraints(
-                                              minHeight: 48,
+                                      const SizedBox(height: 14),
+                                      Wrap(
+                                        alignment: WrapAlignment.center,
+                                        crossAxisAlignment:
+                                            WrapCrossAlignment.center,
+                                        children: [
+                                          const Text(
+                                            'By continuing, you agree to our ',
+                                            style: TextStyle(
+                                              color: Color(0xFFA7ADBA),
+                                              fontSize: 13,
                                             ),
-                                            alignment: Alignment.center,
-                                            child: const Text(
+                                          ),
+                                          GestureDetector(
+                                            // The button's visible text stays
+                                            // small (matches the surrounding
+                                            // legal copy), but its actual tap
+                                            // target grows to the 48dp
+                                            // accessibility minimum via the
+                                            // invisible padding below.
+                                            behavior: HitTestBehavior.opaque,
+                                            onTap: () => _showPolicy(
                                               'Terms of Service',
-                                              style: TextStyle(
-                                                color: _loginOrange,
-                                                fontSize: 13,
+                                              'Use Roostify responsibly and only with '
+                                                  'cameras, sensors, and accounts you '
+                                                  'are authorized to access.',
+                                            ),
+                                            child: Container(
+                                              constraints: const BoxConstraints(
+                                                minHeight: 48,
+                                              ),
+                                              alignment: Alignment.center,
+                                              child: const Text(
+                                                'Terms of Service',
+                                                style: TextStyle(
+                                                  color: _loginOrange,
+                                                  fontSize: 13,
+                                                ),
                                               ),
                                             ),
                                           ),
-                                        ),
-                                        const Text(
-                                          ' and ',
-                                          style: TextStyle(
-                                            color: Color(0xFFA7ADBA),
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                        GestureDetector(
-                                          behavior: HitTestBehavior.opaque,
-                                          onTap: () => _showPolicy(
-                                            'Privacy Policy',
-                                            'Roostify uses account information, '
-                                                'sensor readings, camera settings, '
-                                                'and recordings only to provide app '
-                                                'features and monitoring services.',
-                                          ),
-                                          child: Container(
-                                            constraints: const BoxConstraints(
-                                              minHeight: 48,
+                                          const Text(
+                                            ' and ',
+                                            style: TextStyle(
+                                              color: Color(0xFFA7ADBA),
+                                              fontSize: 13,
                                             ),
-                                            alignment: Alignment.center,
-                                            child: const Text(
-                                              'Privacy Policy.',
-                                              style: TextStyle(
-                                                color: _loginOrange,
-                                                fontSize: 13,
+                                          ),
+                                          GestureDetector(
+                                            behavior: HitTestBehavior.opaque,
+                                            onTap: () => _showPolicy(
+                                              'Privacy Policy',
+                                              'Roostify uses account information, '
+                                                  'sensor readings, camera settings, '
+                                                  'and recordings only to provide app '
+                                                  'features and monitoring services.',
+                                            ),
+                                            child: Container(
+                                              constraints: const BoxConstraints(
+                                                minHeight: 48,
+                                              ),
+                                              alignment: Alignment.center,
+                                              child: const Text(
+                                                'Privacy Policy.',
+                                                style: TextStyle(
+                                                  color: _loginOrange,
+                                                  fontSize: 13,
+                                                ),
                                               ),
                                             ),
                                           ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
+                                        ],
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -821,31 +845,36 @@ class _DarkLoginField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
-      controller: controller,
-      keyboardType: keyboardType,
-      textInputAction: textInputAction,
-      obscureText: obscureText,
-      onSubmitted: onSubmitted,
-      style: const TextStyle(color: Colors.white),
-      cursorColor: _LoginPageState._loginOrange,
-      decoration: InputDecoration(
-        hintText: hintText,
-        hintStyle: const TextStyle(color: Color(0xFFA7ADBA)),
-        prefixIcon: Icon(icon, color: _LoginPageState._loginOrange),
-        suffixIcon: suffixIcon,
-        filled: true,
-        fillColor: const Color(0xB30B1424),
-        contentPadding: const EdgeInsets.symmetric(vertical: 19),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(color: Color(0xFF384359)),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(
-            color: _LoginPageState._loginOrange,
-            width: 1.4,
+    return MergeSemantics(
+      child: Semantics(
+        label: hintText,
+        child: TextField(
+          controller: controller,
+          keyboardType: keyboardType,
+          textInputAction: textInputAction,
+          obscureText: obscureText,
+          onSubmitted: onSubmitted,
+          style: const TextStyle(color: Colors.white),
+          cursorColor: _LoginPageState._loginOrange,
+          decoration: InputDecoration(
+            hintText: hintText,
+            hintStyle: const TextStyle(color: Color(0xFFA7ADBA)),
+            prefixIcon: Icon(icon, color: _LoginPageState._loginOrange),
+            suffixIcon: suffixIcon,
+            filled: true,
+            fillColor: const Color(0xB30B1424),
+            contentPadding: const EdgeInsets.symmetric(vertical: 19),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: const BorderSide(color: Color(0xFF384359)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: const BorderSide(
+                color: _LoginPageState._loginOrange,
+                width: 1.4,
+              ),
+            ),
           ),
         ),
       ),
@@ -941,10 +970,7 @@ class _AppShellState extends State<AppShell> {
             controller: widget.controller,
             session: widget.session,
           ),
-          UserCctvPage(
-            controller: widget.controller,
-            session: widget.session,
-          ),
+          UserCctvPage(controller: widget.controller, session: widget.session),
           UserManualCameraTabPage(
             controller: widget.controller,
             session: widget.session,
@@ -953,10 +979,7 @@ class _AppShellState extends State<AppShell> {
             controller: widget.controller,
             session: widget.session,
           ),
-          ProfilePage(
-            controller: widget.controller,
-            session: widget.session,
-          ),
+          ProfilePage(controller: widget.controller, session: widget.session),
         ];
 
         return Scaffold(
@@ -967,7 +990,7 @@ class _AppShellState extends State<AppShell> {
           ),
           floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
           bottomNavigationBar: Theme(
-            data: buildAppTheme(Brightness.dark),
+            data: buildAppTheme(Theme.of(context).brightness),
             child: NavigationBar(
               selectedIndex: _index,
               onDestinationSelected: (value) => setState(() => _index = value),
@@ -991,52 +1014,59 @@ class _SupportChatBubble extends StatelessWidget {
     final thread = controller.threadForUser(session.user.username);
     final messageCount = thread?.messages.length ?? 0;
 
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        FloatingActionButton(
-          heroTag: 'support-chat-bubble',
-          tooltip: 'Chat admin',
-          shape: const CircleBorder(),
-          backgroundColor: _appAccent,
-          foregroundColor: Colors.white,
-          onPressed: () {
-            Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) =>
-                    SupportChatPage(controller: controller, session: session),
-              ),
-            );
-          },
-          child: const Icon(Icons.chat_bubble_outline),
-        ),
-        if (messageCount > 0)
-          Positioned(
-            right: -2,
-            top: -2,
-            child: Container(
-              constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              decoration: BoxDecoration(
-                color: const Color(0xFF26C281),
-                border: Border.all(
-                  color: Theme.of(context).scaffoldBackgroundColor,
-                  width: 2,
+    return Semantics(
+      button: true,
+      label: messageCount > 0
+          ? 'Chat admin, $messageCount unread message${messageCount == 1 ? '' : 's'}'
+          : 'Chat admin',
+      excludeSemantics: true,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          FloatingActionButton(
+            heroTag: 'support-chat-bubble',
+            tooltip: 'Chat admin',
+            shape: const CircleBorder(),
+            backgroundColor: _appAccent,
+            foregroundColor: Colors.white,
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) =>
+                      SupportChatPage(controller: controller, session: session),
                 ),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                messageCount > 99 ? '99+' : '$messageCount',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w900,
+              );
+            },
+            child: const Icon(Icons.chat_bubble_outline),
+          ),
+          if (messageCount > 0)
+            Positioned(
+              right: -2,
+              top: -2,
+              child: Container(
+                constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF26C281),
+                  border: Border.all(
+                    color: Theme.of(context).scaffoldBackgroundColor,
+                    width: 2,
+                  ),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  messageCount > 99 ? '99+' : '$messageCount',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
               ),
             ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -1061,7 +1091,7 @@ class UserDashboardPage extends StatelessWidget {
     unawaited(controller.maybeShowDailySummary(user.username));
 
     return Theme(
-      data: buildAppTheme(Brightness.dark),
+      data: buildAppTheme(Theme.of(context).brightness),
       child: Scaffold(
         appBar: AppBar(
           toolbarHeight: 76,
@@ -1100,19 +1130,26 @@ class UserDashboardPage extends StatelessWidget {
           actions: [
             Padding(
               padding: const EdgeInsets.only(right: 12),
-              child: Badge(
-                isLabelVisible: activeWarningCount > 0,
-                label: Text('$activeWarningCount'),
-                child: IconButton.filledTonal(
-                  tooltip: 'View alerts',
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => AlertsPage(alerts: monitor.alerts),
-                      ),
-                    );
-                  },
-                  icon: const Icon(Icons.notifications_none_rounded),
+              child: Semantics(
+                label: activeWarningCount > 0
+                    ? '$activeWarningCount active alerts. View alerts.'
+                    : 'View alerts',
+                button: true,
+                excludeSemantics: true,
+                child: Badge(
+                  isLabelVisible: activeWarningCount > 0,
+                  label: Text('$activeWarningCount'),
+                  child: IconButton.filledTonal(
+                    tooltip: 'View alerts',
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => AlertsPage(alerts: monitor.alerts),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.notifications_none_rounded),
+                  ),
                 ),
               ),
             ),
@@ -1149,7 +1186,7 @@ class UserDashboardPage extends StatelessWidget {
                 Esp32SensorConnectionStatus.connected;
 
             return SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 88),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -1178,9 +1215,7 @@ class UserDashboardPage extends StatelessWidget {
                         physics: const NeverScrollableScrollPhysics(),
                         crossAxisSpacing: 10,
                         mainAxisSpacing: 10,
-                        childAspectRatio: constraints.maxWidth < 420
-                            ? .44
-                            : .6,
+                        childAspectRatio: constraints.maxWidth < 420 ? .44 : .6,
                         children: [
                           CircularSensorGauge(
                             title: 'Temperature',
@@ -1330,6 +1365,9 @@ class _FarmOverviewCard extends StatelessWidget {
             label: 'CCTV Connect',
             detail: cctvCount == 1 ? 'Connected' : 'Connections',
             color: _appAccent,
+            semanticLabel: cctvCount == 1
+                ? 'CCTV Connect: 1 connection'
+                : 'CCTV Connect: $cctvCount connections',
           ),
         ),
         const SizedBox(width: 9),
@@ -1340,6 +1378,8 @@ class _FarmOverviewCard extends StatelessWidget {
             label: 'ESP32 Sensor',
             detail: sensorOnline ? 'Online' : 'Offline',
             color: const Color(0xFF5E83FF),
+            semanticLabel:
+                'ESP32 Sensor: ${sensorOnline ? 'Online' : 'Offline'}',
           ),
         ),
         const SizedBox(width: 9),
@@ -1350,6 +1390,7 @@ class _FarmOverviewCard extends StatelessWidget {
             label: 'Alerts',
             detail: 'Today',
             color: const Color(0xFFFF5252),
+            semanticLabel: 'Alerts: $alertCount today',
           ),
         ),
       ],
@@ -1364,65 +1405,71 @@ class _OverviewMetric extends StatelessWidget {
     required this.label,
     required this.detail,
     required this.color,
+    required this.semanticLabel,
   });
   final IconData icon;
   final String value;
   final String label;
   final String detail;
   final Color color;
+  final String semanticLabel;
 
   @override
-  Widget build(BuildContext context) => Container(
-    constraints: const BoxConstraints(minHeight: 166),
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
-    decoration: BoxDecoration(
-      color: context.appColors.surface,
-      borderRadius: BorderRadius.circular(20),
-      border: Border.all(color: color.withValues(alpha: .38)),
-      boxShadow: [
-        BoxShadow(
-          color: color.withValues(alpha: .08),
-          blurRadius: 16,
-          offset: const Offset(0, 8),
-        ),
-      ],
-    ),
-    child: Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Container(
-          width: 54,
-          height: 54,
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: .11),
-            shape: BoxShape.circle,
-            border: Border.all(color: color.withValues(alpha: .45)),
+  Widget build(BuildContext context) => Semantics(
+    label: semanticLabel,
+    excludeSemantics: true,
+    child: Container(
+      constraints: const BoxConstraints(minHeight: 166),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
+      decoration: BoxDecoration(
+        color: context.appColors.surface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: .38)),
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: .08),
+            blurRadius: 16,
+            offset: const Offset(0, 8),
           ),
-          child: Icon(icon, color: color, size: 28),
-        ),
-        const SizedBox(height: 11),
-        Text(
-          label,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
-        ),
-        const SizedBox(height: 5),
-        Text(
-          value,
-          style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 27),
-        ),
-        Text(
-          detail,
-          style: TextStyle(
-            color: detail == 'Online'
-                ? const Color(0xFF26C281)
-                : context.appColors.mutedText,
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
+        ],
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 54,
+            height: 54,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: .11),
+              shape: BoxShape.circle,
+              border: Border.all(color: color.withValues(alpha: .45)),
+            ),
+            child: Icon(icon, color: color, size: 28),
           ),
-        ),
-      ],
+          const SizedBox(height: 11),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            value,
+            style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 27),
+          ),
+          Text(
+            detail,
+            style: TextStyle(
+              color: detail == 'Online'
+                  ? const Color(0xFF26C281)
+                  : context.appColors.mutedText,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
     ),
   );
 }
@@ -1468,47 +1515,55 @@ class _DashboardSectionTitle extends StatelessWidget {
         ),
       ),
       if (online)
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-          decoration: BoxDecoration(
-            color: const Color(0xFF23BF75).withValues(alpha: .1),
-            borderRadius: BorderRadius.circular(99),
-          ),
-          child: const Row(
-            children: [
-              Icon(Icons.circle, color: Color(0xFF23BF75), size: 8),
-              SizedBox(width: 6),
-              Text(
-                'Online',
-                style: TextStyle(
-                  color: Color(0xFF23BF75),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
+        Semantics(
+          label: '$title: Online',
+          excludeSemantics: true,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: const Color(0xFF23BF75).withValues(alpha: .1),
+              borderRadius: BorderRadius.circular(99),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.circle, color: Color(0xFF23BF75), size: 8),
+                SizedBox(width: 6),
+                Text(
+                  'Online',
+                  style: TextStyle(
+                    color: Color(0xFF23BF75),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       if (!online)
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFF5252).withValues(alpha: .1),
-            borderRadius: BorderRadius.circular(99),
-          ),
-          child: const Row(
-            children: [
-              Icon(Icons.circle, color: Color(0xFFFF5252), size: 8),
-              SizedBox(width: 6),
-              Text(
-                'Offline',
-                style: TextStyle(
-                  color: Color(0xFFFF7777),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
+        Semantics(
+          label: '$title: Offline',
+          excludeSemantics: true,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFF5252).withValues(alpha: .1),
+              borderRadius: BorderRadius.circular(99),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.circle, color: Color(0xFFFF5252), size: 8),
+                SizedBox(width: 6),
+                Text(
+                  'Offline',
+                  style: TextStyle(
+                    color: Color(0xFFFF7777),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
     ],
@@ -1659,7 +1714,7 @@ class UserCctvPage extends StatelessWidget {
             ],
           ),
           body: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 88),
             children: [
               _CctvCameraCollection(
                 streams: streams,
@@ -2064,7 +2119,7 @@ class _UserGuidelinesPageState extends State<UserGuidelinesPage> {
             .toList();
 
         return Theme(
-          data: buildAppTheme(Brightness.dark),
+          data: buildAppTheme(Theme.of(context).brightness),
           child: _RedesignedGuidesHome(
             controller: widget.controller,
             session: widget.session,
@@ -2578,6 +2633,7 @@ Future<void> _showGuideInfoDialog(BuildContext context, _GuideGridItem item) {
                     ),
                   ),
                   IconButton(
+                    tooltip: 'Close',
                     onPressed: () => Navigator.of(context).pop(),
                     icon: const Icon(Icons.close_rounded),
                   ),
@@ -4360,6 +4416,7 @@ class _SupportChatPageState extends State<SupportChatPage> {
           appBar: AppBar(
             title: const Text('Help & Support'),
             leading: IconButton(
+              tooltip: 'Close',
               onPressed: () => Navigator.of(context).pop(),
               icon: const Icon(Icons.close_rounded),
             ),
@@ -4438,14 +4495,19 @@ class _SupportChatPageState extends State<SupportChatPage> {
                 ],
               ),
               const SizedBox(height: 12),
-              TextField(
-                controller: _messageController,
-                minLines: 3,
-                maxLines: 5,
-                decoration: const InputDecoration(
-                  hintText: 'Describe your concern...',
-                  prefixIcon: Icon(Icons.chat_bubble_outline_rounded),
-                  helperText: 'Our team will get back to you shortly.',
+              MergeSemantics(
+                child: Semantics(
+                  label: 'Describe your concern',
+                  child: TextField(
+                    controller: _messageController,
+                    minLines: 3,
+                    maxLines: 5,
+                    decoration: const InputDecoration(
+                      hintText: 'Describe your concern...',
+                      prefixIcon: Icon(Icons.chat_bubble_outline_rounded),
+                      helperText: 'Our team will get back to you shortly.',
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(height: 12),
@@ -4615,6 +4677,7 @@ class ProfilePage extends StatelessWidget {
                 ),
               ),
               IconButton(
+                tooltip: 'Close',
                 onPressed: () => Navigator.of(dialogContext).pop(false),
                 icon: const Icon(Icons.close_rounded),
               ),
@@ -4733,6 +4796,7 @@ class ProfilePage extends StatelessWidget {
                       appBar: AppBar(
                         title: const Text('App Settings'),
                         leading: IconButton(
+                          tooltip: 'Close',
                           onPressed: () => Navigator.of(context).pop(),
                           icon: const Icon(Icons.close_rounded),
                         ),
@@ -4753,7 +4817,7 @@ class ProfilePage extends StatelessWidget {
               ],
             ),
       body: ListView(
-        padding: EdgeInsets.fromLTRB(16, user.isAdmin ? 18 : 8, 16, 24),
+        padding: EdgeInsets.fromLTRB(16, user.isAdmin ? 18 : 8, 16, 88),
         children: [
           if (user.isAdmin)
             const _AdminPageHeader(
@@ -4819,6 +4883,7 @@ class ProfilePage extends StatelessWidget {
                     appBar: AppBar(
                       title: const Text('App Settings'),
                       leading: IconButton(
+                        tooltip: 'Close',
                         onPressed: () => Navigator.of(context).pop(),
                         icon: const Icon(Icons.close_rounded),
                       ),
@@ -4918,6 +4983,7 @@ class _ConnectedAccountsPageState extends State<ConnectedAccountsPage> {
           appBar: AppBar(
             title: const Text('Connected Accounts'),
             leading: IconButton(
+              tooltip: 'Close',
               onPressed: () => Navigator.of(context).pop(),
               icon: const Icon(Icons.close_rounded),
             ),
@@ -5242,6 +5308,7 @@ class _NotificationPreferencesPageState
       appBar: AppBar(
         title: const Text('Notification Preferences'),
         leading: IconButton(
+          tooltip: 'Close',
           onPressed: () => Navigator.of(context).pop(),
           icon: const Icon(Icons.close_rounded),
         ),
@@ -5846,11 +5913,13 @@ class _ProfileSubpageIntro extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w900,
+              ExcludeSemantics(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
               ),
               const SizedBox(height: 4),
@@ -5898,48 +5967,58 @@ class _ProfileFormField extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Icon(icon, color: _appAccent, size: 22),
-            const SizedBox(width: 12),
-            Text(
-              label,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-            ),
-          ],
+        ExcludeSemantics(
+          child: Row(
+            children: [
+              Icon(icon, color: _appAccent, size: 22),
+              const SizedBox(width: 12),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 9),
         Padding(
           padding: const EdgeInsets.only(left: 40),
-          child: TextField(
-            controller: controller,
-            keyboardType: keyboardType,
-            readOnly: readOnly,
-            obscureText: obscureText,
-            onChanged: onChanged,
-            decoration: InputDecoration(
-              prefixText: prefixText,
-              suffixIcon: suffixIcon,
-              filled: true,
-              fillColor: context.appColors.surface,
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 15,
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(15),
-                borderSide: BorderSide(
-                  color: _appAccent.withValues(alpha: .75),
-                ),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(15),
-                borderSide: const BorderSide(color: _appAccent, width: 1.7),
-              ),
-              disabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(15),
-                borderSide: BorderSide(
-                  color: _appAccent.withValues(alpha: .35),
+          child: MergeSemantics(
+            child: Semantics(
+              label: label,
+              child: TextField(
+                controller: controller,
+                keyboardType: keyboardType,
+                readOnly: readOnly,
+                obscureText: obscureText,
+                onChanged: onChanged,
+                decoration: InputDecoration(
+                  prefixText: prefixText,
+                  suffixIcon: suffixIcon,
+                  filled: true,
+                  fillColor: context.appColors.surface,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 15,
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(15),
+                    borderSide: BorderSide(
+                      color: _appAccent.withValues(alpha: .75),
+                    ),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(15),
+                    borderSide: const BorderSide(color: _appAccent, width: 1.7),
+                  ),
+                  disabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(15),
+                    borderSide: BorderSide(
+                      color: _appAccent.withValues(alpha: .35),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -6027,6 +6106,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
       appBar: AppBar(
         title: const Text('My Information'),
         leading: IconButton(
+          tooltip: 'Close',
           onPressed: () => Navigator.of(context).pop(),
           icon: const Icon(Icons.close_rounded),
         ),
@@ -6238,6 +6318,7 @@ class _CredentialsEditPageState extends State<CredentialsEditPage> {
       appBar: AppBar(
         title: const Text('Username & Password'),
         leading: IconButton(
+          tooltip: 'Close',
           onPressed: () => Navigator.of(context).pop(),
           icon: const Icon(Icons.close_rounded),
         ),
@@ -6263,9 +6344,9 @@ class _CredentialsEditPageState extends State<CredentialsEditPage> {
             controller: _currentPasswordController,
             obscureText: !_showCurrentPassword,
             suffixIcon: IconButton(
-              onPressed: () => setState(
-                () => _showCurrentPassword = !_showCurrentPassword,
-              ),
+              tooltip: _showCurrentPassword ? 'Hide password' : 'Show password',
+              onPressed: () =>
+                  setState(() => _showCurrentPassword = !_showCurrentPassword),
               icon: Icon(
                 _showCurrentPassword
                     ? Icons.visibility_outlined
@@ -6280,6 +6361,7 @@ class _CredentialsEditPageState extends State<CredentialsEditPage> {
             obscureText: !_showNewPassword,
             onChanged: (_) => setState(() {}),
             suffixIcon: IconButton(
+              tooltip: _showNewPassword ? 'Hide password' : 'Show password',
               onPressed: () =>
                   setState(() => _showNewPassword = !_showNewPassword),
               icon: Icon(
@@ -6297,9 +6379,9 @@ class _CredentialsEditPageState extends State<CredentialsEditPage> {
             controller: _confirmPasswordController,
             obscureText: !_showConfirmPassword,
             suffixIcon: IconButton(
-              onPressed: () => setState(
-                () => _showConfirmPassword = !_showConfirmPassword,
-              ),
+              tooltip: _showConfirmPassword ? 'Hide password' : 'Show password',
+              onPressed: () =>
+                  setState(() => _showConfirmPassword = !_showConfirmPassword),
               icon: Icon(
                 _showConfirmPassword
                     ? Icons.visibility_outlined
@@ -6454,7 +6536,7 @@ class _AdminPageHeader extends StatelessWidget {
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(color: context.appColors.border),
               ),
-              child: Icon(icon, color: Colors.white),
+              child: Icon(icon, color: context.appColors.text),
             ),
           ],
         ),
@@ -6466,115 +6548,6 @@ class _AdminPageHeader extends StatelessWidget {
       ],
     ),
   );
-}
-
-class AdminThreadPage extends StatefulWidget {
-  const AdminThreadPage({
-    super.key,
-    required this.controller,
-    required this.threadId,
-  });
-
-  final AppController controller;
-  final String threadId;
-
-  @override
-  State<AdminThreadPage> createState() => _AdminThreadPageState();
-}
-
-class _AdminThreadPageState extends State<AdminThreadPage> {
-  final TextEditingController _replyController = TextEditingController();
-
-  @override
-  void initState() {
-    super.initState();
-    widget.controller.markThreadRead(widget.threadId);
-  }
-
-  @override
-  void dispose() {
-    _replyController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: widget.controller,
-      builder: (context, _) {
-        final thread = widget.controller.threadById(widget.threadId);
-        if (thread == null) {
-          return const Scaffold(body: Center(child: Text('Thread not found.')));
-        }
-
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(thread.username),
-            actions: [
-              TextButton(
-                onPressed: () => widget.controller.setThreadResolved(
-                  thread.id,
-                  resolved: !thread.resolved,
-                ),
-                child: Text(thread.resolved ? 'Resolved' : 'Mark Resolved'),
-              ),
-            ],
-          ),
-          body: Column(
-            children: [
-              Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-                  children: [
-                    ...thread.messages.map(
-                      (message) => ChatBubble(
-                        message: message,
-                        mine: message.senderRole == UserRole.admin,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              SafeArea(
-                top: false,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _replyController,
-                          minLines: 1,
-                          maxLines: 4,
-                          decoration: const InputDecoration(
-                            hintText: 'Reply or confirm a repair schedule',
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      FilledButton(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: _appAccent,
-                        ),
-                        onPressed: () {
-                          widget.controller.sendAdminSupportMessage(
-                            threadId: thread.id,
-                            text: _replyController.text,
-                          );
-                          _replyController.clear();
-                        },
-                        child: const Text('Reply'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
 }
 
 class AlertsPage extends StatelessWidget {
@@ -6840,7 +6813,7 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 88),
         children: [
           if (detected) ...[
             Align(
@@ -6885,9 +6858,21 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
                 else if (hasCamera) ...[
                   _buildFillingCameraPreview(_cameraController!),
                   IgnorePointer(
-                    child: CustomPaint(
-                      painter: ChickenDetectionPainter(
-                        detections: _result?.detections ?? const [],
+                    child: Semantics(
+                      label: (_result?.detections ?? const []).isEmpty
+                          ? null
+                          : (_result?.detections ?? const [])
+                                .map(
+                                  (detection) =>
+                                      '${detection.label} '
+                                      '${(detection.confidence * 100).toStringAsFixed(0)}% '
+                                      'confidence',
+                                )
+                                .join(', '),
+                      child: CustomPaint(
+                        painter: ChickenDetectionPainter(
+                          detections: _result?.detections ?? const [],
+                        ),
                       ),
                     ),
                   ),

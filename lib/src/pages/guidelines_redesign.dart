@@ -5,7 +5,6 @@ const _guideGreen = Color(0xFF48D66D);
 const _guideBlue = Color(0xFF6794FF);
 const _guideRed = Color(0xFFFF4D3A);
 const _guideAmber = Color(0xFFFFAE00);
-const _guideReadableMuted = Color(0xFFC5CEDA);
 
 class _RedesignedGuide {
   const _RedesignedGuide(
@@ -132,7 +131,7 @@ class _RedesignedGuidesHome extends StatelessWidget {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 88),
         children: [
           const Text(
             'Guides',
@@ -141,8 +140,8 @@ class _RedesignedGuidesHome extends StatelessWidget {
           const SizedBox(height: 5),
           Text(
             'Learn how detection, sensors, and rooster care work.',
-            style: const TextStyle(
-              color: _guideReadableMuted,
+            style: TextStyle(
+              color: context.appColors.mutedText,
               fontSize: 16,
               height: 1.45,
             ),
@@ -152,29 +151,35 @@ class _RedesignedGuidesHome extends StatelessWidget {
             controller: searchController,
             onChanged: onSearchChanged,
             cursorColor: _guideOrange,
-            style: const TextStyle(
-              color: Color(0xFFF8FAFC),
+            style: TextStyle(
+              color: context.appColors.text,
               fontSize: 16,
               fontWeight: FontWeight.w500,
             ),
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               hintText: 'Search guides...',
               hintStyle: TextStyle(
-                color: _guideReadableMuted,
+                color: context.appColors.subtleText,
                 fontSize: 16,
               ),
               prefixIcon: Icon(
                 Icons.search_rounded,
-                color: Color(0xFFE2E8F0),
+                color: context.appColors.mutedText,
               ),
-              suffixIcon: Icon(Icons.filter_alt_outlined, color: _guideOrange),
+              suffixIcon: const Icon(
+                Icons.filter_alt_outlined,
+                color: _guideOrange,
+              ),
               filled: true,
-              fillColor: Color(0xFF121A2A),
+              fillColor: context.appColors.inputFill,
               enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.all(Radius.circular(12)),
-                borderSide: BorderSide(color: Color(0xFF657187), width: 1.5),
+                borderRadius: const BorderRadius.all(Radius.circular(12)),
+                borderSide: BorderSide(
+                  color: context.appColors.border,
+                  width: 1.5,
+                ),
               ),
-              focusedBorder: OutlineInputBorder(
+              focusedBorder: const OutlineInputBorder(
                 borderRadius: BorderRadius.all(Radius.circular(12)),
                 borderSide: BorderSide(color: _guideOrange, width: 2),
               ),
@@ -182,13 +187,13 @@ class _RedesignedGuidesHome extends StatelessWidget {
           ),
           const SizedBox(height: 18),
           if (guides.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(32),
+            Padding(
+              padding: const EdgeInsets.all(32),
               child: Center(
                 child: Text(
                   'No guides found.',
                   style: TextStyle(
-                    color: _guideReadableMuted,
+                    color: context.appColors.mutedText,
                     fontSize: 16,
                   ),
                 ),
@@ -260,8 +265,8 @@ class _GuideIndexRow extends StatelessWidget {
               const SizedBox(height: 5),
               Text(
                 guide.subtitle,
-                style: const TextStyle(
-                  color: _guideReadableMuted,
+                style: TextStyle(
+                  color: context.appColors.mutedText,
                   fontSize: 15,
                   height: 1.4,
                 ),
@@ -316,10 +321,11 @@ class _GuideScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Theme(
-    data: buildAppTheme(Brightness.dark),
+    data: buildAppTheme(Theme.of(context).brightness),
     child: Scaffold(
       appBar: AppBar(
         leading: IconButton(
+          tooltip: 'Back',
           onPressed: () => Navigator.of(context).pop(),
           icon: const Icon(Icons.arrow_back_rounded),
         ),
@@ -438,7 +444,7 @@ class _ConfidenceScoresGuidePage extends StatelessWidget {
                 color: _guideGreen,
               ),
             ),
-            Container(width: 1, height: 115, color: const Color(0xFF30394B)),
+            Container(width: 1, height: 115, color: context.appColors.border),
             const Expanded(
               child: _ScoreBlock(
                 title: 'Abnormal Confidence',
@@ -694,7 +700,13 @@ class _ProcessStep extends StatelessWidget {
         const SizedBox(height: 8),
         Icon(icon, color: _guideOrange, size: 30),
         const SizedBox(height: 8),
-        Text(label, textAlign: TextAlign.center),
+        SizedBox(
+          width: double.infinity,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(label, maxLines: 1, textAlign: TextAlign.center),
+          ),
+        ),
       ],
     ),
   );

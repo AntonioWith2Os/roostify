@@ -470,28 +470,32 @@ class Esp32SensorConnectionCard extends StatelessWidget {
               ),
               const SizedBox(width: 14),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'ESP32 Sensor',
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w900,
+                child: Semantics(
+                  label: 'ESP32 Sensor. $detail',
+                  excludeSemantics: true,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'ESP32 Sensor',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w900,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 5),
-                    Text(
-                      detail,
-                      style: TextStyle(
-                        color: error || readIssue
-                            ? const Color(0xFFFF8A98)
-                            : colors.mutedText,
-                        fontSize: 13,
-                        height: 1.35,
+                      const SizedBox(height: 5),
+                      Text(
+                        detail,
+                        style: TextStyle(
+                          color: error || readIssue
+                              ? const Color(0xFFFF8A98)
+                              : colors.mutedText,
+                          fontSize: 13,
+                          height: 1.35,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -720,8 +724,6 @@ class CircularSensorGauge extends StatelessWidget {
                   const SizedBox(height: 4),
                   Text(
                     status,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: colors.mutedText,
