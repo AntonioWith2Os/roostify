@@ -250,13 +250,13 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 
-  void _signInWithPassword() {
+  Future<void> _signInWithPassword() async {
     setState(() {
       _error = null;
       _signingInWithPassword = true;
     });
 
-    final session = widget.controller.signIn(
+    final session = await widget.controller.signIn(
       username: _usernameController.text,
       password: _passwordController.text,
       expectedRole: _selectedRole,
@@ -1003,6 +1003,184 @@ class _AppShellState extends State<AppShell> {
   }
 }
 
+class _AnimatedAlertBell extends StatefulWidget {
+  const _AnimatedAlertBell({required this.controller, required this.onPressed});
+
+  final AppController controller;
+  final VoidCallback onPressed;
+
+  @override
+  State<_AnimatedAlertBell> createState() => _AnimatedAlertBellState();
+}
+
+class _AnimatedAlertBellState extends State<_AnimatedAlertBell>
+    with TickerProviderStateMixin {
+  late final AnimationController _bellAnimationController;
+  late final AnimationController _noticeAnimationController;
+  StreamSubscription<AppAlertEvent>? _alertSubscription;
+  Timer? _noticeTimer;
+  AppAlertEvent? _visibleAlert;
+
+  @override
+  void initState() {
+    super.initState();
+    _bellAnimationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+    _noticeAnimationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 240),
+      reverseDuration: const Duration(milliseconds: 180),
+    );
+    _listenForSensorAlerts();
+  }
+
+  @override
+  void didUpdateWidget(covariant _AnimatedAlertBell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      unawaited(_alertSubscription?.cancel());
+      _listenForSensorAlerts();
+    }
+  }
+
+  void _listenForSensorAlerts() {
+    _alertSubscription = widget.controller.alertEvents
+        .where((event) => event.category == 'sensor_alerts')
+        .listen((event) {
+          if (!mounted) return;
+          setState(() => _visibleAlert = event);
+          _bellAnimationController.forward(from: 0);
+          _noticeAnimationController.forward(from: 0);
+          _noticeTimer?.cancel();
+          _noticeTimer = Timer(const Duration(seconds: 4), () {
+            if (mounted) _noticeAnimationController.reverse();
+          });
+        });
+  }
+
+  @override
+  void dispose() {
+    unawaited(_alertSubscription?.cancel());
+    _noticeTimer?.cancel();
+    _bellAnimationController.dispose();
+    _noticeAnimationController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final alert = _visibleAlert;
+    return Stack(
+      clipBehavior: Clip.none,
+      alignment: Alignment.centerRight,
+      children: [
+        if (alert != null)
+          Positioned(
+            right: 56,
+            child: IgnorePointer(
+              child: FadeTransition(
+                opacity: _noticeAnimationController,
+                child: SlideTransition(
+                  position:
+                      Tween<Offset>(
+                        begin: const Offset(0.12, 0),
+                        end: Offset.zero,
+                      ).animate(
+                        CurvedAnimation(
+                          parent: _noticeAnimationController,
+                          curve: Curves.easeOutCubic,
+                          reverseCurve: Curves.easeInCubic,
+                        ),
+                      ),
+                  child: _BellAlertNotice(alert: alert),
+                ),
+              ),
+            ),
+          ),
+        AnimatedBuilder(
+          animation: _bellAnimationController,
+          child: IconButton(
+            tooltip: 'View alerts',
+            onPressed: widget.onPressed,
+            icon: Icon(
+              Icons.notifications_none_rounded,
+              color: context.appColors.text,
+            ),
+          ),
+          builder: (context, child) {
+            final progress = _bellAnimationController.value;
+            final fade = 1 - progress;
+            final rotation = math.sin(progress * math.pi * 8) * 0.18 * fade;
+            final scale = 1 + (math.sin(progress * math.pi) * 0.16);
+            return Transform.rotate(
+              angle: rotation,
+              child: Transform.scale(scale: scale, child: child),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _BellAlertNotice extends StatelessWidget {
+  const _BellAlertNotice({required this.alert});
+
+  final AppAlertEvent alert;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final alertColor = alert.severity == AlertSeverity.danger
+        ? colors.error
+        : const Color(0xFFE09B26);
+
+    return Material(
+      color: colors.surfaceContainerHighest,
+      elevation: 5,
+      shadowColor: Colors.black38,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: 220,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: BoxDecoration(
+          border: Border(left: BorderSide(color: alertColor, width: 4)),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              alert.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: colors.onSurface,
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              alert.message,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: colors.onSurfaceVariant,
+                fontSize: 11,
+                height: 1.2,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _SupportChatBubble extends StatelessWidget {
   const _SupportChatBubble({required this.controller, required this.session});
 
@@ -1139,8 +1317,8 @@ class UserDashboardPage extends StatelessWidget {
                 child: Badge(
                   isLabelVisible: activeWarningCount > 0,
                   label: Text('$activeWarningCount'),
-                  child: IconButton.filledTonal(
-                    tooltip: 'View alerts',
+                  child: _AnimatedAlertBell(
+                    controller: controller,
                     onPressed: () {
                       Navigator.of(context).push(
                         MaterialPageRoute<void>(
@@ -1148,7 +1326,6 @@ class UserDashboardPage extends StatelessWidget {
                         ),
                       );
                     },
-                    icon: const Icon(Icons.notifications_none_rounded),
                   ),
                 ),
               ),
@@ -2067,9 +2244,6 @@ class _CctvFeedTile extends StatelessWidget {
       recordingOwnerUsername: user.username,
       controller: controller,
       detections: stream.inspection.detections,
-      onFrameCaptureStarted: () {
-        controller.markCctvInspectionCapturing(user.username, stream.id);
-      },
       onFrameReady: (frameBytes) {
         return controller.inspectCctvFrame(
           user.username,
@@ -2077,8 +2251,8 @@ class _CctvFeedTile extends StatelessWidget {
           frameBytes,
         );
       },
-      onFrameCaptureFailed: (message) {
-        controller.markCctvInspectionError(user.username, stream.id, message);
+      onConnectionChanged: (online) {
+        controller.markCctvConnectionStatus(user.username, stream.id, online);
       },
     );
   }
@@ -5406,13 +5580,6 @@ const _notificationOptions = [
     Color(0xFFFF5A3D),
   ),
   _NotificationOption(
-    'rooster_detection',
-    'Rooster Detection Alerts',
-    'Normal or abnormal rooster detection updates',
-    Icons.egg_alt_outlined,
-    Color(0xFFFF5A3D),
-  ),
-  _NotificationOption(
     'cctv_offline',
     'CCTV Offline Alert',
     'Be notified when a camera disconnects',
@@ -6293,17 +6460,18 @@ class _CredentialsEditPageState extends State<CredentialsEditPage> {
     super.dispose();
   }
 
-  void _saveCredentials() {
+  Future<void> _saveCredentials() async {
     if (_passwordController.text != _confirmPasswordController.text) {
       setState(() => _error = 'New passwords do not match.');
       return;
     }
-    final error = widget.controller.updateCredentials(
+    final error = await widget.controller.updateCredentials(
       widget.user.username,
       newPassword: _passwordController.text,
       currentPassword: _currentPasswordController.text,
       recoveryEmail: _recoveryEmailController.text,
     );
+    if (!mounted) return;
     setState(() => _error = error);
     if (error == null) {
       ScaffoldMessenger.of(context).showSnackBar(

@@ -1,6 +1,6 @@
 part of '../../main.dart';
 
-const _guideOrange = Color(0xFFFF6A19);
+const _guideOrange = _appAccent;
 const _guideGreen = Color(0xFF48D66D);
 const _guideBlue = Color(0xFF6794FF);
 const _guideRed = Color(0xFFFF4D3A);
@@ -12,14 +12,16 @@ class _RedesignedGuide {
     this.subtitle,
     this.icon,
     this.color,
-    this.kind,
-  );
+    this.kind, {
+    this.youtubeVideoId,
+  });
 
   final String title;
   final String subtitle;
   final IconData icon;
   final Color color;
   final String kind;
+  final String? youtubeVideoId;
 
   bool matches(String query) =>
       title.toLowerCase().contains(query) ||
@@ -27,6 +29,30 @@ class _RedesignedGuide {
 }
 
 const _redesignedGuides = [
+  _RedesignedGuide(
+    'ABOUT ROOSTIFY',
+    'Learn about Roostify and how it supports smarter rooster care.',
+    Icons.play_circle_fill_rounded,
+    _guideRed,
+    'video',
+    youtubeVideoId: '46SD94qZe6k',
+  ),
+  _RedesignedGuide(
+    'HOW TO RAISE CHICKS',
+    'Watch practical guidance for raising healthy chicks.',
+    Icons.smart_display_rounded,
+    _guideRed,
+    'video',
+    youtubeVideoId: '_ApkYrLOywY',
+  ),
+  _RedesignedGuide(
+    'BREEDING GUIDE',
+    'Watch a step-by-step introduction to poultry breeding.',
+    Icons.ondemand_video_rounded,
+    _guideRed,
+    'video',
+    youtubeVideoId: 'k52XpLIxyr8',
+  ),
   _RedesignedGuide(
     'Confidence Scores',
     'Understand normal and abnormal scan confidence.',
@@ -275,9 +301,9 @@ class _GuideIndexRow extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 8),
-        const Text(
-          'Read more',
-          style: TextStyle(
+        Text(
+          guide.youtubeVideoId == null ? 'Read more' : 'Watch',
+          style: const TextStyle(
             color: _guideOrange,
             fontSize: 15,
             fontWeight: FontWeight.w700,
@@ -295,6 +321,19 @@ void _openRedesignedGuide(
   AppController controller,
   Session session,
 ) {
+  if (guide.youtubeVideoId case final videoId?) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _YoutubeGuidePage(
+          title: guide.title,
+          subtitle: guide.subtitle,
+          videoId: videoId,
+        ),
+      ),
+    );
+    return;
+  }
+
   final page = switch (guide.kind) {
     'confidence' => const _ConfidenceScoresGuidePage(),
     'yolo' => const _YoloGuidePage(),
@@ -304,6 +343,70 @@ void _openRedesignedGuide(
     _ => const _SensorWarningsGuidePage(),
   };
   Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
+}
+
+class _YoutubeGuidePage extends StatefulWidget {
+  const _YoutubeGuidePage({
+    required this.title,
+    required this.subtitle,
+    required this.videoId,
+  });
+
+  final String title;
+  final String subtitle;
+  final String videoId;
+
+  @override
+  State<_YoutubeGuidePage> createState() => _YoutubeGuidePageState();
+}
+
+class _YoutubeGuidePageState extends State<_YoutubeGuidePage> {
+  late final YoutubePlayerController _playerController;
+
+  @override
+  void initState() {
+    super.initState();
+    _playerController = YoutubePlayerController.fromVideoId(
+      videoId: widget.videoId,
+      autoPlay: false,
+      params: const YoutubePlayerParams(
+        showControls: true,
+        showFullscreenButton: true,
+        strictRelatedVideos: true,
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _playerController.close();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => _GuideScaffold(
+    title: widget.title,
+    subtitle: widget.subtitle,
+    icon: Icons.play_circle_fill_rounded,
+    children: [
+      ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: YoutubePlayer(
+          controller: _playerController,
+          aspectRatio: 16 / 9,
+        ),
+      ),
+      const SizedBox(height: 14),
+      Text(
+        'Tap play to watch this guide without leaving Roostify.',
+        style: TextStyle(
+          color: context.appColors.mutedText,
+          fontSize: 15,
+          height: 1.4,
+        ),
+      ),
+    ],
+  );
 }
 
 class _GuideScaffold extends StatelessWidget {

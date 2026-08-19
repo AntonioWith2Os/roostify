@@ -352,7 +352,10 @@ class OnDeviceYoloDetector {
     }
 
     final data = await rootBundle.load(_modelAsset);
-    final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+    final bytes = data.buffer.asUint8List(
+      data.offsetInBytes,
+      data.lengthInBytes,
+    );
     _modelBytes = bytes;
     return bytes;
   }
@@ -770,7 +773,9 @@ void _yoloDetectionWorkerMain(Map<String, Object?> bootstrap) {
       try {
         final detections = switch (command) {
           'inspectFrame' => await detector._inspectFrameDetections(
-            message['frameBytes'] as Uint8List,
+            (message['frameData'] as TransferableTypedData)
+                .materialize()
+                .asUint8List(),
           ),
           'inspectCameraFrame' => await detector._inspectCameraFrameDetections(
             _liveCameraFrameFromMessage(
@@ -796,9 +801,10 @@ void _yoloDetectionWorkerMain(Map<String, Object?> bootstrap) {
 }
 
 LiveCameraFrame _liveCameraFrameFromMessage(Map<String, Object?> message) {
-  final planeMessages = (message['planes'] as List?)
-          ?.whereType<Map<String, Object?>>()
-          .toList(growable: false) ??
+  final planeMessages =
+      (message['planes'] as List?)?.whereType<Map<String, Object?>>().toList(
+        growable: false,
+      ) ??
       const [];
 
   return LiveCameraFrame(
@@ -936,7 +942,10 @@ class _YoloDetectionWorker {
           message['type'] == 'startupError' &&
           !sendPortCompleter.isCompleted) {
         sendPortCompleter.completeError(
-          StateError(message['message']?.toString() ?? 'The YOLO worker failed to start.'),
+          StateError(
+            message['message']?.toString() ??
+                'The YOLO worker failed to start.',
+          ),
         );
         return;
       }
@@ -961,7 +970,8 @@ class _YoloDetectionWorker {
         return;
       }
 
-      final detectionsData = (message['detections'] as List?)
+      final detectionsData =
+          (message['detections'] as List?)
               ?.whereType<Map<String, Object?>>()
               .toList(growable: false) ??
           const [];
@@ -999,17 +1009,15 @@ class _YoloDetectionWorker {
   }
 
   Future<List<ChickenDetection>> inspectFrame(Uint8List frameBytes) {
-    return _sendRequest(
-      'inspectFrame',
-      <String, Object?>{'frameBytes': frameBytes},
-    );
+    return _sendRequest('inspectFrame', <String, Object?>{
+      'frameData': TransferableTypedData.fromList([frameBytes]),
+    });
   }
 
   Future<List<ChickenDetection>> inspectCameraFrame(LiveCameraFrame frame) {
-    return _sendRequest(
-      'inspectCameraFrame',
-      <String, Object?>{'frame': _liveCameraFrameToMessage(frame)},
-    );
+    return _sendRequest('inspectCameraFrame', <String, Object?>{
+      'frame': _liveCameraFrameToMessage(frame),
+    });
   }
 
   Future<List<ChickenDetection>> _sendRequest(
@@ -1017,9 +1025,7 @@ class _YoloDetectionWorker {
     Map<String, Object?> payload,
   ) {
     if (_dead) {
-      return Future.error(
-        StateError('The YOLO worker is no longer running.'),
-      );
+      return Future.error(StateError('The YOLO worker is no longer running.'));
     }
 
     final requestId = _nextRequestId += 1;

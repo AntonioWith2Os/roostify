@@ -146,6 +146,8 @@ local.properties
 
 # Coverage
 coverage/
+functions/node_modules/
+analysis_options.yaml.corrupt-backup.gz
 
 # Symbols
 app.*.symbols

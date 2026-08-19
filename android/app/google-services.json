@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "489596275749",
+    "project_id": "roostify-5ff42",
+    "storage_bucket": "roostify-5ff42.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:489596275749:android:634d2cac1f97ee845583cc",
+        "android_client_info": {
+          "package_name": "com.dominigo.roostify"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCrqoo1xhBuxnl7CXo9ziY0N0diMVaHr4g"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

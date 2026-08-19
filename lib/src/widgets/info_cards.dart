@@ -414,7 +414,7 @@ class _ThemePreferenceCardState extends State<ThemePreferenceCard> {
       );
       final totalBytes = recordings.fold<int>(
         0,
-        (sum, recording) => sum + recording.sizeBytes,
+        (total, recording) => total + recording.sizeBytes,
       );
       if (!mounted) return;
       setState(() => _cacheBytes = totalBytes);

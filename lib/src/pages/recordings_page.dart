@@ -49,10 +49,16 @@ class _RecordingsPageState extends State<RecordingsPage> {
   }
 
   Future<void> _copyRecordingPath(RecordingFile recording) async {
-    await Clipboard.setData(ClipboardData(text: recording.path));
+    await Clipboard.setData(ClipboardData(text: recording.shareReference));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Recording path copied for sharing.')),
+      SnackBar(
+        content: Text(
+          recording.isServerStored
+              ? 'Server recording reference copied.'
+              : 'Temporary recording path copied.',
+        ),
+      ),
     );
   }
 
@@ -74,9 +80,7 @@ class _RecordingsPageState extends State<RecordingsPage> {
   }
 
   Future<List<RecordingFile>> _loadRecordings() {
-    return RtspRecorderService.listRecordings(
-      username: _isAdmin ? null : widget.currentUser.username,
-    );
+    return RecordingServerService.listRecordings(viewer: widget.currentUser);
   }
 
   void _reload() {
@@ -91,7 +95,9 @@ class _RecordingsPageState extends State<RecordingsPage> {
       builder: (context) => AlertDialog(
         title: const Text('Delete recording?'),
         content: Text(
-          'This removes ${recording.name} from this device. This cannot be undone.',
+          recording.isServerStored
+              ? 'This permanently removes ${recording.name} from the recording server. This cannot be undone.'
+              : 'This permanently removes the pending local copy of ${recording.name}. This cannot be undone.',
         ),
         actions: [
           TextButton(
@@ -109,9 +115,9 @@ class _RecordingsPageState extends State<RecordingsPage> {
 
     if (confirmed != true) return;
 
-    final deleted = await RtspRecorderService.deleteRecording(
-      recording.path,
-      requireOwnerUsername: _isAdmin ? null : widget.currentUser.username,
+    final deleted = await RecordingServerService.deleteRecording(
+      recording: recording,
+      viewer: widget.currentUser,
     );
     if (!mounted) return;
     if (deleted) {
@@ -170,7 +176,7 @@ class _RecordingsPageState extends State<RecordingsPage> {
               icon: Icons.video_library_outlined,
               title: 'No recordings yet',
               message:
-                  'Recordings you start from a live CCTV feed will appear here.',
+                  'Recordings uploaded from a live CCTV feed will appear here.',
             );
           }
 
@@ -179,12 +185,14 @@ class _RecordingsPageState extends State<RecordingsPage> {
             0,
             (total, recording) => total + recording.sizeBytes,
           );
-          const capacityBytes = 10 * 1024 * 1024 * 1024;
+          final pendingUploads = recordings
+              .where((recording) => !recording.isServerStored)
+              .length;
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
             children: [
               const Text(
-                'Review saved CCTV clips and recordings.',
+                'Review CCTV recordings stored on the server.',
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 14),
@@ -195,7 +203,7 @@ class _RecordingsPageState extends State<RecordingsPage> {
               const SizedBox(height: 16),
               _RecordingStorageBar(
                 usedBytes: usedBytes,
-                capacityBytes: capacityBytes,
+                pendingUploads: pendingUploads,
               ),
               const SizedBox(height: 14),
               if (visible.isEmpty)
@@ -268,13 +276,17 @@ class _RecordingFilterBar extends StatelessWidget {
 class _RecordingStorageBar extends StatelessWidget {
   const _RecordingStorageBar({
     required this.usedBytes,
-    required this.capacityBytes,
+    required this.pendingUploads,
   });
   final int usedBytes;
-  final int capacityBytes;
+  final int pendingUploads;
 
-  String _gigabytes(int bytes) =>
-      (bytes / (1024 * 1024 * 1024)).toStringAsFixed(1);
+  String _storageSize(int bytes) {
+    if (bytes >= 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+    }
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
 
   @override
   Widget build(BuildContext context) => Container(
@@ -288,27 +300,26 @@ class _RecordingStorageBar extends StatelessWidget {
       children: [
         Row(
           children: [
-            const Icon(Icons.storage_rounded, color: _appAccent, size: 19),
+            const Icon(Icons.cloud_done_outlined, color: _appAccent, size: 19),
             const SizedBox(width: 8),
             const Expanded(
               child: Text(
-                'Used Storage',
+                'Server Storage',
                 style: TextStyle(fontWeight: FontWeight.w800),
               ),
             ),
-            Text(
-              '${_gigabytes(usedBytes)} GB of ${_gigabytes(capacityBytes)} GB',
-              style: const TextStyle(fontSize: 13),
-            ),
+            Text(_storageSize(usedBytes), style: const TextStyle(fontSize: 13)),
           ],
         ),
-        const SizedBox(height: 9),
-        LinearProgressIndicator(
-          value: (usedBytes / capacityBytes).clamp(0, 1),
-          minHeight: 6,
-          borderRadius: BorderRadius.circular(99),
-          color: _appAccent,
-          backgroundColor: context.appColors.border,
+        const SizedBox(height: 7),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            pendingUploads == 0
+                ? 'Uploaded recordings available across authorized accounts'
+                : '$pendingUploads recording${pendingUploads == 1 ? '' : 's'} waiting to upload',
+            style: TextStyle(color: context.appColors.mutedText, fontSize: 13),
+          ),
         ),
       ],
     ),
@@ -445,6 +456,23 @@ class _RecordingTile extends StatelessWidget {
                             fontWeight: FontWeight.w800,
                           ),
                         ),
+                      ),
+                    ],
+                    if (!recording.isServerStored) ...[
+                      const SizedBox(height: 6),
+                      const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.cloud_upload_outlined, size: 15),
+                          SizedBox(width: 4),
+                          Text(
+                            'Pending upload',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ],

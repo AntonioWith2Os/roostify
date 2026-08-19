@@ -15,6 +15,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:ffmpeg_kit_flutter_new_min_gpl/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new_min_gpl/ffmpeg_session.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/services.dart';
 import 'package:gal/gal.dart';
 import 'package:google_sign_in/google_sign_in.dart';
@@ -25,6 +29,9 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
 import 'package:xml/xml.dart';
+import 'package:youtube_player_iframe/youtube_player_iframe.dart';
+
+import 'firebase_options.dart';
 
 part 'src/app_constants.dart';
 part 'src/rooster_watch_app.dart';
@@ -42,6 +49,8 @@ part 'src/widgets/v380_ptz_control_panel.dart';
 part 'src/services/onvif_ptz_client.dart';
 part 'src/services/camera_stream_helpers.dart';
 part 'src/services/rtsp_recorder_service.dart';
+part 'src/services/recording_server_service.dart';
+part 'src/services/firebase_backend_service.dart';
 part 'src/pages/recordings_page.dart';
 part 'src/pages/multi_camera_fullscreen_page.dart';
 part 'src/widgets/live_feed_card.dart';
@@ -51,6 +60,8 @@ part 'src/utils/time_labels.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
   List<CameraDescription> cameras = const [];
   try {
     cameras = await availableCameras();

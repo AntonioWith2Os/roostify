@@ -9,7 +9,6 @@ class AppController extends ChangeNotifier {
     : _users = [
         AppUser(
           username: 'admin',
-          password: '123456',
           displayName: 'System Admin',
           role: UserRole.admin,
           cameraAccessEnabled: false,
@@ -18,7 +17,6 @@ class AppController extends ChangeNotifier {
         ),
         AppUser(
           username: 'farmer1',
-          password: 'farm123',
           displayName: 'Farmer One',
           role: UserRole.user,
           cameraAccessEnabled: true,
@@ -49,7 +47,6 @@ class AppController extends ChangeNotifier {
         ),
         AppUser(
           username: 'farmer2',
-          password: 'farm123',
           displayName: 'Farmer Two',
           role: UserRole.user,
           cameraAccessEnabled: false,
@@ -66,7 +63,6 @@ class AppController extends ChangeNotifier {
         ),
         AppUser(
           username: 'user1',
-          password: '123456',
           displayName: 'User One',
           role: UserRole.user,
           cameraAccessEnabled: true,
@@ -75,7 +71,6 @@ class AppController extends ChangeNotifier {
         ),
         AppUser(
           username: 'user2',
-          password: '123456',
           displayName: 'User Two',
           role: UserRole.user,
           cameraAccessEnabled: true,
@@ -117,9 +112,10 @@ class AppController extends ChangeNotifier {
   final OnDeviceYoloDetector _yoloDetector = OnDeviceYoloDetector();
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: const ['email', 'profile'],
-    serverClientId:
-        '402884110739-fsm2ontv9tajkin1seajgphs6d08e3ug.apps.googleusercontent.com',
   );
+  final FirebaseBackendService _firebase = FirebaseBackendService();
+  final Map<String, StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>>
+  _farmStatusSubscriptions = {};
   final Map<String, CctvInspectionResult> _cctvCandidates = {};
   final Map<String, int> _cctvCandidateHits = {};
   final Map<String, int> _cctvEmptyFrames = {};
@@ -131,7 +127,6 @@ class AppController extends ChangeNotifier {
   String? lastError;
   Session? _session;
   int _streamIdCounter = 0;
-  int _accountIdCounter = 0;
   int _threadIdCounter = 0;
 
   // Resolves once accounts and support threads have been restored from disk.
@@ -151,8 +146,10 @@ class AppController extends ChangeNotifier {
   List<SupportThread> get supportThreads =>
       List.unmodifiable(_supportThreads.reversed);
   Session? get session => _session;
-  int get totalCctvCount =>
-      farmUsers.fold<int>(0, (sum, user) => sum + user.liveCctvStreams.length);
+  int get totalCctvCount => farmUsers.fold<int>(
+    0,
+    (total, user) => total + user.liveCctvStreams.length,
+  );
   int get openSupportCount =>
       _supportThreads.where((thread) => !thread.resolved).length;
   int get unreadSupportCount =>
@@ -166,8 +163,8 @@ class AppController extends ChangeNotifier {
   Locale get languageLocale => _languageLocale;
 
   /// Fires whenever an event matches an enabled Notification Preference
-  /// (and isn't muted by quiet hours), for the app shell to surface as an
-  /// in-app SnackBar/sound/vibration.
+  /// (and isn't muted by quiet hours), for the app shell to surface through
+  /// its relevant in-app indicator, sound, or vibration.
   Stream<AppAlertEvent> get alertEvents => _alertController.stream;
 
   void setThemePreference(AppThemePreference preference) {
@@ -271,7 +268,6 @@ class AppController extends ChangeNotifier {
           AppUser(
             accountId: accountId,
             username: json['username'] as String,
-            password: '',
             displayName: displayName,
             role: UserRole.user,
             cameraAccessEnabled: true,
@@ -348,19 +344,37 @@ class AppController extends ChangeNotifier {
     final roleName = prefs.getString(_rememberRoleKey);
     if (username == null || roleName == null) return null;
 
-    // Wait for a previous session's persisted account edits (renames,
-    // removals, credential changes) to finish loading before checking who
-    // this username actually is now.
+    if (!_firebase.isReady) return null;
+    final firebaseUser = _firebase.currentUser;
+    if (firebaseUser == null) return null;
+
     await _persistedStateLoaded;
 
     final role = UserRole.values.where((r) => r.name == roleName).firstOrNull;
-    final user = userByUsername(username);
-    if (role == null || user == null || user.role != role) return null;
+    if (role == null) return null;
 
-    lastError = null;
-    _session = Session(user: user);
-    notifyListeners();
-    return _session;
+    try {
+      final data = await _firebase.profileFor(firebaseUser.uid);
+      if (data == null) return null;
+      final user = _upsertFirebaseProfile(firebaseUser.uid, data);
+      if (user.username != username || user.role != role) return null;
+
+      if (user.isAdmin) {
+        await _loadFirebaseUsersForAdmin();
+        _listenToFarmStatuses();
+      }
+
+      lastError = null;
+      _session = Session(
+        user: userByUsername(user.username) ?? user,
+        email: firebaseUser.email,
+        photoUrl: firebaseUser.photoURL,
+      );
+      notifyListeners();
+      return _session;
+    } on FirebaseException {
+      return null;
+    }
   }
 
   /// Emits an [AppAlertEvent] for [category] if that Notification Preference
@@ -396,7 +410,9 @@ class AppController extends ChangeNotifier {
   }
 
   bool _isWithinQuietHours(SharedPreferences prefs) {
-    final startHour = prefs.getInt('${_notificationPrefsPrefix}quiet_start_hour');
+    final startHour = prefs.getInt(
+      '${_notificationPrefsPrefix}quiet_start_hour',
+    );
     final endHour = prefs.getInt('${_notificationPrefsPrefix}quiet_end_hour');
     if (startHour == null || endHour == null) {
       return false;
@@ -448,15 +464,33 @@ class AppController extends ChangeNotifier {
     );
   }
 
-  /// Called after a live camera finishes saving a recorded clip, gated by
-  /// the "Recording Updates" Notification Preference.
-  Future<void> notifyRecordingSaved(String username, String path) async {
+  /// Publishes a completed temporary clip to the recording server.
+  ///
+  /// Returns false when the upload fails. In that case the local file is kept
+  /// so [RecordingServerService.retryPendingUploads] can safely retry later.
+  Future<bool> publishRecording(String username, String path) async {
     final fileName = path.split(Platform.pathSeparator).last;
-    await _maybeEmitAlert(
-      category: 'recording_updates',
-      title: 'Recording saved',
-      message: 'Saved $fileName to your Recordings library.',
-    );
+    try {
+      await RecordingServerService.uploadRecording(
+        sourcePath: path,
+        ownerUsername: username,
+      );
+      await _maybeEmitAlert(
+        category: 'recording_updates',
+        title: 'Recording uploaded',
+        message: 'Uploaded $fileName to your server Recordings library.',
+      );
+      return true;
+    } catch (error) {
+      lastError = 'Recording upload failed: $error';
+      await _maybeEmitAlert(
+        category: 'recording_updates',
+        title: 'Recording upload pending',
+        message: '$fileName is safe on this device and will retry later.',
+        severity: AlertSeverity.warning,
+      );
+      return false;
+    }
   }
 
   Future<void> connectEsp32Sensor(String username) {
@@ -496,47 +530,75 @@ class AppController extends ChangeNotifier {
     ),
   ];
 
-  Session? signIn({
+  Future<Session?> signIn({
     required String username,
     required String password,
     required UserRole expectedRole,
-  }) {
+  }) async {
     final cleanUsername = username.trim();
     final cleanPassword = password.trim();
+    if (cleanUsername.isEmpty || cleanPassword.isEmpty) {
+      lastError = 'Enter your username and password.';
+      notifyListeners();
+      return null;
+    }
+    if (!_firebase.isReady) {
+      lastError = 'Firebase is not available on this platform.';
+      notifyListeners();
+      return null;
+    }
 
-    AppUser? user;
-    for (final entry in _users) {
-      if (entry.username == cleanUsername) {
-        user = entry;
-        break;
+    try {
+      final credential = await _firebase.signInWithPassword(
+        usernameOrEmail: cleanUsername,
+        password: cleanPassword,
+      );
+      final firebaseUser = credential.user;
+      if (firebaseUser == null) {
+        throw FirebaseAuthException(code: 'invalid-credential');
       }
-    }
+      final data = await _firebase.profileFor(firebaseUser.uid);
+      if (data == null) {
+        await _firebase.signOut();
+        lastError =
+            'This Firebase account has no Roostify profile. Ask an administrator to provision it.';
+        notifyListeners();
+        return null;
+      }
 
-    if (user == null || user.password != cleanPassword) {
-      lastError = 'Invalid username or password.';
-      notifyListeners();
-      return null;
-    }
+      final user = _upsertFirebaseProfile(firebaseUser.uid, data);
+      if (user.role != expectedRole) {
+        await _firebase.signOut();
+        lastError = _roleMismatchMessage(expectedRole);
+        notifyListeners();
+        return null;
+      }
 
-    if (user.role != expectedRole) {
-      lastError = expectedRole == UserRole.admin
-          ? 'This account is not registered as an admin.'
-          : 'This account is not registered as a user.';
-      notifyListeners();
-      return null;
-    }
-
-    lastError = null;
-    _session = Session(user: user);
-    if (user.firstLoginAt == null) {
-      user.firstLoginAt = DateTime.now();
-      unawaited(_persistAccounts());
+      if (user.isAdmin) {
+        await _loadFirebaseUsersForAdmin();
+        _listenToFarmStatuses();
+      }
+      return _openFirebaseSession(
+        userByUsername(user.username) ?? user,
+        firebaseUser,
+      );
+    } on FirebaseAuthException catch (error) {
+      lastError = _friendlyFirebaseAuthError(error);
+    } on FirebaseException catch (error) {
+      lastError = error.message ?? 'Unable to connect to Firebase.';
+    } catch (_) {
+      lastError = 'Unable to sign in. Check your connection and try again.';
     }
     notifyListeners();
-    return _session;
+    return null;
   }
 
   Future<Session?> signInWithGoogle({required UserRole expectedRole}) async {
+    if (!_firebase.isReady) {
+      lastError = 'Firebase is not available on this platform.';
+      notifyListeners();
+      return null;
+    }
     try {
       final googleAccount = await _googleSignIn.signIn();
 
@@ -546,24 +608,196 @@ class AppController extends ChangeNotifier {
         return null;
       }
 
-      // Google provides identity; the selected landing button still decides
-      // which existing app workspace the user enters.
-      final user = _userForGoogleAccount(googleAccount, expectedRole);
-      await _applyGoogleProfileIfSyncEnabled(user, googleAccount);
+      final credential = await _firebase.signInWithGoogle(googleAccount);
+      final firebaseUser = credential.user;
+      if (firebaseUser == null) {
+        throw FirebaseAuthException(code: 'invalid-credential');
+      }
+      var data = await _firebase.profileFor(firebaseUser.uid);
+      if (data == null && expectedRole == UserRole.user) {
+        data = await _firebase.ensureStandardUserProfile(
+          firebaseUser,
+          preferredUsername: googleAccount.email.split('@').first,
+        );
+      }
+      if (data == null) {
+        await _firebase.signOut();
+        lastError =
+            'Google admin access must be provisioned by a Roostify administrator.';
+        notifyListeners();
+        return null;
+      }
 
-      lastError = null;
-      _session = Session(
-        user: user,
-        email: googleAccount.email,
+      final user = _upsertFirebaseProfile(firebaseUser.uid, data);
+      if (user.role != expectedRole) {
+        await _firebase.signOut();
+        lastError = _roleMismatchMessage(expectedRole);
+        notifyListeners();
+        return null;
+      }
+      await _applyGoogleProfileIfSyncEnabled(user, googleAccount);
+      if (user.isAdmin) {
+        await _loadFirebaseUsersForAdmin();
+        _listenToFarmStatuses();
+      }
+      return _openFirebaseSession(
+        userByUsername(user.username) ?? user,
+        firebaseUser,
         photoUrl: googleAccount.photoUrl,
       );
-      notifyListeners();
-      return _session;
-    } catch (_) {
-      lastError =
-          'Unable to sign in with Google. Check the Google OAuth setup for this app.';
+    } on FirebaseAuthException catch (error) {
+      lastError = _friendlyFirebaseAuthError(error);
       notifyListeners();
       return null;
+    } catch (error) {
+      lastError =
+          'Unable to sign in with Google. Check Firebase Google sign-in setup.';
+      notifyListeners();
+      return null;
+    }
+  }
+
+  Session _openFirebaseSession(
+    AppUser user,
+    User firebaseUser, {
+    String? photoUrl,
+  }) {
+    lastError = null;
+    _session = Session(
+      user: user,
+      email: firebaseUser.email,
+      photoUrl: photoUrl ?? firebaseUser.photoURL,
+    );
+    if (user.firstLoginAt == null) {
+      user.firstLoginAt = DateTime.now();
+      unawaited(_persistAccounts());
+    }
+    notifyListeners();
+    return _session!;
+  }
+
+  String _roleMismatchMessage(UserRole expectedRole) {
+    return expectedRole == UserRole.admin
+        ? 'This account is not registered as an admin.'
+        : 'This account is not registered as a user.';
+  }
+
+  String _friendlyFirebaseAuthError(FirebaseAuthException error) {
+    return switch (error.code) {
+      'invalid-credential' ||
+      'user-not-found' ||
+      'wrong-password' => 'Invalid username or password.',
+      'user-disabled' => 'This account has been disabled.',
+      'network-request-failed' =>
+        'Could not reach Firebase. Check your internet connection.',
+      'too-many-requests' =>
+        'Too many sign-in attempts. Wait a moment and try again.',
+      'requires-recent-login' =>
+        'For security, sign out and sign in again before making this change.',
+      'credential-already-in-use' ||
+      'account-exists-with-different-credential' =>
+        'That Google account is already connected to another Roostify account.',
+      _ => error.message ?? 'Firebase authentication failed.',
+    };
+  }
+
+  AppUser _upsertFirebaseProfile(String uid, Map<String, dynamic> data) {
+    final username = (data['username'] as String?)?.trim();
+    final resolvedUsername = username == null || username.isEmpty
+        ? 'user_${uid.substring(0, uid.length < 8 ? uid.length : 8)}'
+        : username;
+    final roleName = data['role'] as String?;
+    final role = roleName == UserRole.admin.name
+        ? UserRole.admin
+        : UserRole.user;
+    final index = _users.indexWhere(
+      (user) => user.accountId == uid || user.username == resolvedUsername,
+    );
+    final previous = index < 0 ? null : _users[index];
+    final displayName = (data['displayName'] as String?)?.trim();
+    final user = AppUser(
+      accountId: uid,
+      username: resolvedUsername,
+      displayName: displayName == null || displayName.isEmpty
+          ? resolvedUsername
+          : displayName,
+      email: data['email'] as String? ?? '',
+      contactNumber: data['contactNumber'] as String? ?? '',
+      address: data['address'] as String? ?? '',
+      facebookContact: data['facebookContact'] as String? ?? '',
+      farmName: data['farmName'] as String? ?? '',
+      shortBio: data['shortBio'] as String? ?? '',
+      avatarPath: previous?.avatarPath,
+      firstLoginAt: previous?.firstLoginAt,
+      tempPasswordIssued: previous?.tempPasswordIssued ?? false,
+      role: role,
+      cameraAccessEnabled:
+          data['cameraAccessEnabled'] as bool? ?? role == UserRole.user,
+      monitor:
+          previous?.monitor ??
+          (role == UserRole.admin
+              ? MonitorSnapshot.empty()
+              : MonitorSnapshot.newUser(
+                  displayName == null || displayName.isEmpty
+                      ? resolvedUsername
+                      : displayName,
+                )),
+      cctvs: previous?.cctvs ?? const [],
+      liveCctvStreams: previous?.liveCctvStreams,
+    );
+    if (index < 0) {
+      _users.add(user);
+    } else {
+      _users[index] = user;
+    }
+    return user;
+  }
+
+  Future<void> _loadFirebaseUsersForAdmin() async {
+    final profiles = await _firebase.allUserProfiles();
+    final remoteIds = <String>{};
+    for (final profile in profiles) {
+      final uid = profile['uid'] as String?;
+      if (uid == null || uid.isEmpty) continue;
+      remoteIds.add(uid);
+      _upsertFirebaseProfile(uid, profile);
+    }
+    _users.removeWhere((user) => !remoteIds.contains(user.accountId));
+  }
+
+  void _listenToFarmStatuses() {
+    for (final subscription in _farmStatusSubscriptions.values) {
+      unawaited(subscription.cancel());
+    }
+    _farmStatusSubscriptions.clear();
+
+    for (final user in farmUsers) {
+      _farmStatusSubscriptions[user.accountId] = _firebase
+          .watchLatestSensor(user.accountId)
+          .listen((snapshot) {
+            final data = snapshot.data();
+            if (data == null) return;
+            final temperature = data['temperature'];
+            final humidity = data['humidity'];
+            final airPpm = data['airPpm'];
+            if (temperature is! num || humidity is! num || airPpm is! num) {
+              return;
+            }
+            final updatedAt = data['updatedAt'];
+            user.monitor = user.monitor.withEnvironmentReading(
+              Esp32SensorReading(
+                temperatureC: temperature.toDouble(),
+                humidityPercent: humidity.toDouble(),
+                airQualityPpm: airPpm.toInt(),
+                dhtAvailable: data['dhtAvailable'] as bool? ?? true,
+                airAvailable: data['airAvailable'] as bool? ?? true,
+                receivedAt: updatedAt is Timestamp
+                    ? updatedAt.toDate()
+                    : DateTime.now(),
+              ),
+            );
+            notifyListeners();
+          });
     }
   }
 
@@ -581,11 +815,24 @@ class AppController extends ChangeNotifier {
     final displayName = googleAccount.displayName?.trim();
     if (displayName != null && displayName.isNotEmpty) {
       user.displayName = displayName;
+      await _firebase.updateProfile(user);
     }
   }
 
   Future<void> signOut() async {
-    await _googleSignIn.signOut();
+    final prefs = await SharedPreferences.getInstance();
+    final rememberedUsername = prefs.getString(_rememberUsernameKey);
+    final shouldKeepFirebaseSession =
+        rememberedUsername != null &&
+        rememberedUsername == _session?.user.username;
+    if (!shouldKeepFirebaseSession && _firebase.isReady) {
+      await _firebase.signOut();
+      await _googleSignIn.signOut();
+    }
+    for (final subscription in _farmStatusSubscriptions.values) {
+      await subscription.cancel();
+    }
+    _farmStatusSubscriptions.clear();
     _session = null;
     notifyListeners();
   }
@@ -610,15 +857,20 @@ class AppController extends ChangeNotifier {
         return false;
       }
 
+      final credential = await _firebase.linkGoogleAccount(googleAccount);
       await _applyGoogleProfileIfSyncEnabled(session.user, googleAccount);
-      session.email = googleAccount.email;
-      session.photoUrl = googleAccount.photoUrl;
+      session.email = credential.user?.email ?? googleAccount.email;
+      session.photoUrl = credential.user?.photoURL ?? googleAccount.photoUrl;
       lastError = null;
       notifyListeners();
       return true;
+    } on FirebaseAuthException catch (error) {
+      lastError = _friendlyFirebaseAuthError(error);
+      notifyListeners();
+      return false;
     } catch (_) {
       lastError =
-          'Unable to connect Google. Check the Google OAuth setup for this app.';
+          'Unable to connect Google. Check Firebase Google sign-in setup.';
       notifyListeners();
       return false;
     }
@@ -629,10 +881,15 @@ class AppController extends ChangeNotifier {
   Future<void> unlinkGoogleAccount() async {
     final session = _session;
     if (session == null) return;
-    await _googleSignIn.signOut();
-    session.email = null;
-    session.photoUrl = null;
-    lastError = null;
+    try {
+      await _firebase.unlinkGoogleAccount();
+      await _googleSignIn.signOut();
+      session.email = _firebase.currentUser?.email;
+      session.photoUrl = _firebase.currentUser?.photoURL;
+      lastError = null;
+    } on FirebaseAuthException catch (error) {
+      lastError = _friendlyFirebaseAuthError(error);
+    }
     notifyListeners();
   }
 
@@ -666,6 +923,11 @@ class AppController extends ChangeNotifier {
 
     notifyListeners();
     unawaited(_persistAccounts());
+    if (_firebase.isReady &&
+        (_firebase.currentUser?.uid == user.accountId ||
+            _session?.user.isAdmin == true)) {
+      unawaited(_firebase.updateProfile(user));
+    }
   }
 
   /// Sets [username]'s local profile photo to the file already saved at
@@ -692,20 +954,16 @@ class AppController extends ChangeNotifier {
   /// [currentPassword]. Pass a null/blank [newUsername] or [newPassword] to
   /// leave that field unchanged. Returns null on success, or an error
   /// message to show the user.
-  String? updateCredentials(
+  Future<String?> updateCredentials(
     String username, {
     String? newUsername,
     String? newPassword,
     String? recoveryEmail,
     required String currentPassword,
-  }) {
+  }) async {
     final user = userByUsername(username);
     if (user == null) {
       return 'Account not found.';
-    }
-
-    if (user.password != currentPassword) {
-      return 'Current password is incorrect.';
     }
 
     final cleanUsername = newUsername?.trim();
@@ -742,19 +1000,18 @@ class AppController extends ChangeNotifier {
     }
 
     if (wantsUsernameChange) {
-      final oldUsername = user.username;
-      user.username = cleanUsername;
-      for (final thread in _supportThreads) {
-        if (thread.username == oldUsername) {
-          thread.username = cleanUsername;
-        }
-      }
-      _clearCctvFiltersForUser(oldUsername);
-      unawaited(_migratePersistedLiveCctvStreams(oldUsername, cleanUsername));
+      return 'Username changes must be completed by an administrator.';
     }
 
     if (wantsPasswordChange) {
-      user.password = cleanPassword;
+      try {
+        await _firebase.updatePassword(
+          currentPassword: currentPassword,
+          newPassword: cleanPassword,
+        );
+      } on FirebaseAuthException catch (error) {
+        return _friendlyFirebaseAuthError(error);
+      }
     }
     if (recoveryEmail != null) {
       user.email = recoveryEmail.trim();
@@ -762,80 +1019,12 @@ class AppController extends ChangeNotifier {
 
     notifyListeners();
     unawaited(_persistAccounts());
+    if (_firebase.isReady &&
+        (_firebase.currentUser?.uid == user.accountId ||
+            _session?.user.isAdmin == true)) {
+      unawaited(_firebase.updateProfile(user));
+    }
     return null;
-  }
-
-  Future<void> _migratePersistedLiveCctvStreams(
-    String oldUsername,
-    String newUsername,
-  ) async {
-    final prefs = await SharedPreferences.getInstance();
-    final oldKey = _liveCctvStreamsPrefKey(oldUsername);
-    final raw = prefs.getString(oldKey);
-    if (raw == null) return;
-
-    await prefs.setString(_liveCctvStreamsPrefKey(newUsername), raw);
-    await prefs.remove(oldKey);
-  }
-
-  AppUser _userForGoogleAccount(
-    GoogleSignInAccount account,
-    UserRole expectedRole,
-  ) {
-    if (expectedRole == UserRole.admin) {
-      return _users.firstWhere((user) => user.isAdmin);
-    }
-
-    final baseUsername = _googleUsernameBase(account.email);
-    final existingUser = userByUsername(baseUsername);
-    if (existingUser != null) {
-      return existingUser;
-    }
-
-    final username = _availableGoogleUsername(baseUsername);
-    final displayName = account.displayName?.trim();
-    final resolvedDisplayName = displayName == null || displayName.isEmpty
-        ? account.email
-        : displayName;
-    final user = AppUser(
-      accountId: _generateAccountId(),
-      username: username,
-      password: '',
-      displayName: resolvedDisplayName,
-      role: UserRole.user,
-      cameraAccessEnabled: true,
-      monitor: MonitorSnapshot.newUser(resolvedDisplayName),
-      cctvs: const [
-        CctvFeed(
-          name: 'Camera A',
-          location: 'New Coop',
-          status: HealthState.normal,
-          online: false,
-          note: 'Waiting for the first live feed connection.',
-        ),
-      ],
-    );
-    _users.add(user);
-    unawaited(_persistAccounts());
-    return user;
-  }
-
-  String _googleUsernameBase(String email) {
-    final localPart = email.split('@').first.toLowerCase();
-    final sanitized = localPart.replaceAll(RegExp(r'[^a-z0-9._-]'), '_');
-    return sanitized.isEmpty ? 'google_user' : sanitized;
-  }
-
-  String _availableGoogleUsername(String baseUsername) {
-    var username = baseUsername;
-    var suffix = 2;
-
-    while (_users.any((user) => user.username == username)) {
-      username = '$baseUsername$suffix';
-      suffix += 1;
-    }
-
-    return username;
   }
 
   AppUser? userByUsername(String username) {
@@ -847,14 +1036,15 @@ class AppController extends ChangeNotifier {
     return null;
   }
 
-  bool addUser({
+  Future<bool> addUser({
     required String username,
     required String displayName,
     String email = '',
     String farmName = '',
     String contactNumber = '',
-    String password = 'farm123',
-  }) {
+    String address = '',
+    String password = 'Farm1234',
+  }) async {
     final cleanUsername = username.trim();
     final cleanDisplayName = displayName.trim();
 
@@ -870,42 +1060,52 @@ class AppController extends ChangeNotifier {
       return false;
     }
 
-    _users.add(
-      AppUser(
-        accountId: _generateAccountId(),
+    if (!_firebase.isReady || _session?.user.isAdmin != true) {
+      lastError = 'Sign in as an administrator to create Firebase users.';
+      notifyListeners();
+      return false;
+    }
+
+    try {
+      final result = await _firebase.createUser(
         username: cleanUsername,
-        password: password.trim().isEmpty ? 'farm123' : password.trim(),
         displayName: cleanDisplayName,
         email: email.trim(),
         farmName: farmName.trim(),
         contactNumber: contactNumber.trim(),
-        role: UserRole.user,
-        cameraAccessEnabled: true,
-        tempPasswordIssued: true,
-        monitor: MonitorSnapshot.newUser(cleanDisplayName),
-        cctvs: const [
-          CctvFeed(
-            name: 'Camera A',
-            location: 'New Coop',
-            status: HealthState.normal,
-            online: false,
-            note: 'Waiting for the first live feed connection.',
-          ),
-        ],
-      ),
-    );
-    lastError = null;
+        address: address.trim(),
+        temporaryPassword: password.trim().isEmpty
+            ? 'Farm1234'
+            : password.trim(),
+      );
+      final uid = result['uid'] as String;
+      final profile = Map<String, dynamic>.from(result['profile'] as Map);
+      final user = _upsertFirebaseProfile(uid, profile);
+      user.tempPasswordIssued = true;
+      lastError = null;
+      notifyListeners();
+      unawaited(_persistAccounts());
+      _listenToFarmStatuses();
+      return true;
+    } on FirebaseFunctionsException catch (error) {
+      lastError = error.message ?? 'Unable to create the Firebase user.';
+    } on FirebaseException catch (error) {
+      lastError = error.message ?? 'Unable to create the Firebase user.';
+    }
     notifyListeners();
-    unawaited(_persistAccounts());
-    return true;
+    return false;
   }
 
-  String _generateAccountId() {
-    _accountIdCounter += 1;
-    return 'acct-${DateTime.now().microsecondsSinceEpoch}-$_accountIdCounter';
-  }
-
-  void removeUser(String username) {
+  Future<bool> removeUser(String username) async {
+    final user = userByUsername(username);
+    if (user == null || user.isAdmin) return false;
+    try {
+      await _firebase.deleteUser(user.accountId);
+    } on FirebaseFunctionsException catch (error) {
+      lastError = error.message ?? 'Unable to remove the Firebase user.';
+      notifyListeners();
+      return false;
+    }
     _users.removeWhere((user) => user.username == username && !user.isAdmin);
     _supportThreads.removeWhere((thread) => thread.username == username);
     _clearCctvFiltersForUser(username);
@@ -917,6 +1117,8 @@ class AppController extends ChangeNotifier {
         (prefs) => prefs.remove(_liveCctvStreamsPrefKey(username)),
       ),
     );
+    lastError = null;
+    return true;
   }
 
   void toggleCameraAccess(String username) {
@@ -925,12 +1127,17 @@ class AppController extends ChangeNotifier {
     user.cameraAccessEnabled = !user.cameraAccessEnabled;
     notifyListeners();
     unawaited(_persistAccounts());
+    if (_firebase.isReady) {
+      unawaited(
+        _firebase.updateCameraAccess(user.accountId, user.cameraAccessEnabled),
+      );
+    }
   }
 
   /// Issues [username] a new temporary password on the admin's behalf, no
   /// current-password check required. Restarts the 7-day temp-password
   /// grace period tracked by [AppUser.firstLoginAt].
-  bool adminResetPassword(String username, String newPassword) {
+  Future<bool> adminResetPassword(String username, String newPassword) async {
     final user = userByUsername(username);
     final cleanPassword = newPassword.trim();
     if (user == null || user.isAdmin) {
@@ -944,7 +1151,13 @@ class AppController extends ChangeNotifier {
       return false;
     }
 
-    user.password = cleanPassword;
+    try {
+      await _firebase.resetUserPassword(user.accountId, cleanPassword);
+    } on FirebaseFunctionsException catch (error) {
+      lastError = error.message ?? 'Unable to reset the Firebase password.';
+      notifyListeners();
+      return false;
+    }
     user.tempPasswordIssued = true;
     user.firstLoginAt = null;
     lastError = null;
@@ -1081,7 +1294,6 @@ class AppController extends ChangeNotifier {
     }
 
     stream.inspection = CctvInspectionResult.capturing();
-    notifyListeners();
   }
 
   void markCctvInspectionError(
@@ -1095,23 +1307,33 @@ class AppController extends ChangeNotifier {
       return;
     }
 
-    final wasAlreadyError = stream.inspection.state == CctvInspectionState.error;
     stream.inspection = CctvInspectionResult.error(message);
-    notifyListeners();
+  }
 
-    if (!wasAlreadyError) {
+  /// Tracks actual player connectivity separately from snapshot/YOLO health.
+  /// A failed analysis frame must never label a playing camera as offline.
+  void markCctvConnectionStatus(String username, String streamId, bool online) {
+    final user = userByUsername(username);
+    final stream = user == null ? null : _liveStreamById(user, streamId);
+    if (user == null || user.isAdmin || stream == null) return;
+    if (stream.isOnline == online) return;
+
+    final wasOnline = stream.isOnline;
+    stream.isOnline = online;
+    notifyListeners();
+    if (wasOnline && !online) {
       unawaited(
         _maybeEmitAlert(
           category: 'cctv_offline',
           title: 'CCTV camera disconnected',
-          message: message,
+          message: '${stream.label} lost its RTSP video connection.',
           severity: AlertSeverity.warning,
         ),
       );
     }
   }
 
-  Future<void> inspectCctvFrame(
+  Future<CctvInspectionResult?> inspectCctvFrame(
     String username,
     String streamId,
     Uint8List frameBytes,
@@ -1119,11 +1341,10 @@ class AppController extends ChangeNotifier {
     final user = userByUsername(username);
     final stream = user == null ? null : _liveStreamById(user, streamId);
     if (user == null || user.isAdmin || stream == null) {
-      return;
+      return null;
     }
 
     stream.inspection = CctvInspectionResult.inspecting();
-    notifyListeners();
 
     try {
       final rawResult = await _yoloDetector.inspectFrame(frameBytes);
@@ -1137,38 +1358,18 @@ class AppController extends ChangeNotifier {
           ? null
           : _liveStreamById(currentUser, streamId);
       if (currentUser == null || currentUser.isAdmin || currentStream == null) {
-        return;
+        return null;
       }
 
-      final previousInspection = currentStream.inspection;
       currentStream.inspection = result;
-      notifyListeners();
-
-      final isNewConfirmedDetection =
-          result.state == CctvInspectionState.completed &&
-          result.detected &&
-          (previousInspection.state != CctvInspectionState.completed ||
-              previousInspection.condition != result.condition);
-      if (isNewConfirmedDetection) {
-        unawaited(
-          _maybeEmitAlert(
-            category: 'rooster_detection',
-            title: result.condition == HealthState.abnormal
-                ? 'Abnormal rooster detected'
-                : 'Rooster detection updated',
-            message: result.message,
-            severity: result.condition == HealthState.abnormal
-                ? AlertSeverity.danger
-                : AlertSeverity.info,
-          ),
-        );
-      }
+      return result;
     } catch (error) {
       markCctvInspectionError(
         username,
         streamId,
         'Could not inspect the CCTV frame: $error',
       );
+      return stream.inspection;
     }
   }
 
@@ -1272,6 +1473,17 @@ class AppController extends ChangeNotifier {
     final updatedMonitor = user.monitor.withEnvironmentReading(reading);
     user.monitor = updatedMonitor;
     notifyListeners();
+
+    if (_firebase.isReady && _firebase.currentUser?.uid == user.accountId) {
+      unawaited(
+        _firebase
+            .saveSensorReading(ownerUid: user.accountId, reading: reading)
+            .catchError((Object error) {
+              lastError =
+                  'Could not sync the sensor reading to Firebase: $error';
+            }),
+      );
+    }
 
     for (final alert in updatedMonitor.alerts) {
       final isNew = !previousAlerts.any(
@@ -1404,6 +1616,10 @@ class AppController extends ChangeNotifier {
 
   @override
   void dispose() {
+    for (final subscription in _farmStatusSubscriptions.values) {
+      unawaited(subscription.cancel());
+    }
+    _farmStatusSubscriptions.clear();
     _sensorClient.removeListener(notifyListeners);
     _sensorClient.dispose();
     _yoloDetector.close();

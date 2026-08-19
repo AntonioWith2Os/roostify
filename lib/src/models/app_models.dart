@@ -27,7 +27,6 @@ extension SensorWarningLevelDetails on SensorWarningLevel {
 class AppUser {
   AppUser({
     required this.username,
-    required this.password,
     required this.displayName,
     required this.role,
     required this.cameraAccessEnabled,
@@ -51,7 +50,6 @@ class AppUser {
   // restarts, independent of [username] (which the user/admin can change).
   final String accountId;
   String username;
-  String password;
   String displayName;
   String contactNumber;
   String address;
@@ -84,7 +82,6 @@ class AppUser {
   Map<String, dynamic> toAccountJson() => {
     'accountId': accountId,
     'username': username,
-    'password': password,
     'displayName': displayName,
     'role': role.name,
     'cameraAccessEnabled': cameraAccessEnabled,
@@ -103,7 +100,6 @@ class AppUser {
   /// or freshly constructed [AppUser]), leaving [monitor]/[cctvs] untouched.
   void applyAccountJson(Map<String, dynamic> json) {
     username = json['username'] as String? ?? username;
-    password = json['password'] as String? ?? password;
     displayName = json['displayName'] as String? ?? displayName;
     cameraAccessEnabled =
         json['cameraAccessEnabled'] as bool? ?? cameraAccessEnabled;
@@ -123,7 +119,7 @@ class AppUser {
 
 /// Emitted by [AppController] when an event matches an enabled Notification
 /// Preference (and isn't muted by quiet hours), for the app shell to surface
-/// as an in-app SnackBar/sound/vibration.
+/// through its relevant in-app indicator, sound, or vibration.
 class AppAlertEvent {
   const AppAlertEvent({
     required this.category,
@@ -143,20 +139,25 @@ class AppAlertEvent {
 }
 
 /// A single connected live RTSP camera. A user can connect several of these
-/// at once; each runs its own playback, recording, and YOLOv8 inspection
-/// independently of the others.
+/// at once; each runs its own playback and recording independently of the
+/// others. Analysis results may be attached without capturing frames from the
+/// playback decoder.
 class LiveCctvStream {
   LiveCctvStream({
     required this.id,
     required this.streamUrl,
     required this.label,
     CctvInspectionResult? inspection,
+    this.isOnline = false,
   }) : inspection = inspection ?? CctvInspectionResult.waitingForFrame();
 
   final String id;
   final String streamUrl;
   String label;
   CctvInspectionResult inspection;
+
+  /// Runtime playback reachability, independent of YOLO/snapshot health.
+  bool isOnline;
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -876,8 +877,7 @@ class CctvInspectionResult {
       state: CctvInspectionState.waitingForFrame,
       resultLabel: 'Waiting for live frame',
       confidenceLabel: '-',
-      message:
-          'The app will capture a frame as soon as the live CCTV preview starts playing.',
+      message: 'Turn on AI scanning in the CCTV viewer to inspect live frames.',
       inspectedAtLabel: '-',
       condition: HealthState.normal,
       detected: false,

@@ -73,8 +73,14 @@ class _RoosterWatchAppState extends State<RoosterWatchApp> {
   }
 
   void _handleAlertEvent(AppAlertEvent event) {
+    // Rooster findings remain visible in the CCTV analysis UI. They are
+    // intentionally never interrupt live video with a popup, sound, or haptic.
+    if (event.category == 'rooster_detection') return;
+
     final messenger = _messengerKey.currentState;
-    if (messenger != null) {
+    // Sensor warnings are surfaced by animating the dashboard alert bell.
+    // Keep SnackBars for the other notification categories.
+    if (messenger != null && event.category != 'sensor_alerts') {
       messenger
         ..hideCurrentSnackBar()
         ..showSnackBar(

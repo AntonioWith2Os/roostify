@@ -1,7 +1,14 @@
 part of '../../main.dart';
 
-const _adminOrange = Color(0xFFF45B16);
+const _adminOrange = _appAccent;
 const _adminGreen = Color(0xFF25C778);
+
+List<BoxShadow> _adminCardShadows(BuildContext context) {
+  if (Theme.of(context).brightness == Brightness.dark) return const [];
+  return const [
+    BoxShadow(color: Color(0x1407152F), blurRadius: 12, offset: Offset(0, 4)),
+  ];
+}
 
 class AdminRedesignShell extends StatefulWidget {
   const AdminRedesignShell({
@@ -160,12 +167,6 @@ class _NewAdminDashboard extends StatefulWidget {
 }
 
 class _NewAdminDashboardState extends State<_NewAdminDashboard> {
-  // Null until an admin taps a specific user's device reading card; falls
-  // back to the first farm user so the Reading Overview Report always shows
-  // one specific user's readings, never a placeholder empty state, right
-  // from the moment the admin lands on the dashboard.
-  String? _selectedUsername;
-
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
@@ -179,23 +180,6 @@ class _NewAdminDashboardState extends State<_NewAdminDashboard> {
         .toList();
     final alerts = warningAlerts.length;
     final connected = users.where((u) => u.cameraAccessEnabled).length;
-    final selectedUser = users.isEmpty
-        ? null
-        : users.firstWhere(
-            (u) => u.username == _selectedUsername,
-            orElse: () => users.first,
-          );
-    final averageTemperature = users.isEmpty
-        ? 0.0
-        : users.fold<double>(0, (sum, u) => sum + u.monitor.temperature) /
-              users.length;
-    final averageHumidity = users.isEmpty
-        ? 0.0
-        : users.fold<double>(0, (sum, u) => sum + u.monitor.humidity) /
-              users.length;
-    final averageAir = users.isEmpty
-        ? 0.0
-        : users.fold<int>(0, (sum, u) => sum + u.monitor.airPpm) / users.length;
     return AnimatedBuilder(
       animation: controller,
       builder: (_, _) => SafeArea(
@@ -322,68 +306,6 @@ class _NewAdminDashboardState extends State<_NewAdminDashboard> {
                 ],
               ),
             ),
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-                child: _ReadingOverview(
-                  userLabel: selectedUser == null
-                      ? null
-                      : (selectedUser.displayName.isEmpty
-                            ? selectedUser.username
-                            : selectedUser.displayName),
-                  temperature: selectedUser?.monitor.temperature ?? 0.0,
-                  humidity: selectedUser?.monitor.humidity ?? 0.0,
-                  air: (selectedUser?.monitor.airPpm ?? 0).toDouble(),
-                  locations: users.length,
-                  online: connected,
-                  onTap: () => showDialog<void>(
-                    context: context,
-                    barrierColor: Colors.black.withValues(alpha: .72),
-                    builder: (_) => _OverviewReportDialog(
-                      users: users,
-                      temperature: averageTemperature,
-                      humidity: averageHumidity,
-                      air: averageAir,
-                      online: connected,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 12, 14, 7),
-                child: Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        'User Device Readings',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                    _LegendDot(color: _adminGreen, label: 'Normal'),
-                    _LegendDot(color: Color(0xFFE6B452), label: 'Caution'),
-                    _LegendDot(color: Color(0xFFF45B16), label: 'Warning'),
-                  ],
-                ),
-              ),
-            ),
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 18),
-              sliver: SliverList.separated(
-                itemCount: users.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 8),
-                itemBuilder: (_, i) => _DeviceReadingCard(
-                  user: users[i],
-                  selected: users[i].username == selectedUser?.username,
-                  onSelect: () =>
-                      setState(() => _selectedUsername = users[i].username),
-                ),
-              ),
-            ),
           ],
         ),
       ),
@@ -436,6 +358,7 @@ class _SummaryTile extends StatelessWidget {
         color: context.appColors.surface,
         borderRadius: BorderRadius.circular(9),
         border: Border.all(color: context.appColors.border),
+        boxShadow: _adminCardShadows(context),
       ),
       child: Row(
         children: [
@@ -471,1818 +394,6 @@ class _SummaryTile extends StatelessWidget {
       ),
     ),
   );
-}
-
-class _ReadingOverview extends StatelessWidget {
-  const _ReadingOverview({
-    required this.userLabel,
-    required this.temperature,
-    required this.humidity,
-    required this.air,
-    required this.locations,
-    required this.online,
-    required this.onTap,
-  });
-  final String? userLabel;
-  final double temperature, humidity, air;
-  final int locations, online;
-  final VoidCallback onTap;
-  @override
-  Widget build(BuildContext context) => InkWell(
-    onTap: onTap,
-    borderRadius: BorderRadius.circular(10),
-    child: Container(
-      padding: const EdgeInsets.fromLTRB(8, 7, 8, 10),
-      decoration: BoxDecoration(
-        color: context.appColors.surface,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: context.appColors.border),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              const Icon(
-                Icons.bar_chart_rounded,
-                color: _adminOrange,
-                size: 20,
-              ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Reading Overview Report',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 14,
-                      ),
-                    ),
-                    if (userLabel != null)
-                      Text(
-                        userLabel!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: context.appColors.mutedText,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 13,
-                  vertical: 5,
-                ),
-                decoration: BoxDecoration(
-                  color: _adminOrange,
-                  borderRadius: BorderRadius.circular(7),
-                ),
-                child: const Text(
-                  'Week',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 4),
-              Text(
-                'Month',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: context.appColors.mutedText,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: _TrendPanel(
-                  title: 'Temperature',
-                  value: '${temperature.toStringAsFixed(1)}°C',
-                  color: _adminOrange,
-                  points: const [
-                    .2,
-                    .35,
-                    .3,
-                    .58,
-                    .43,
-                    .48,
-                    .65,
-                    .55,
-                    .4,
-                    .62,
-                    .52,
-                  ],
-                ),
-              ),
-              Expanded(
-                child: _TrendPanel(
-                  title: 'Humidity',
-                  value: '${humidity.toStringAsFixed(0)}%',
-                  color: Color(0xFF289DF0),
-                  points: const [
-                    .2,
-                    .32,
-                    .28,
-                    .55,
-                    .48,
-                    .7,
-                    .57,
-                    .42,
-                    .36,
-                    .6,
-                    .45,
-                  ],
-                ),
-              ),
-              Expanded(
-                child: _TrendPanel(
-                  title: 'Air Quality',
-                  value: '${air.toStringAsFixed(0)} ppm',
-                  color: Color(0xFF55B82B),
-                  points: const [
-                    .25,
-                    .45,
-                    .38,
-                    .55,
-                    .68,
-                    .4,
-                    .58,
-                    .32,
-                    .25,
-                    .55,
-                    .52,
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _HealthRing(
-                value: locations == 0 ? 0 : 1,
-                headline: '$locations',
-                label: 'Locations',
-                color: _adminOrange,
-              ),
-              _HealthRing(
-                value: locations == 0 ? 0 : online / locations,
-                headline: '$online',
-                label: 'Devices\nOnline',
-                color: Color(0xFF279DF0),
-              ),
-              _HealthRing(
-                value: locations == 0 ? 0 : online / locations,
-                headline:
-                    '${locations == 0 ? 0 : (online / locations * 100).round()}%',
-                label: 'Avg. System\nHealth',
-                color: Color(0xFF54BF37),
-              ),
-            ],
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
-class _TrendPanel extends StatelessWidget {
-  const _TrendPanel({
-    required this.title,
-    required this.value,
-    required this.color,
-    required this.points,
-  });
-  final String title, value;
-  final Color color;
-  final List<double> points;
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 5),
-    decoration: BoxDecoration(
-      border: Border(right: BorderSide(color: context.appColors.border)),
-    ),
-    child: Column(
-      children: [
-        Text(
-          title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(fontSize: 12, color: context.appColors.mutedText),
-        ),
-        const SizedBox(height: 3),
-        Text(
-          value,
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
-        ),
-        const SizedBox(height: 4),
-        SizedBox(
-          height: 40,
-          child: CustomPaint(
-            painter: _SparklinePainter(points, color),
-            size: Size.infinite,
-          ),
-        ),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              'Mon',
-              style: TextStyle(
-                fontSize: 10,
-                color: context.appColors.mutedText,
-              ),
-            ),
-            Text(
-              'Sun',
-              style: TextStyle(
-                fontSize: 10,
-                color: context.appColors.mutedText,
-              ),
-            ),
-          ],
-        ),
-      ],
-    ),
-  );
-}
-
-class _SparklinePainter extends CustomPainter {
-  _SparklinePainter(this.points, this.color);
-  final List<double> points;
-  final Color color;
-  @override
-  void paint(Canvas canvas, Size size) {
-    final grid = Paint()
-      ..color = color.withValues(alpha: .12)
-      ..strokeWidth = 1;
-    for (var i = 1; i < 4; i++) {
-      final y = size.height * i / 4;
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
-    }
-    final path = Path();
-    for (var i = 0; i < points.length; i++) {
-      final p = Offset(
-        size.width * i / (points.length - 1),
-        size.height * (1 - points[i]),
-      );
-      i == 0 ? path.moveTo(p.dx, p.dy) : path.lineTo(p.dx, p.dy);
-    }
-    canvas.drawPath(
-      path,
-      Paint()
-        ..color = color
-        ..strokeWidth = 1.8
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _SparklinePainter oldDelegate) => false;
-}
-
-class _HealthRing extends StatelessWidget {
-  const _HealthRing({
-    required this.value,
-    required this.headline,
-    required this.label,
-    required this.color,
-  });
-  final double value;
-  final String headline, label;
-  final Color color;
-  @override
-  Widget build(BuildContext context) => SizedBox(
-    width: 86,
-    height: 86,
-    child: CustomPaint(
-      painter: _RingPainter(value, color),
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              headline,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-            ),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 11,
-                height: 1.15,
-                color: context.appColors.mutedText,
-              ),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
-class _RingPainter extends CustomPainter {
-  _RingPainter(this.value, this.color);
-  final double value;
-  final Color color;
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Offset.zero & size;
-    final p = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.5
-      ..strokeCap = StrokeCap.round;
-    canvas.drawArc(
-      rect.deflate(4),
-      -.5 * math.pi,
-      2 * math.pi,
-      false,
-      p..color = color.withValues(alpha: .18),
-    );
-    canvas.drawArc(
-      rect.deflate(4),
-      -.5 * math.pi,
-      2 * math.pi * value.clamp(0, 1),
-      false,
-      p..color = color,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _RingPainter oldDelegate) =>
-      oldDelegate.value != value;
-}
-
-class _OverviewReportDialog extends StatefulWidget {
-  const _OverviewReportDialog({
-    required this.users,
-    required this.temperature,
-    required this.humidity,
-    required this.air,
-    required this.online,
-  });
-  final List<AppUser> users;
-  final double temperature, humidity, air;
-  final int online;
-  @override
-  State<_OverviewReportDialog> createState() => _OverviewReportDialogState();
-}
-
-class _OverviewReportDialogState extends State<_OverviewReportDialog> {
-  bool _weekly = true;
-  DateTime _selectedDate = DateTime.now();
-
-  static const _monthNames = [
-    'January',
-    'February',
-    'March',
-    'April',
-    'May',
-    'June',
-    'July',
-    'August',
-    'September',
-    'October',
-    'November',
-    'December',
-  ];
-
-  String _monthLabel(DateTime date) =>
-      '${_monthNames[date.month - 1]} ${date.year}';
-
-  String _weekLabel(DateTime date) {
-    final start = date.subtract(Duration(days: date.weekday - 1));
-    final end = start.add(const Duration(days: 6));
-    String fmt(DateTime d) =>
-        '${_monthNames[d.month - 1].substring(0, 3)} ${d.day}';
-    return start.year == end.year
-        ? '${fmt(start)} – ${fmt(end)}, ${end.year}'
-        : '${fmt(start)}, ${start.year} – ${fmt(end)}, ${end.year}';
-  }
-
-  Future<void> _pickDate(BuildContext context) async {
-    final now = DateTime.now();
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _selectedDate,
-      firstDate: DateTime(now.year - 2),
-      lastDate: now,
-      helpText: _weekly
-          ? 'Pick a day in the desired week'
-          : 'Pick a day in the desired month',
-    );
-    if (picked == null) return;
-    setState(() => _selectedDate = picked);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final locations = widget.users.length;
-    final health = locations == 0 ? 0.0 : widget.online / locations;
-    final hottest = widget.users.isEmpty
-        ? null
-        : widget.users.reduce(
-            (a, b) => a.monitor.temperature > b.monitor.temperature ? a : b,
-          );
-    final stable = widget.users.isEmpty
-        ? null
-        : widget.users.reduce(
-            (a, b) => a.monitor.alerts.length < b.monitor.alerts.length ? a : b,
-          );
-    final warnings = widget.users
-        .where((u) => u.monitor.airLevel != SensorWarningLevel.normal)
-        .length;
-    return Dialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 22, vertical: 26),
-      backgroundColor: context.appColors.background,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: context.appColors.border),
-      ),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 650, maxHeight: 780),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  const Icon(
-                    Icons.bar_chart_rounded,
-                    color: _adminOrange,
-                    size: 29,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Reading Overview Report',
-                          style: TextStyle(
-                            fontSize: 19,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                        Text(
-                          'All Farms • Weekly & Monthly Analytics',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: context.appColors.mutedText,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Close',
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close, size: 25),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Container(
-                height: 52,
-                padding: const EdgeInsets.all(2),
-                decoration: BoxDecoration(
-                  color: context.appColors.surfaceRaised,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: _ReportPeriodButton(
-                        label: 'Week',
-                        selected: _weekly,
-                        onTap: () => setState(() => _weekly = true),
-                      ),
-                    ),
-                    Expanded(
-                      child: _ReportPeriodButton(
-                        label: 'Month',
-                        selected: !_weekly,
-                        onTap: () => setState(() => _weekly = false),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 11),
-              InkWell(
-                onTap: () => _pickDate(context),
-                borderRadius: BorderRadius.circular(6),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.calendar_month_outlined,
-                        size: 18,
-                        color: context.appColors.mutedText,
-                      ),
-                      const SizedBox(width: 7),
-                      Text(
-                        _weekly
-                            ? _weekLabel(_selectedDate)
-                            : _monthLabel(_selectedDate),
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      const Icon(Icons.keyboard_arrow_down, size: 18),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: _ReportTrendCard(
-                      title: 'Temperature',
-                      value: '${widget.temperature.toStringAsFixed(1)}°C',
-                      change: '↑ 1.2°C',
-                      color: _adminOrange,
-                      points: _weekly
-                          ? const [
-                              .2,
-                              .35,
-                              .3,
-                              .58,
-                              .43,
-                              .48,
-                              .65,
-                              .55,
-                              .4,
-                              .62,
-                              .52,
-                            ]
-                          : const [
-                              .25,
-                              .42,
-                              .35,
-                              .52,
-                              .7,
-                              .48,
-                              .58,
-                              .68,
-                              .5,
-                              .72,
-                              .62,
-                            ],
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: _ReportTrendCard(
-                      title: 'Humidity',
-                      value: '${widget.humidity.toStringAsFixed(0)}%',
-                      change: '↓ 3%',
-                      color: const Color(0xFF289DF0),
-                      points: _weekly
-                          ? const [
-                              .2,
-                              .32,
-                              .28,
-                              .55,
-                              .48,
-                              .7,
-                              .57,
-                              .42,
-                              .36,
-                              .6,
-                              .45,
-                            ]
-                          : const [
-                              .35,
-                              .45,
-                              .32,
-                              .62,
-                              .5,
-                              .58,
-                              .7,
-                              .48,
-                              .55,
-                              .42,
-                              .6,
-                            ],
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: _ReportTrendCard(
-                      title: 'Air Quality',
-                      value: '${widget.air.toStringAsFixed(0)} ppm',
-                      change: '↑ 5',
-                      color: const Color(0xFF55B82B),
-                      points: _weekly
-                          ? const [
-                              .25,
-                              .45,
-                              .38,
-                              .55,
-                              .68,
-                              .4,
-                              .58,
-                              .32,
-                              .25,
-                              .55,
-                              .52,
-                            ]
-                          : const [
-                              .3,
-                              .5,
-                              .42,
-                              .65,
-                              .45,
-                              .38,
-                              .7,
-                              .55,
-                              .48,
-                              .68,
-                              .58,
-                            ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 13),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  _HealthRing(
-                    value: locations == 0 ? 0 : 1,
-                    headline: '$locations',
-                    label: 'Locations',
-                    color: _adminOrange,
-                  ),
-                  _HealthRing(
-                    value: health,
-                    headline: '${widget.online}',
-                    label: 'Devices\nOnline',
-                    color: const Color(0xFF279DF0),
-                  ),
-                  _HealthRing(
-                    value: health,
-                    headline: '${(health * 100).round()}%',
-                    label: 'Avg. System\nHealth',
-                    color: const Color(0xFF54BF37),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 13),
-              Container(
-                decoration: BoxDecoration(
-                  color: context.appColors.surface,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: context.appColors.border),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.all(10),
-                      child: Text(
-                        'Report Summary',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                    _ReportSummaryRow(
-                      icon: Icons.thermostat,
-                      color: _adminOrange,
-                      title: 'Highest temperature alert',
-                      subtitle: hottest == null
-                          ? 'No farm readings'
-                          : '${hottest.monitor.temperature.toStringAsFixed(1)}°C at ${hottest.farmName.isEmpty ? hottest.displayName : hottest.farmName}',
-                      badge: hottest == null
-                          ? 'NONE'
-                          : hottest.monitor.temperatureLevel.label,
-                    ),
-                    _ReportSummaryRow(
-                      icon: Icons.verified_user_outlined,
-                      color: _adminGreen,
-                      title: 'Most stable farm',
-                      subtitle: stable == null
-                          ? 'No farms available'
-                          : (stable.farmName.isEmpty
-                                ? stable.displayName
-                                : stable.farmName),
-                      badge: 'EXCELLENT',
-                    ),
-                    _ReportSummaryRow(
-                      icon: Icons.air,
-                      color: const Color(0xFFE5A326),
-                      title: 'Air quality warnings',
-                      subtitle:
-                          '$warnings ${warnings == 1 ? 'farm exceeded' : 'farms exceeded'} normal levels',
-                      badge: '$warnings WARNINGS',
-                      last: true,
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(10),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.info_outline,
-                            size: 16,
-                            color: context.appColors.mutedText,
-                          ),
-                          const SizedBox(width: 7),
-                          Expanded(
-                            child: Text(
-                              'All readings are aggregated from $locations locations and ${widget.online} online devices.',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: context.appColors.mutedText,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: _adminOrange,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(7),
-                        ),
-                        side: const BorderSide(color: _adminOrange),
-                        minimumSize: const Size.fromHeight(45),
-                      ),
-                      onPressed: () =>
-                          _notify(context, 'PDF export requested.'),
-                      icon: const Icon(Icons.picture_as_pdf_outlined),
-                      label: const Text('Export PDF'),
-                    ),
-                  ),
-                  const SizedBox(width: 7),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: _adminOrange,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(7),
-                        ),
-                        side: const BorderSide(color: _adminOrange),
-                        minimumSize: const Size.fromHeight(45),
-                      ),
-                      onPressed: () =>
-                          _notify(context, 'Share options requested.'),
-                      icon: const Icon(Icons.share_outlined),
-                      label: const Text('Share'),
-                    ),
-                  ),
-                  const SizedBox(width: 7),
-                  Expanded(
-                    child: FilledButton(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: _adminOrange,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(7),
-                        ),
-                        minimumSize: const Size.fromHeight(45),
-                      ),
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Close'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _notify(BuildContext context, String message) => ScaffoldMessenger.of(
-    context,
-  ).showSnackBar(SnackBar(content: Text(message)));
-}
-
-class _ReportPeriodButton extends StatelessWidget {
-  const _ReportPeriodButton({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  @override
-  Widget build(BuildContext context) => InkWell(
-    onTap: onTap,
-    borderRadius: BorderRadius.circular(5),
-    child: Container(
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: selected ? _adminOrange : Colors.transparent,
-        borderRadius: BorderRadius.circular(5),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 12,
-          color: selected ? Colors.white : context.appColors.text,
-          fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
-        ),
-      ),
-    ),
-  );
-}
-
-class _ReportTrendCard extends StatelessWidget {
-  const _ReportTrendCard({
-    required this.title,
-    required this.value,
-    required this.change,
-    required this.color,
-    required this.points,
-  });
-  final String title, value, change;
-  final Color color;
-  final List<double> points;
-  @override
-  Widget build(BuildContext context) => Container(
-    height: 160,
-    padding: const EdgeInsets.all(7),
-    decoration: BoxDecoration(
-      color: context.appColors.surface,
-      borderRadius: BorderRadius.circular(7),
-      border: Border.all(color: context.appColors.border),
-    ),
-    child: Column(
-      children: [
-        Text(
-          title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-        ),
-        Text(
-          'Avg.',
-          style: TextStyle(fontSize: 11, color: context.appColors.mutedText),
-        ),
-        const SizedBox(height: 3),
-        FittedBox(
-          child: Row(
-            children: [
-              Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const SizedBox(width: 5),
-              Text(
-                change,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: color,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 6),
-        Expanded(
-          child: CustomPaint(
-            painter: _SparklinePainter(points, color),
-            size: Size.infinite,
-          ),
-        ),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              'Mon',
-              style: TextStyle(
-                fontSize: 10,
-                color: context.appColors.mutedText,
-              ),
-            ),
-            Text(
-              'Sun',
-              style: TextStyle(
-                fontSize: 10,
-                color: context.appColors.mutedText,
-              ),
-            ),
-          ],
-        ),
-      ],
-    ),
-  );
-}
-
-class _ReportSummaryRow extends StatelessWidget {
-  const _ReportSummaryRow({
-    required this.icon,
-    required this.color,
-    required this.title,
-    required this.subtitle,
-    required this.badge,
-    this.last = false,
-  });
-  final IconData icon;
-  final Color color;
-  final String title, subtitle, badge;
-  final bool last;
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-    decoration: BoxDecoration(
-      border: last
-          ? null
-          : Border(bottom: BorderSide(color: context.appColors.border)),
-    ),
-    child: Row(
-      children: [
-        Icon(icon, size: 23, color: color),
-        const SizedBox(width: 9),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              Text(
-                subtitle,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: context.appColors.mutedText,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 7),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: .13),
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: color.withValues(alpha: .6)),
-          ),
-          child: Text(
-            badge,
-            style: TextStyle(
-              fontSize: 10,
-              color: color,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-class _LegendDot extends StatelessWidget {
-  const _LegendDot({required this.color, required this.label});
-  final Color color;
-  final String label;
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(left: 6),
-    child: Row(
-      children: [
-        Container(
-          width: 5,
-          height: 5,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-        ),
-        const SizedBox(width: 2),
-        Text(
-          label,
-          style: TextStyle(fontSize: 10, color: context.appColors.mutedText),
-        ),
-      ],
-    ),
-  );
-}
-
-class _DeviceReadingCard extends StatelessWidget {
-  const _DeviceReadingCard({
-    required this.user,
-    required this.selected,
-    required this.onSelect,
-  });
-  final AppUser user;
-  final bool selected;
-  final VoidCallback onSelect;
-  @override
-  Widget build(BuildContext context) {
-    final m = user.monitor;
-    final online = user.cameraAccessEnabled;
-    return InkWell(
-      onTap: () {
-        onSelect();
-        showDialog<void>(
-          context: context,
-          barrierColor: Colors.black.withValues(alpha: .72),
-          builder: (_) => _SensorReadingDialog(user: user),
-        );
-      },
-      borderRadius: BorderRadius.circular(9),
-      child: Container(
-        padding: const EdgeInsets.all(9),
-        decoration: BoxDecoration(
-          color: context.appColors.surface,
-          borderRadius: BorderRadius.circular(9),
-          border: Border.all(
-            color: selected ? _adminOrange : context.appColors.border,
-            width: selected ? 1.5 : 1,
-          ),
-        ),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                CircleAvatar(
-                  radius: 17,
-                  backgroundColor: _adminOrange.withValues(alpha: .15),
-                  backgroundImage: user.avatarPath == null
-                      ? null
-                      : FileImage(File(user.avatarPath!)),
-                  child: user.avatarPath == null
-                      ? Text(
-                          user.displayName.isEmpty ? '?' : user.displayName[0],
-                          style: const TextStyle(
-                            color: _adminOrange,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        )
-                      : null,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        user.displayName,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      Text(
-                        user.farmName.isEmpty ? 'Roostify Farm' : user.farmName,
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: context.appColors.mutedText,
-                        ),
-                      ),
-                      Text(
-                        user.address.isEmpty ? user.username : user.address,
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: context.appColors.mutedText,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: (online ? _adminGreen : Colors.grey).withValues(
-                          alpha: .18,
-                        ),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        online ? 'ONLINE' : 'OFFLINE',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: online ? _adminGreen : Colors.grey,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      'ESP32 Node',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: context.appColors.mutedText,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-            const SizedBox(height: 7),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _ReadingGauge(
-                  value: m.temperature,
-                  display: '${m.temperature.toStringAsFixed(1)}°C',
-                  label: 'Temperature',
-                  level: m.temperatureLevel,
-                ),
-                _ReadingGauge(
-                  value: m.humidity / 100,
-                  display: '${m.humidity.toStringAsFixed(0)}%',
-                  label: 'Humidity',
-                  level: m.humidityLevel,
-                ),
-                _ReadingGauge(
-                  value: m.airPpm / 50,
-                  display: '${m.airPpm} ppm',
-                  label: 'Air Pollution',
-                  level: m.airLevel,
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ReadingGauge extends StatelessWidget {
-  const _ReadingGauge({
-    required this.value,
-    required this.display,
-    required this.label,
-    required this.level,
-  });
-  final double value;
-  final String display, label;
-  final SensorWarningLevel level;
-  @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      SizedBox(
-        width: 88,
-        height: 60,
-        child: CustomPaint(
-          painter: _ArcPainter(value.clamp(0, 1), level.color),
-          child: Center(
-            child: Padding(
-              padding: const EdgeInsets.only(top: 11),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    display,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: context.appColors.mutedText,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
-        decoration: BoxDecoration(
-          color: level.color,
-          borderRadius: BorderRadius.circular(3),
-        ),
-        child: Text(
-          level.label,
-          style: const TextStyle(
-            fontSize: 10,
-            color: Colors.white,
-            fontWeight: FontWeight.w900,
-          ),
-        ),
-      ),
-    ],
-  );
-}
-
-class _ArcPainter extends CustomPainter {
-  const _ArcPainter(this.value, this.color);
-  final double value;
-  final Color color;
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Rect.fromLTWH(4, 5, size.width - 8, size.height * 1.45);
-    final p = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3
-      ..strokeCap = StrokeCap.round;
-    canvas.drawArc(
-      rect,
-      math.pi,
-      math.pi,
-      false,
-      p..color = color.withValues(alpha: .18),
-    );
-    canvas.drawArc(rect, math.pi, math.pi * value, false, p..color = color);
-  }
-
-  @override
-  bool shouldRepaint(covariant _ArcPainter oldDelegate) =>
-      oldDelegate.value != value;
-}
-
-class _SensorReadingDialog extends StatelessWidget {
-  const _SensorReadingDialog({required this.user});
-  final AppUser user;
-  @override
-  Widget build(BuildContext context) {
-    final m = user.monitor;
-    final online = user.cameraAccessEnabled;
-    return Dialog(
-      insetPadding: const EdgeInsets.fromLTRB(16, 42, 16, 86),
-      backgroundColor: context.appColors.background,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: context.appColors.border),
-      ),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 620, maxHeight: 700),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  const Icon(
-                    Icons.monitor_heart_outlined,
-                    color: _adminOrange,
-                    size: 28,
-                  ),
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text(
-                      'Sensor Reading Details',
-                      style: TextStyle(
-                        fontSize: 19,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Close',
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close, size: 25),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 9),
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: context.appColors.surface,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: context.appColors.border),
-                ),
-                child: Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 25,
-                      backgroundColor: _adminOrange.withValues(alpha: .15),
-                      backgroundImage: user.avatarPath == null
-                          ? null
-                          : FileImage(File(user.avatarPath!)),
-                      child: user.avatarPath == null
-                          ? Text(
-                              user.displayName.isEmpty
-                                  ? '?'
-                                  : user.displayName[0].toUpperCase(),
-                              style: const TextStyle(
-                                color: _adminOrange,
-                                fontSize: 19,
-                                fontWeight: FontWeight.w900,
-                              ),
-                            )
-                          : null,
-                    ),
-                    const SizedBox(width: 11),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            user.displayName,
-                            style: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                          Text(
-                            user.farmName.isEmpty
-                                ? 'Roostify Farm'
-                                : user.farmName,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: context.appColors.mutedText,
-                            ),
-                          ),
-                          Text(
-                            user.address.isEmpty ? user.username : user.address,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: context.appColors.mutedText,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        _DialogStatus(
-                          label: online ? 'ONLINE' : 'OFFLINE',
-                          color: online ? _adminGreen : Colors.grey,
-                        ),
-                        const SizedBox(height: 7),
-                        Text(
-                          'Last updated',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: context.appColors.mutedText,
-                          ),
-                        ),
-                        Text(
-                          'Recently',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: context.appColors.mutedText,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: _SensorMetricCard(
-                      title: 'Temperature',
-                      value: '${m.temperature.toStringAsFixed(1)}°C',
-                      level: m.temperatureLevel,
-                      fraction: (m.temperature / 40).clamp(0, 1),
-                      range: 'Safe: 18–30°C',
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: _SensorMetricCard(
-                      title: 'Humidity',
-                      value: '${m.humidity.toStringAsFixed(0)}%',
-                      level: m.humidityLevel,
-                      fraction: (m.humidity / 100).clamp(0, 1),
-                      range: 'Optimal: 50–70%',
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: _SensorMetricCard(
-                      title: 'Air Pollution',
-                      value: '${m.airPpm} ppm',
-                      level: m.airLevel,
-                      fraction: (m.airPpm / 50).clamp(0, 1),
-                      range: 'Good: 0–15 ppm',
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Container(
-                height: 208,
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: context.appColors.surface,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: context.appColors.border),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.show_chart, size: 20),
-                        const SizedBox(width: 7),
-                        const Expanded(
-                          child: Text(
-                            'Last 24 Hours Overview',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 9,
-                            vertical: 5,
-                          ),
-                          decoration: BoxDecoration(
-                            color: context.appColors.surfaceRaised,
-                            borderRadius: BorderRadius.circular(5),
-                          ),
-                          child: const Row(
-                            children: [
-                              Text('24 Hours', style: TextStyle(fontSize: 12)),
-                              Icon(Icons.keyboard_arrow_down, size: 15),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Expanded(
-                      child: CustomPaint(
-                        painter: _CombinedSensorChartPainter(),
-                        size: Size.infinite,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          '9 AM',
-                          style: TextStyle(
-                            fontSize: 7,
-                            color: context.appColors.mutedText,
-                          ),
-                        ),
-                        Text(
-                          '3 PM',
-                          style: TextStyle(
-                            fontSize: 7,
-                            color: context.appColors.mutedText,
-                          ),
-                        ),
-                        Text(
-                          '9 PM',
-                          style: TextStyle(
-                            fontSize: 7,
-                            color: context.appColors.mutedText,
-                          ),
-                        ),
-                        Text(
-                          '3 AM',
-                          style: TextStyle(
-                            fontSize: 7,
-                            color: context.appColors.mutedText,
-                          ),
-                        ),
-                        Text(
-                          '9 AM',
-                          style: TextStyle(
-                            fontSize: 7,
-                            color: context.appColors.mutedText,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 3),
-                    const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _ChartLegend(
-                          color: Color(0xFFFF3D31),
-                          label: 'Temperature',
-                        ),
-                        SizedBox(width: 10),
-                        _ChartLegend(
-                          color: Color(0xFFFFB20D),
-                          label: 'Humidity',
-                        ),
-                        SizedBox(width: 10),
-                        _ChartLegend(
-                          color: Color(0xFFFF6818),
-                          label: 'Air Pollution',
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 10),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 9,
-                ),
-                decoration: BoxDecoration(
-                  color: context.appColors.surface,
-                  borderRadius: BorderRadius.circular(7),
-                  border: Border.all(color: context.appColors.border),
-                ),
-                child: const Wrap(
-                  alignment: WrapAlignment.spaceAround,
-                  spacing: 10,
-                  runSpacing: 5,
-                  children: [
-                    _ChartLegend(color: _adminGreen, label: 'Normal'),
-                    _ChartLegend(color: Color(0xFFFFB20D), label: 'Caution'),
-                    _ChartLegend(color: Color(0xFFFF6818), label: 'Warning'),
-                    _ChartLegend(color: Color(0xFFFF3D31), label: 'Danger'),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size.fromHeight(46),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(7),
-                        ),
-                      ),
-                      onPressed: () =>
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Sensor history requested.'),
-                            ),
-                          ),
-                      icon: const Icon(Icons.history),
-                      label: const Text('View History'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: FilledButton(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: _adminOrange,
-                        minimumSize: const Size.fromHeight(46),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(7),
-                        ),
-                      ),
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Close'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SensorMetricCard extends StatelessWidget {
-  const _SensorMetricCard({
-    required this.title,
-    required this.value,
-    required this.level,
-    required this.fraction,
-    required this.range,
-  });
-  final String title, value, range;
-  final SensorWarningLevel level;
-  final double fraction;
-  @override
-  Widget build(BuildContext context) => Container(
-    height: 174,
-    padding: const EdgeInsets.all(7),
-    decoration: BoxDecoration(
-      color: context.appColors.surface,
-      borderRadius: BorderRadius.circular(8),
-      border: Border.all(color: context.appColors.border),
-    ),
-    child: Column(
-      children: [
-        Text(
-          title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 7),
-        SizedBox(
-          width: 78,
-          height: 78,
-          child: CustomPaint(
-            painter: _RingPainter(fraction, level.color),
-            child: Center(
-              child: Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ),
-          ),
-        ),
-        Transform.translate(
-          offset: const Offset(0, -5),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-            decoration: BoxDecoration(
-              color: level.color.withValues(alpha: .22),
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: level.color.withValues(alpha: .65)),
-            ),
-            child: Text(
-              level.label,
-              style: TextStyle(
-                fontSize: 9,
-                color: level.color,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-          ),
-        ),
-        const Spacer(),
-        Text(
-          range,
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 9, color: context.appColors.mutedText),
-        ),
-      ],
-    ),
-  );
-}
-
-class _ChartLegend extends StatelessWidget {
-  const _ChartLegend({required this.color, required this.label});
-  final Color color;
-  final String label;
-  @override
-  Widget build(BuildContext context) => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Container(
-        width: 8,
-        height: 8,
-        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-      ),
-      const SizedBox(width: 4),
-      Text(
-        label,
-        style: TextStyle(fontSize: 11, color: context.appColors.mutedText),
-      ),
-    ],
-  );
-}
-
-class _CombinedSensorChartPainter extends CustomPainter {
-  const _CombinedSensorChartPainter();
-  static const _series = [
-    (
-      [
-        .55,
-        .6,
-        .58,
-        .7,
-        .78,
-        .72,
-        .65,
-        .6,
-        .62,
-        .7,
-        .56,
-        .61,
-        .66,
-        .63,
-        .58,
-        .55,
-        .6,
-      ],
-      Color(0xFFFF3D31),
-    ),
-    (
-      [
-        .35,
-        .36,
-        .48,
-        .34,
-        .36,
-        .46,
-        .45,
-        .46,
-        .44,
-        .55,
-        .46,
-        .47,
-        .43,
-        .4,
-        .46,
-        .45,
-        .47,
-      ],
-      Color(0xFFFFB20D),
-    ),
-    (
-      [
-        .16,
-        .12,
-        .22,
-        .2,
-        .12,
-        .17,
-        .22,
-        .26,
-        .17,
-        .18,
-        .12,
-        .1,
-        .17,
-        .21,
-        .25,
-        .2,
-        .23,
-      ],
-      Color(0xFFFF6818),
-    ),
-  ];
-  @override
-  void paint(Canvas canvas, Size size) {
-    final grid = Paint()
-      ..color = const Color(0xFF778197).withValues(alpha: .18)
-      ..strokeWidth = 1;
-    for (var i = 0; i <= 4; i++) {
-      final y = size.height * i / 4;
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
-    }
-    for (final item in _series) {
-      final values = item.$1;
-      final path = Path();
-      for (var i = 0; i < values.length; i++) {
-        final p = Offset(
-          size.width * i / (values.length - 1),
-          size.height * (1 - values[i]),
-        );
-        i == 0 ? path.moveTo(p.dx, p.dy) : path.lineTo(p.dx, p.dy);
-      }
-      canvas.drawPath(
-        path,
-        Paint()
-          ..color = item.$2
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2
-          ..strokeCap = StrokeCap.round,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _NewAdminUsers extends StatefulWidget {
@@ -2321,34 +432,26 @@ class _NewAdminUsersState extends State<_NewAdminUsers> {
     super.dispose();
   }
 
-  void _createAccount() {
+  Future<void> _createAccount() async {
     final createdName = _name.text.trim();
     final createdUsername = _username.text.trim();
     final temporaryPassword = _password.text.trim().isEmpty
-        ? 'farm123'
+        ? 'Farm1234'
         : _password.text.trim();
-    final ok = widget.controller.addUser(
+    final ok = await widget.controller.addUser(
       username: _username.text,
       displayName: _name.text,
       email: _email.text,
       farmName: _farm.text,
       contactNumber: _phone.text,
+      address: _location.text,
       password: _password.text,
     );
+    if (!mounted) return;
     if (!ok) {
       setState(() => _error = widget.controller.lastError);
       return;
     }
-    widget.controller.updateProfileDetails(
-      _username.text.trim(),
-      displayName: _name.text,
-      email: _email.text,
-      farmName: _farm.text,
-      contactNumber: _phone.text,
-      address: _location.text,
-      facebookContact: '',
-      shortBio: '',
-    );
     for (final field in [
       _name,
       _username,
@@ -2486,9 +589,15 @@ class _NewAdminUsersState extends State<_NewAdminUsers> {
             Container(
               padding: const EdgeInsets.all(9),
               decoration: BoxDecoration(
-                color: context.appColors.surface,
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? context.appColors.surface
+                    : const Color(0xFFFFFBF2),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: context.appColors.border),
+                border: Border.all(
+                  color: Theme.of(context).brightness == Brightness.dark
+                      ? context.appColors.border
+                      : const Color(0xFFE6A52B).withValues(alpha: .42),
+                ),
               ),
               child: Row(
                 children: [
@@ -2568,6 +677,7 @@ class _InlineAddUserForm extends StatelessWidget {
       color: context.appColors.surface,
       borderRadius: BorderRadius.circular(8),
       border: Border.all(color: context.appColors.border),
+      boxShadow: _adminCardShadows(context),
     ),
     child: Column(
       children: [
@@ -2732,7 +842,7 @@ class _UserCreatedDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Dialog(
     insetPadding: const EdgeInsets.symmetric(horizontal: 34),
-    backgroundColor: context.appColors.background,
+    backgroundColor: context.appColors.surface,
     shape: RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(13),
       side: BorderSide(color: context.appColors.border),
@@ -3293,6 +1403,7 @@ class _UserRow extends StatelessWidget {
           color: context.appColors.surface,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: context.appColors.border),
+          boxShadow: _adminCardShadows(context),
         ),
         child: Row(
           children: [
@@ -3475,7 +1586,16 @@ class _UserActions extends StatelessWidget {
       ),
     );
     if (confirmed == true && context.mounted) {
-      controller.removeUser(user.username);
+      final removed = await controller.removeUser(user.username);
+      if (!context.mounted) return;
+      if (!removed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(controller.lastError ?? 'Unable to remove user.'),
+          ),
+        );
+        return;
+      }
       Navigator.of(context).pop();
     }
   }
@@ -3495,7 +1615,7 @@ class _UserActions extends StatelessWidget {
         .length;
     return Dialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 28, vertical: 30),
-      backgroundColor: context.appColors.background,
+      backgroundColor: context.appColors.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(color: context.appColors.border),
@@ -3906,11 +2026,12 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
     super.dispose();
   }
 
-  void _submit() {
-    final ok = widget.controller.adminResetPassword(
+  Future<void> _submit() async {
+    final ok = await widget.controller.adminResetPassword(
       widget.user.username,
       _password.text,
     );
+    if (!mounted) return;
     if (ok) {
       Navigator.of(context).pop();
     } else {
@@ -3994,8 +2115,7 @@ class _NewAdminCctvState extends State<_NewAdminCctv> {
             ),
           )
           .toList();
-      bool isOnline((AppUser, int, LiveCctvStream) e) =>
-          e.$3.inspection.state != CctvInspectionState.error;
+      bool isOnline((AppUser, int, LiveCctvStream) e) => e.$3.isOnline;
       final selectedIndex = _selectedIndex?.clamp(0, entries.length - 1);
       final selected = entries.isEmpty || selectedIndex == null
           ? null
@@ -4086,9 +2206,28 @@ class _NewAdminCctvState extends State<_NewAdminCctv> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(8, 9, 8, 18),
           children: [
-            const Text(
-              'CCTV',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'CCTV',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: widget.controller.session?.user.isAdmin == true
+                      ? () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => RecordingsPage(
+                              currentUser: widget.controller.session!.user,
+                            ),
+                          ),
+                        )
+                      : null,
+                  icon: const Icon(Icons.cloud_outlined, size: 18),
+                  label: const Text('Recordings'),
+                ),
+              ],
             ),
             const SizedBox(height: 7),
             Container(
@@ -4202,6 +2341,7 @@ class _AdminCameraTile extends StatelessWidget {
                 : context.appColors.border,
             width: selected ? 1.4 : 1,
           ),
+          boxShadow: _adminCardShadows(context),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -4600,7 +2740,7 @@ class _CameraStreamDialog extends StatelessWidget {
     final ip = _AdminCameraTile._cameraHost(stream.streamUrl, index);
     return Dialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
-      backgroundColor: context.appColors.background,
+      backgroundColor: context.appColors.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(color: context.appColors.border),
@@ -5344,6 +3484,7 @@ class _InboxThreadRow extends StatelessWidget {
                 ? _adminOrange.withValues(alpha: .45)
                 : context.appColors.border,
           ),
+          boxShadow: _adminCardShadows(context),
         ),
         child: Row(
           children: [
@@ -5699,7 +3840,7 @@ class _SupportThreadDialogState extends State<_SupportThreadDialog> {
       final tag = _InboxThreadRow._supportTag(latestText);
       return Dialog(
         insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 38),
-        backgroundColor: context.appColors.background,
+        backgroundColor: context.appColors.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
           side: BorderSide(color: context.appColors.border),

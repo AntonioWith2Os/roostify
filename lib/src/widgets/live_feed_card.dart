@@ -7,10 +7,8 @@ class LiveFeedCard extends StatefulWidget {
     required this.recordingOwnerUsername,
     required this.controller,
     this.detections = const [],
-    this.inspectionInterval,
-    this.onFrameCaptureStarted,
     this.onFrameReady,
-    this.onFrameCaptureFailed,
+    this.onConnectionChanged,
     this.expand = false,
     this.displayLabel,
   });
@@ -25,12 +23,9 @@ class LiveFeedCard extends StatefulWidget {
   /// "Recording Updates" alert when a clip finishes saving.
   final AppController controller;
   final List<ChickenDetection> detections;
-
-  /// Minimum time between frame captures; defaults to a device-scaled cadence.
-  final Duration? inspectionInterval;
-  final VoidCallback? onFrameCaptureStarted;
-  final Future<void> Function(Uint8List frameBytes)? onFrameReady;
-  final ValueChanged<String>? onFrameCaptureFailed;
+  final Future<CctvInspectionResult?> Function(Uint8List frameBytes)?
+  onFrameReady;
+  final ValueChanged<bool>? onConnectionChanged;
 
   /// When true, the card fills whatever bounded space its parent gives it
   /// (a full-screen tab body, a grid cell) instead of using a fixed preview
@@ -123,14 +118,22 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   FijkPlayer? _controller;
   Timer? _diagnosticTimer;
   Timer? _recoveryTimer;
+  Timer? _stablePlaybackTimer;
+  Timer? _playbackWatchdogTimer;
   Timer? _inspectionTimer;
+  StreamSubscription<bool>? _bufferStateSubscription;
+  StreamSubscription<Duration>? _positionSubscription;
 
   static const _streamCachingMs = 2000;
-  static const _maxInspectionInterval = Duration(seconds: 4);
-  static const _captureFailuresBeforePlayerRestart = 3;
   static const _slowStartDiagnosticDelay = Duration(seconds: 8);
   static const _startupRecoveryDelay = Duration(seconds: 14);
-  static const _errorRecoveryDelay = Duration(seconds: 3);
+  static const _stallRecoveryDelay = Duration(seconds: 15);
+  static const _playbackWatchdogInterval = Duration(seconds: 3);
+  static const _playbackProgressTimeout = Duration(seconds: 18);
+  static const _errorRecoveryDelay = Duration(seconds: 5);
+  static const _stablePlaybackResetDelay = Duration(minutes: 2);
+  static const _inspectionWarmupDelay = Duration(seconds: 3);
+  static const _inspectionFailureLimit = 1;
   static const _maxAutomaticRecoveryAttempts = 4;
   static const _automaticRecoveryProfiles = [
     _LiveFeedPlaybackProfile.tcp,
@@ -145,9 +148,15 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   int _controllerGeneration = 0;
   int _automaticRecoveryAttempt = 0;
   bool _hasPlayedCurrentController = false;
+  bool? _reportedConnectionOnline;
+  Duration? _lastPlaybackPosition;
+  DateTime? _lastPlaybackProgressAt;
+  bool _hasObservedPlaybackProgress = false;
+  bool _aiScanningEnabled = false;
   bool _inspectionRunning = false;
-  Duration _lastInspectionCost = Duration.zero;
-  int _consecutiveCaptureFailures = 0;
+  int _consecutiveInspectionFailures = 0;
+  String? _aiStatusMessage;
+  late List<ChickenDetection> _liveDetections;
 
   final RtspRecorderService _recorder = RtspRecorderService();
   Timer? _recordingTicker;
@@ -159,7 +168,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   Timer? _orientationResetTimer;
   int? _pendingFullScreenRestoreGeneration;
 
-  bool _showPtzControls = true;
+  bool _showPtzControls = false;
   bool _dataSaverEnabled = false;
 
   void _togglePtzControls() {
@@ -167,9 +176,6 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
       _showPtzControls = !_showPtzControls;
     });
   }
-
-  Duration get _baseInspectionInterval =>
-      widget.inspectionInterval ?? _defaultInspectionInterval();
 
   bool get _supportsFijkPlayer {
     if (kIsWeb) {
@@ -185,6 +191,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   @override
   void initState() {
     super.initState();
+    _liveDetections = List.of(widget.detections);
     unawaited(_loadPreviewPreferences());
   }
 
@@ -197,7 +204,11 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     if (!mounted) return;
     final autoPlay = prefs.getBool('roostify.app.autoplay') ?? true;
     final dataSaver = prefs.getBool('roostify.app.data_saver') ?? false;
-    setState(() => _dataSaverEnabled = dataSaver);
+    final aiScanningEnabled = prefs.getBool(_aiScanningPreferenceKey) ?? false;
+    setState(() {
+      _dataSaverEnabled = dataSaver;
+      _aiScanningEnabled = aiScanningEnabled;
+    });
     if (autoPlay && !dataSaver && _supportsFijkPlayer) {
       _replaceController();
     }
@@ -211,6 +222,10 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   @override
   void didUpdateWidget(covariant LiveFeedCard oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!listEquals(oldWidget.detections, widget.detections) &&
+        !_inspectionRunning) {
+      _liveDetections = List.of(widget.detections);
+    }
     if (oldWidget.streamUrl != widget.streamUrl &&
         _supportsFijkPlayer &&
         _controller != null) {
@@ -238,13 +253,23 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
 
     _diagnosticTimer?.cancel();
     _recoveryTimer?.cancel();
+    _stablePlaybackTimer?.cancel();
+    _playbackWatchdogTimer?.cancel();
     _inspectionTimer?.cancel();
+    unawaited(_bufferStateSubscription?.cancel());
+    unawaited(_positionSubscription?.cancel());
+    _bufferStateSubscription = null;
+    _positionSubscription = null;
+    _stablePlaybackTimer = null;
     if (resetRecovery) {
       _automaticRecoveryAttempt = 0;
     }
     _hasPlayedCurrentController = false;
+    _lastPlaybackPosition = null;
+    _lastPlaybackProgressAt = null;
+    _hasObservedPlaybackProgress = false;
     _inspectionRunning = false;
-    _consecutiveCaptureFailures = 0;
+    _consecutiveInspectionFailures = 0;
     _controllerGeneration += 1;
     final generation = _controllerGeneration;
     _pendingFullScreenRestoreGeneration = wasFullScreen ? generation : null;
@@ -258,6 +283,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     final controller = FijkPlayer();
     controller.addListener(_handlePlayerValueChanged);
     _controller = controller;
+    _monitorPlaybackHealth(controller, generation);
     unawaited(_configureAndStartController(controller, generation));
     _scheduleSlowStartDiagnostic(generation);
     _schedulePlaybackRecovery(generation, delay: _startupRecoveryDelay);
@@ -312,10 +338,11 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     final options = FijkOption()
       ..setHostOption('request-screen-on', 1)
       ..setHostOption('request-audio-focus', 1)
-      ..setHostOption('enable-snapshot', 1)
       ..setPlayerOption('framedrop', 1)
-      ..setPlayerOption('infbuf', 1)
-      ..setPlayerOption('packet-buffering', 0)
+      // A small packet buffer absorbs ordinary Wi-Fi jitter. The previous
+      // zero-buffer live tuning treated brief packet gaps like disconnects.
+      ..setPlayerOption('infbuf', 0)
+      ..setPlayerOption('packet-buffering', 1)
       ..setPlayerOption(
         'mediacodec-all-videos',
         _playbackProfile == _LiveFeedPlaybackProfile.software ? 0 : 1,
@@ -324,8 +351,15 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
         'max_delay',
         (_dataSaverEnabled ? _streamCachingMs ~/ 2 : _streamCachingMs) * 1000,
       )
-      ..setFormatOption('stimeout', 5000000)
+      // V380-class cameras can pause between bursts for longer than five
+      // seconds. Allow a genuine 30-second network silence before failing.
+      ..setFormatOption('stimeout', 30000000)
+      ..setFormatOption('rw_timeout', 30000000)
       ..setFormatOption('reconnect', 1);
+
+    if (_aiScanningEnabled) {
+      options.setHostOption('enable-snapshot', 1);
+    }
 
     switch (_playbackProfile) {
       case _LiveFeedPlaybackProfile.tcp:
@@ -342,6 +376,238 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     return options;
   }
 
+  String get _aiScanningPreferenceKey {
+    final identity = '${widget.recordingOwnerUsername}|${widget.streamUrl}';
+    return 'roostify.cctv.ai_scanning.${sha1.convert(utf8.encode(identity))}';
+  }
+
+  Future<void> _setAiScanningEnabled(bool enabled) async {
+    if (_aiScanningEnabled == enabled) {
+      return;
+    }
+
+    _inspectionTimer?.cancel();
+    _inspectionTimer = null;
+    setState(() {
+      _aiScanningEnabled = enabled;
+      _aiStatusMessage = enabled
+          ? 'AI scanning enabled'
+          : 'AI scanning disabled';
+      if (!enabled) {
+        _liveDetections = const [];
+      }
+    });
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_aiScanningPreferenceKey, enabled);
+    if (!mounted) return;
+
+    final controller = _controller;
+    if (controller != null) {
+      try {
+        await controller.setOption(
+          FijkOption.hostCategory,
+          'enable-snapshot',
+          enabled ? 1 : 0,
+        );
+      } catch (_) {
+        if (enabled && mounted) {
+          await _turnOffAiAfterFailure(
+            'AI scanning could not start. Live playback remains active.',
+          );
+          return;
+        }
+      }
+    }
+
+    if (enabled &&
+        controller != null &&
+        _isPlaying(controller, controller.value)) {
+      _scheduleNextInspection(
+        controller,
+        _controllerGeneration,
+        delay: _inspectionWarmupDelay,
+      );
+    }
+  }
+
+  void _toggleAiScanning() {
+    unawaited(_setAiScanningEnabled(!_aiScanningEnabled));
+  }
+
+  void _ensureInspectionScheduled(FijkPlayer controller, int generation) {
+    if (!_aiScanningEnabled ||
+        widget.onFrameReady == null ||
+        _inspectionRunning ||
+        (_inspectionTimer?.isActive ?? false)) {
+      return;
+    }
+
+    _scheduleNextInspection(
+      controller,
+      generation,
+      delay: _inspectionWarmupDelay,
+    );
+  }
+
+  void _scheduleNextInspection(
+    FijkPlayer controller,
+    int generation, {
+    Duration? delay,
+  }) {
+    _inspectionTimer?.cancel();
+    _inspectionTimer = Timer(delay ?? _defaultInspectionInterval(), () {
+      _inspectionTimer = null;
+      if (!_aiScanningEnabled ||
+          !_isCurrentController(controller, generation) ||
+          !_isPlaying(controller, controller.value)) {
+        return;
+      }
+      unawaited(_captureInspectionFrame(controller, generation));
+    });
+  }
+
+  Future<void> _captureInspectionFrame(
+    FijkPlayer controller,
+    int generation,
+  ) async {
+    if (_inspectionRunning || !_aiScanningEnabled) {
+      return;
+    }
+
+    _inspectionRunning = true;
+    try {
+      final frameBytes = await controller.takeSnapShot().timeout(
+        const Duration(seconds: 4),
+      );
+      if (!_isCurrentController(controller, generation) ||
+          !_aiScanningEnabled) {
+        return;
+      }
+      if (frameBytes.isEmpty) {
+        throw StateError('The CCTV snapshot was empty.');
+      }
+
+      final result = await widget.onFrameReady?.call(frameBytes);
+      if (!_isCurrentController(controller, generation) ||
+          !_aiScanningEnabled) {
+        return;
+      }
+
+      _consecutiveInspectionFailures = 0;
+      if (result != null) {
+        setState(() {
+          _liveDetections = List.of(result.detections);
+          _aiStatusMessage = result.resultLabel;
+        });
+      }
+    } catch (error) {
+      if (!_isCurrentController(controller, generation)) {
+        return;
+      }
+
+      _consecutiveInspectionFailures += 1;
+      if (_consecutiveInspectionFailures >= _inspectionFailureLimit) {
+        await _turnOffAiAfterFailure(
+          'AI scanning was turned off after a frame-capture failure. Live playback remains active.',
+          restartPlayback: true,
+        );
+      }
+    } finally {
+      _inspectionRunning = false;
+      if (_aiScanningEnabled && _isCurrentController(controller, generation)) {
+        _scheduleNextInspection(controller, generation);
+      }
+    }
+  }
+
+  Future<void> _turnOffAiAfterFailure(
+    String message, {
+    bool restartPlayback = false,
+  }) async {
+    _inspectionTimer?.cancel();
+    _inspectionTimer = null;
+    if (mounted) {
+      setState(() {
+        _aiScanningEnabled = false;
+        _aiStatusMessage = message;
+        _liveDetections = const [];
+      });
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_aiScanningPreferenceKey, false);
+    if (restartPlayback && mounted && _controller != null) {
+      _replaceController(resetRecovery: true);
+    }
+  }
+
+  void _monitorPlaybackHealth(FijkPlayer controller, int generation) {
+    _bufferStateSubscription = controller.onBufferStateUpdate.listen((
+      isBuffering,
+    ) {
+      if (!_isCurrentController(controller, generation)) {
+        return;
+      }
+
+      if (isBuffering && _hasPlayedCurrentController) {
+        _ensurePlaybackRecoveryScheduled(
+          generation,
+          delay: _stallRecoveryDelay,
+        );
+        return;
+      }
+
+      if (!isBuffering && _isPlaying(controller, controller.value)) {
+        _recoveryTimer?.cancel();
+        _reportConnectionStatus(true);
+      }
+    });
+
+    _positionSubscription = controller.onCurrentPosUpdate.listen((position) {
+      if (!_isCurrentController(controller, generation)) {
+        return;
+      }
+
+      final previousPosition = _lastPlaybackPosition;
+      _lastPlaybackPosition = position;
+      if (previousPosition == null || position == previousPosition) {
+        return;
+      }
+
+      _hasObservedPlaybackProgress = true;
+      _lastPlaybackProgressAt = DateTime.now();
+      if (_hasPlayedCurrentController && !controller.isBuffering) {
+        _recoveryTimer?.cancel();
+        _reportConnectionStatus(true);
+      }
+    });
+
+    _playbackWatchdogTimer = Timer.periodic(_playbackWatchdogInterval, (_) {
+      if (!_isCurrentController(controller, generation) ||
+          !_hasPlayedCurrentController) {
+        return;
+      }
+
+      if (controller.isBuffering) {
+        _ensurePlaybackRecoveryScheduled(
+          generation,
+          delay: _stallRecoveryDelay,
+        );
+        return;
+      }
+
+      final lastProgressAt = _lastPlaybackProgressAt;
+      if (!_hasObservedPlaybackProgress || lastProgressAt == null) {
+        return;
+      }
+
+      if (DateTime.now().difference(lastProgressAt) >=
+          _playbackProgressTimeout) {
+        _ensurePlaybackRecoveryScheduled(generation, delay: Duration.zero);
+      }
+    });
+  }
+
   void _handlePlayerValueChanged() {
     final controller = _controller;
     final value = controller?.value;
@@ -354,10 +620,14 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     }
     _wasFullScreen = value.fullScreen;
 
-    if (_isPlaying(value)) {
+    if (_isPlaying(controller, value)) {
+      _reportConnectionStatus(true);
       _hasPlayedCurrentController = true;
-      _ensureRepeatedFrameInspection(controller, _controllerGeneration);
-      _automaticRecoveryAttempt = 0;
+      _ensureInspectionScheduled(controller, _controllerGeneration);
+      _stablePlaybackTimer ??= Timer(_stablePlaybackResetDelay, () {
+        _automaticRecoveryAttempt = 0;
+        _stablePlaybackTimer = null;
+      });
       _diagnosticTimer?.cancel();
       _recoveryTimer?.cancel();
       if (_streamProbeStatus != null &&
@@ -371,6 +641,9 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     }
 
     if (_hasFijkError(value)) {
+      _reportConnectionStatus(false);
+      _stablePlaybackTimer?.cancel();
+      _stablePlaybackTimer = null;
       _diagnosticTimer?.cancel();
       _startStreamProbe();
       _schedulePlaybackRecovery(
@@ -381,9 +654,11 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     }
 
     if (_hasPlayedCurrentController && _isRecoverableStall(controller, value)) {
+      _stablePlaybackTimer?.cancel();
+      _stablePlaybackTimer = null;
       _ensurePlaybackRecoveryScheduled(
         _controllerGeneration,
-        delay: _startupRecoveryDelay,
+        delay: _stallRecoveryDelay,
       );
     }
   }
@@ -403,88 +678,10 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     });
   }
 
-  void _ensureRepeatedFrameInspection(FijkPlayer controller, int generation) {
-    if (_inspectionTimer?.isActive ?? false) {
-      return;
-    }
-
-    unawaited(_captureInspectionFrame(controller, generation));
-    _scheduleNextInspection(controller, generation);
-  }
-
-  void _scheduleNextInspection(FijkPlayer controller, int generation) {
-    _inspectionTimer = Timer(_nextInspectionDelay(), () {
-      if (!_isCurrentController(controller, generation)) {
-        return;
-      }
-      if (_isPlaying(controller.value)) {
-        unawaited(_captureInspectionFrame(controller, generation));
-      }
-      _scheduleNextInspection(controller, generation);
-    });
-  }
-
-  Duration _nextInspectionDelay() {
-    // Back off when capture plus inference is the bottleneck, so weak devices
-    // never queue inspections faster than they can process them.
-    final backoff = _lastInspectionCost * 2;
-    if (backoff <= _baseInspectionInterval) {
-      return _baseInspectionInterval;
-    }
-    return backoff > _maxInspectionInterval ? _maxInspectionInterval : backoff;
-  }
-
-  Future<void> _captureInspectionFrame(
-    FijkPlayer controller,
-    int generation,
-  ) async {
-    if (_inspectionRunning) {
-      return;
-    }
-
-    _inspectionRunning = true;
-    try {
-      await Future<void>.delayed(const Duration(milliseconds: 600));
-      if (!_isCurrentController(controller, generation)) {
-        return;
-      }
-
-      final stopwatch = Stopwatch()..start();
-      final frameBytes = await controller.takeSnapShot().timeout(
-        const Duration(seconds: 5),
-      );
-      if (!_isCurrentController(controller, generation)) {
-        return;
-      }
-      if (frameBytes.isEmpty) {
-        throw StateError('The CCTV frame snapshot was empty.');
-      }
-
-      widget.onFrameCaptureStarted?.call();
-      await widget.onFrameReady?.call(frameBytes);
-      _lastInspectionCost = stopwatch.elapsed;
-      _consecutiveCaptureFailures = 0;
-    } catch (error) {
-      if (!_isCurrentController(controller, generation)) {
-        return;
-      }
-
-      widget.onFrameCaptureFailed?.call('Could not capture CCTV frame: $error');
-
-      // fijkplayer keeps a single pending snapshot completer internally; if
-      // one native reply is lost, every later takeSnapShot fails with "last
-      // snapShot is not finished" until the player is rebuilt.
-      _consecutiveCaptureFailures += 1;
-      if (_consecutiveCaptureFailures >= _captureFailuresBeforePlayerRestart) {
-        _replaceController();
-      }
-    } finally {
-      _inspectionRunning = false;
-    }
-  }
-
-  bool _isPlaying(FijkValue value) {
-    return value.state == FijkState.started && value.videoRenderStart;
+  bool _isPlaying(FijkPlayer controller, FijkValue value) {
+    return value.state == FijkState.started &&
+        value.videoRenderStart &&
+        !controller.isBuffering;
   }
 
   bool _hasFijkError(FijkValue value) {
@@ -502,11 +699,13 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
 
   void _scheduleSlowStartDiagnostic(int generation) {
     _diagnosticTimer = Timer(_slowStartDiagnosticDelay, () {
-      final value = _controller?.value;
+      final controller = _controller;
+      final value = controller?.value;
       if (!mounted ||
           generation != _controllerGeneration ||
+          controller == null ||
           value == null ||
-          _isPlaying(value)) {
+          _isPlaying(controller, value)) {
         return;
       }
 
@@ -526,7 +725,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
           controller == null ||
           generation != _controllerGeneration ||
           value == null ||
-          _isPlaying(value)) {
+          _isPlaying(controller, value)) {
         return;
       }
 
@@ -546,6 +745,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   }
 
   void _recoverStalledPlayback(FijkPlayer controller, FijkValue value) {
+    _reportConnectionStatus(false);
     _startStreamProbe();
 
     if (_automaticRecoveryAttempt >= _maxAutomaticRecoveryAttempts) {
@@ -593,6 +793,12 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     }
 
     return value.state.name;
+  }
+
+  void _reportConnectionStatus(bool online) {
+    if (_reportedConnectionOnline == online) return;
+    _reportedConnectionOnline = online;
+    widget.onConnectionChanged?.call(online);
   }
 
   void _selectPlaybackProfile(_LiveFeedPlaybackProfile profile) {
@@ -877,6 +1083,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
         widget.streamUrl,
         username: widget.recordingOwnerUsername,
       );
+      final completion = _recorder.recordingCompletion;
       if (!mounted) {
         return;
       }
@@ -891,7 +1098,12 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
         }
         setState(() => _recordingElapsed = _recorder.recordingDuration);
       });
-      _showRecordingSnack('Recording started.');
+      if (completion != null) {
+        unawaited(_watchRecordingCompletion(completion));
+      }
+      _showRecordingSnack(
+        'Recording started in temporary internal storage for up to 24 hours. Keep this viewer open.',
+      );
     } catch (error) {
       if (mounted) {
         _showRecordingSnack('Could not start recording: $error');
@@ -908,36 +1120,56 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     _recordingTicker?.cancel();
     _recordingTicker = null;
     try {
-      final outputPath = await _recorder.stopRecording();
-      if (!mounted) {
-        return;
+      await _recorder.stopRecording();
+    } catch (error) {
+      if (mounted) {
+        setState(() => _recordingBusy = false);
+        _showRecordingSnack('Could not finalize recording: $error');
+        if (_recorder.isRecording) {
+          _recordingTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+            if (mounted) {
+              setState(() => _recordingElapsed = _recorder.recordingDuration);
+            }
+          });
+        }
       }
-      if (outputPath == null) {
+    }
+  }
+
+  Future<void> _watchRecordingCompletion(Future<String?> completion) async {
+    final outputPath = await completion;
+    if (mounted) {
+      _recordingTicker?.cancel();
+      _recordingTicker = null;
+      setState(() {
+        _isRecording = false;
+        _recordingBusy = false;
+        _recordingElapsed = Duration.zero;
+      });
+    }
+
+    if (outputPath == null) {
+      if (mounted) {
         _showRecordingSnack(
           'Recording stopped, but no video was saved (the stream may have failed).',
         );
-      } else {
-        _showRecordingSnack('Recording saved to the Roostify gallery album.');
-        unawaited(
-          widget.controller.notifyRecordingSaved(
-            widget.recordingOwnerUsername,
-            outputPath,
-          ),
-        );
       }
-    } catch (error) {
-      if (mounted) {
-        _showRecordingSnack('Could not finalize recording: $error');
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isRecording = false;
-          _recordingBusy = false;
-          _recordingElapsed = Duration.zero;
-        });
-      }
+      return;
     }
+
+    if (mounted) {
+      _showRecordingSnack('Recording complete. Uploading to the server...');
+    }
+    final uploaded = await widget.controller.publishRecording(
+      widget.recordingOwnerUsername,
+      outputPath,
+    );
+    if (!mounted) return;
+    _showRecordingSnack(
+      uploaded
+          ? 'Recording uploaded. It is now available to administrators.'
+          : 'Upload pending. The recording is safe internally and will retry.',
+    );
   }
 
   void _showRecordingSnack(String message) {
@@ -967,6 +1199,53 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     controller.enterFullScreen();
   }
 
+  Rect _videoRectForViewport(Size viewport, Size? videoSize, BoxFit fit) {
+    if (videoSize == null ||
+        videoSize.isEmpty ||
+        viewport.isEmpty ||
+        !viewport.width.isFinite ||
+        !viewport.height.isFinite) {
+      return Offset.zero & viewport;
+    }
+
+    final scale = fit == BoxFit.contain
+        ? math.min(
+            viewport.width / videoSize.width,
+            viewport.height / videoSize.height,
+          )
+        : math.max(
+            viewport.width / videoSize.width,
+            viewport.height / videoSize.height,
+          );
+    final renderedSize = Size(
+      videoSize.width * scale,
+      videoSize.height * scale,
+    );
+    return Alignment.center.inscribe(renderedSize, Offset.zero & viewport);
+  }
+
+  Widget _detectionOverlay(Rect videoRect) {
+    return Positioned.fromRect(
+      rect: videoRect,
+      child: IgnorePointer(
+        child: CustomPaint(
+          painter: ChickenDetectionPainter(detections: _liveDetections),
+        ),
+      ),
+    );
+  }
+
+  String get _fullscreenAiStatus {
+    if (!_aiScanningEnabled) {
+      return _aiStatusMessage ??
+          'AI scanning is off — live playback has priority.';
+    }
+    if (_inspectionRunning) {
+      return 'AI is checking the current frame…';
+    }
+    return _aiStatusMessage ?? 'AI scanning is on.';
+  }
+
   Widget _liveFeedPanelBuilder(
     FijkPlayer player,
     FijkData data,
@@ -977,6 +1256,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     if (!player.value.fullScreen) {
       return const SizedBox.shrink();
     }
+    final compactControls = viewSize.width < 600;
 
     // fijkplayer_plus inserts this widget as an unpositioned child of its
     // own internal Stack, which lays it out with loose constraints. Since
@@ -988,39 +1268,41 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     return SizedBox.fromSize(
       size: viewSize,
       child: Stack(
+        clipBehavior: Clip.hardEdge,
         children: [
-          if (widget.detections.isNotEmpty)
-            Positioned.fromRect(
-              rect: texturePos,
-              child: IgnorePointer(
-                child: CustomPaint(
-                  painter: ChickenDetectionPainter(
-                    detections: widget.detections,
-                  ),
-                ),
-              ),
-            ),
-          Positioned(
-            top: 16,
-            left: 16,
-            child: SafeArea(
-              bottom: false,
-              right: false,
-              child: const SeverityTag(
-                label: 'LIVE CCTV',
-                color: Color(0xFF43E39C),
-              ),
-            ),
-          ),
+          if (_liveDetections.isNotEmpty) _detectionOverlay(texturePos),
           Positioned(
             top: 12,
+            left: 12,
             right: 12,
             child: SafeArea(
               bottom: false,
-              left: false,
               child: Row(
-                mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (!compactControls)
+                    SeverityTag(
+                      label: widget.displayLabel ?? 'LIVE CCTV',
+                      color: const Color(0xFF43E39C),
+                    )
+                  else
+                    const Icon(
+                      Icons.circle,
+                      color: Color(0xFF43E39C),
+                      size: 11,
+                    ),
+                  const Spacer(),
+                  _LiveFeedAiToggle(
+                    enabled: _aiScanningEnabled,
+                    compact: compactControls,
+                    onPressed: _toggleAiScanning,
+                  ),
+                  const SizedBox(width: 8),
+                  _LiveFeedRecordButton(
+                    isRecording: _isRecording,
+                    busy: _recordingBusy,
+                    onPressed: _toggleRecording,
+                  ),
+                  const SizedBox(width: 8),
                   _LiveFeedIconButton(
                     tooltip: _showPtzControls
                         ? 'Hide PTZ controls'
@@ -1042,8 +1324,8 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
           ),
           if (_showPtzControls)
             Positioned(
-              top: 0,
-              bottom: 0,
+              top: 68,
+              bottom: 64,
               right: 16,
               child: Center(
                 child: SafeArea(
@@ -1061,25 +1343,46 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
             left: 16,
             right: 16,
             bottom: 16,
-            child: Align(
-              alignment: Alignment.bottomLeft,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.46),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Text(
-                  widget.streamUrl,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
+            child: SafeArea(
+              top: false,
+              child: Align(
+                alignment: Alignment.bottomLeft,
+                child: Container(
+                  constraints: BoxConstraints(maxWidth: viewSize.width * .7),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 9,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.62),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _aiScanningEnabled
+                            ? Icons.auto_awesome
+                            : Icons.visibility_outlined,
+                        color: _aiScanningEnabled
+                            ? const Color(0xFFFFCE67)
+                            : Colors.white70,
+                        size: 17,
+                      ),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          _fullscreenAiStatus,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -1107,7 +1410,11 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   void dispose() {
     _diagnosticTimer?.cancel();
     _recoveryTimer?.cancel();
+    _stablePlaybackTimer?.cancel();
+    _playbackWatchdogTimer?.cancel();
     _inspectionTimer?.cancel();
+    unawaited(_bufferStateSubscription?.cancel());
+    unawaited(_positionSubscription?.cancel());
     _recordingTicker?.cancel();
     _orientationResetTimer?.cancel();
     _recorder.dispose();
@@ -1145,6 +1452,15 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                       ? ValueListenableBuilder<FijkValue>(
                           valueListenable: controller,
                           builder: (context, value, _) {
+                            final viewport = Size(
+                              constraints.maxWidth,
+                              constraints.maxHeight,
+                            );
+                            final videoRect = _videoRectForViewport(
+                              viewport,
+                              value.size,
+                              BoxFit.cover,
+                            );
                             return Stack(
                               fit: StackFit.expand,
                               children: [
@@ -1158,7 +1474,26 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                                     fsFit: FijkFit.contain,
                                     fs: true,
                                     color: Colors.black,
-                                    panelBuilder: _liveFeedPanelBuilder,
+                                    // An anonymous wrapper intentionally gets a
+                                    // new identity when this widget rebuilds.
+                                    // The plugin otherwise considers a method
+                                    // tear-off unchanged and does not refresh
+                                    // its separate fullscreen route when new
+                                    // detection boxes arrive.
+                                    panelBuilder:
+                                        (
+                                          player,
+                                          data,
+                                          context,
+                                          viewSize,
+                                          texturePos,
+                                        ) => _liveFeedPanelBuilder(
+                                          player,
+                                          data,
+                                          context,
+                                          viewSize,
+                                          texturePos,
+                                        ),
                                   ),
                                 ),
                                 if (!value.videoRenderStart &&
@@ -1185,16 +1520,8 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                                     ),
                                   ),
                                 ),
-                                if (widget.detections.isNotEmpty)
-                                  Positioned.fill(
-                                    child: IgnorePointer(
-                                      child: CustomPaint(
-                                        painter: ChickenDetectionPainter(
-                                          detections: widget.detections,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
+                                if (_liveDetections.isNotEmpty)
+                                  _detectionOverlay(videoRect),
                                 if (_hasFijkError(value))
                                   _LiveFeedErrorState(
                                     message: _fijkErrorDescription(value),
@@ -1233,6 +1560,14 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    _LiveFeedAiToggle(
+                      enabled: _aiScanningEnabled,
+                      compact: true,
+                      onPressed: _supportsFijkPlayer && controller != null
+                          ? _toggleAiScanning
+                          : null,
+                    ),
+                    const SizedBox(width: 8),
                     _LiveFeedRecordButton(
                       isRecording: _isRecording,
                       busy: _recordingBusy,
@@ -1254,14 +1589,6 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                       onSelected: _selectPlaybackProfile,
                     ),
                   ],
-                ),
-              ),
-              const Positioned(
-                top: 56,
-                right: 12,
-                child: SeverityTag(
-                  label: 'YOLOv8 ACTIVE',
-                  color: Color(0xFFFFCE67),
                 ),
               ),
               Positioned(
@@ -1327,6 +1654,68 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _LiveFeedAiToggle extends StatelessWidget {
+  const _LiveFeedAiToggle({
+    required this.enabled,
+    required this.onPressed,
+    this.compact = false,
+  });
+
+  final bool enabled;
+  final VoidCallback? onPressed;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final foreground = enabled
+        ? const Color(0xFFFFCE67)
+        : onPressed == null
+        ? Colors.white38
+        : Colors.white70;
+    return Tooltip(
+      message: enabled ? 'Disable AI scanning' : 'Enable AI scanning',
+      child: Material(
+        color: enabled
+            ? const Color(0x995C4610)
+            : Colors.black.withValues(alpha: 0.46),
+        borderRadius: BorderRadius.circular(14),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onPressed,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 38),
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: compact ? 11 : 12),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    enabled ? Icons.auto_awesome : Icons.auto_awesome_outlined,
+                    color: foreground,
+                    size: 18,
+                  ),
+                  if (!compact) ...[
+                    const SizedBox(width: 7),
+                    Text(
+                      enabled ? 'AI On' : 'AI Off',
+                      style: TextStyle(
+                        color: foreground,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

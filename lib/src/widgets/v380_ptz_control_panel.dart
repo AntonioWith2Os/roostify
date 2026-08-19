@@ -24,6 +24,7 @@ class _V380PtzControlPanelState extends State<V380PtzControlPanel> {
   static const _holdCommandTimeout = Duration(seconds: 2);
   static const _holdRefreshInterval = Duration(milliseconds: 200);
   static const _holdSafetyTimeout = Duration(seconds: 30);
+  static const _moveSpeed = 0.55;
 
   Timer? _holdSafetyTimer;
   _OnvifPtzClient? _ptzClient;
@@ -34,7 +35,6 @@ class _V380PtzControlPanelState extends State<V380PtzControlPanel> {
   bool _busy = false;
   bool _moveStartInFlight = false;
   bool _releaseRequested = false;
-  double _speed = 0.55;
 
   @override
   void initState() {
@@ -121,7 +121,7 @@ class _V380PtzControlPanelState extends State<V380PtzControlPanel> {
       while (mounted && _activeControlId == controlId && !_releaseRequested) {
         _moveStartInFlight = true;
         await client.startContinuousMove(
-          vector.scaled(_speed),
+          vector.scaled(_moveSpeed),
           timeout: _holdCommandTimeout,
         );
 
@@ -425,7 +425,7 @@ class _V380PtzControlPanelState extends State<V380PtzControlPanel> {
             ],
           ),
           SizedBox(height: widget.compactOverlay ? 8 : 10),
-          _buildRemoteControl(colors),
+          _buildRemoteControl(),
           if (!widget.compactOverlay)
             AnimatedCrossFade(
               firstChild: const SizedBox.shrink(),
@@ -462,7 +462,7 @@ class _V380PtzControlPanelState extends State<V380PtzControlPanel> {
     );
   }
 
-  Widget _buildRemoteControl(AppThemeColors colors) {
+  Widget _buildRemoteControl() {
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
@@ -490,31 +490,7 @@ class _V380PtzControlPanelState extends State<V380PtzControlPanel> {
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          children: [
-            _buildDirectionPad(),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Icon(Icons.speed_outlined, color: colors.mutedText, size: 18),
-                Expanded(
-                  child: Slider(
-                    value: _speed,
-                    min: 0.2,
-                    max: 1,
-                    divisions: 4,
-                    label: '${(100 * _speed).round()}%',
-                    onChanged: _activeControlId != null || _busy
-                        ? null
-                        : (value) {
-                            setState(() {
-                              _speed = value;
-                            });
-                          },
-                  ),
-                ),
-              ],
-            ),
-          ],
+          children: [_buildDirectionPad()],
         ),
       ),
     );
