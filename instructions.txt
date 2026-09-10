@@ -1,1 +1,4 @@
 flutter run
+flutter run \
+  --dart-define=V380_BACKEND_URL=https://api.roostify.com \
+  --dart-define=V380_BACKEND_API_KEY=YOUR_GENERATED_KEY

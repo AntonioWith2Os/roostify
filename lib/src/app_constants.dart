@@ -1,7 +1,12 @@
 part of '../main.dart';
 
-const _testRtspStreamUrl =
-    'rtsp://chippy:prin_gles@192.168.1.1:554/live/ch00_0';
+/// Example of the playback URL produced by the cloud video server.
+///
+/// This is deliberately not the V380 camera's private RTSP URL and contains
+/// no camera credentials. The edge gateway owns the camera-side URL; Roostify
+/// only receives the video server's delivery endpoint.
+const _exampleCloudPlaybackUrl =
+    'https://video.example.org/live/roostify/index.m3u8';
 const _localYoloModelAsset = 'assets/best_float32.tflite';
 
 /// Brand accent used across the whole UI (vivid Roostify orange).

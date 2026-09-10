@@ -138,10 +138,104 @@ class AppAlertEvent {
   final bool vibrate;
 }
 
-/// A single connected live RTSP camera. A user can connect several of these
-/// at once; each runs its own playback and recording independently of the
-/// others. Analysis results may be attached without capturing frames from the
-/// playback decoder.
+enum VideoDeliveryProtocol { hlsOrHttp, rtsp, rtmp, v380Cloud }
+
+String? v380CloudCameraValidationError(String value) {
+  final uri = Uri.tryParse(value.trim());
+  if (uri == null || uri.scheme.toLowerCase() != 'v380') {
+    return 'Enter a valid V380 Cloud camera.';
+  }
+  if (int.tryParse(uri.host) case final deviceId?
+      when deviceId > 0 && deviceId <= 0x7fffffff) {
+    if (uri.userInfo.isEmpty) return null;
+    final separator = uri.userInfo.indexOf(':');
+    final encodedUsername = separator < 0
+        ? uri.userInfo
+        : uri.userInfo.substring(0, separator);
+    if (encodedUsername.isEmpty) return 'Enter the V380 camera username.';
+    return null;
+  }
+  return 'Enter a valid numeric V380 device ID printed on the camera.';
+}
+
+String buildV380CloudCameraUri({
+  required String deviceId,
+  String username = '',
+  String password = '',
+}) {
+  if (username.trim().isEmpty && password.isEmpty) {
+    return 'v380://${deviceId.trim()}';
+  }
+  final user = Uri.encodeComponent(username.trim());
+  final secret = Uri.encodeComponent(password);
+  return 'v380://$user:$secret@${deviceId.trim()}';
+}
+
+/// Validates a playback URL delivered by the cloud video server.
+///
+/// The V380 camera URL belongs only on the edge gateway. Requiring an absolute
+/// server URL without embedded user-info keeps camera passwords out of the
+/// mobile configuration while still allowing signed playback tokens in a URL
+/// query when the video server uses them.
+String? cloudPlaybackUrlValidationError(String value) {
+  final uri = Uri.tryParse(value.trim());
+  if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
+    return 'Enter an absolute cloud playback URL with a server hostname.';
+  }
+  if (uri.userInfo.isNotEmpty) {
+    return 'Do not put camera usernames or passwords in the mobile playback URL.';
+  }
+  if (!const {
+    'http',
+    'https',
+    'rtsp',
+    'rtsps',
+    'rtmp',
+    'rtmps',
+  }.contains(uri.scheme.toLowerCase())) {
+    return 'Use an HLS/HTTP, RTSP, or RTMP playback URL supplied by the video server.';
+  }
+  return null;
+}
+
+/// Validates a direct RTSP camera endpoint reached on the LAN, through a VPN,
+/// or through an existing router port-forward. Credentials are allowed here
+/// because many cameras require authentication; the cloud form rejects them.
+String? directRtspCameraUrlValidationError(String value) {
+  final uri = Uri.tryParse(value.trim());
+  if (uri == null || uri.host.isEmpty) {
+    return 'Enter a valid RTSP camera URL.';
+  }
+  if (!const {'rtsp', 'rtsps'}.contains(uri.scheme.toLowerCase())) {
+    return 'Local cameras must use an RTSP URL.';
+  }
+  return null;
+}
+
+VideoDeliveryProtocol videoDeliveryProtocolFor(String streamUrl) {
+  return switch (Uri.tryParse(streamUrl)?.scheme.toLowerCase()) {
+    'v380' => VideoDeliveryProtocol.v380Cloud,
+    'rtsp' || 'rtsps' => VideoDeliveryProtocol.rtsp,
+    'rtmp' || 'rtmps' => VideoDeliveryProtocol.rtmp,
+    _ => VideoDeliveryProtocol.hlsOrHttp,
+  };
+}
+
+/// Hides playback tokens before a URL is rendered in the UI or logs.
+String safePlaybackEndpointLabel(String streamUrl) {
+  final uri = Uri.tryParse(streamUrl);
+  if (uri == null || uri.host.isEmpty) return 'Cloud video server';
+  if (uri.scheme.toLowerCase() == 'v380') {
+    return 'V380 Cloud camera ${uri.host}';
+  }
+  final port = uri.hasPort ? ':${uri.port}' : '';
+  final path = uri.path.isEmpty ? '' : uri.path;
+  return '${uri.scheme}://${uri.host}$port$path';
+}
+
+/// A cloud-delivered or directly connected local live stream. Several streams
+/// can be viewed at once; playback and recording are independent, while
+/// YOLOv8 inspection stays on the Android/iOS device.
 class LiveCctvStream {
   LiveCctvStream({
     required this.id,
@@ -155,6 +249,9 @@ class LiveCctvStream {
   final String streamUrl;
   String label;
   CctvInspectionResult inspection;
+
+  VideoDeliveryProtocol get deliveryProtocol =>
+      videoDeliveryProtocolFor(streamUrl);
 
   /// Runtime playback reachability, independent of YOLO/snapshot health.
   bool isOnline;

@@ -2411,14 +2411,14 @@ class _AdminCameraTile extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    'Model:  ESP32-CAM AI',
+                    'Source:  V380 edge relay',
                     style: TextStyle(
                       fontSize: 11,
                       color: context.appColors.mutedText,
                     ),
                   ),
                   Text(
-                    'IP:  ${_cameraHost(stream.streamUrl, index)}',
+                    'Server:  ${_cameraHost(stream.streamUrl, index)}',
                     style: TextStyle(
                       fontSize: 11,
                       color: context.appColors.mutedText,
@@ -2879,8 +2879,8 @@ class _CameraStreamDialog extends StatelessWidget {
                       SizedBox(
                         width: width,
                         child: _CameraInfoItem(
-                          icon: Icons.developer_board_outlined,
-                          label: 'Local IP Address',
+                          icon: Icons.cloud_outlined,
+                          label: 'Video Server',
                           value: ip,
                         ),
                       ),
@@ -2896,8 +2896,8 @@ class _CameraStreamDialog extends StatelessWidget {
                         width: width,
                         child: _CameraInfoItem(
                           icon: Icons.video_camera_back_outlined,
-                          label: 'RTSP Address',
-                          value: stream.streamUrl,
+                          label: 'Playback Endpoint',
+                          value: safePlaybackEndpointLabel(stream.streamUrl),
                         ),
                       ),
                       SizedBox(
@@ -2905,7 +2905,7 @@ class _CameraStreamDialog extends StatelessWidget {
                         child: const _CameraInfoItem(
                           icon: Icons.videocam_outlined,
                           label: 'Camera Model',
-                          value: 'ESP32-CAM AI',
+                          value: 'V380 via Edge Gateway',
                         ),
                       ),
                       SizedBox(

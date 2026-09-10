@@ -114,6 +114,7 @@ class _LiveMosaicTile extends StatefulWidget {
 
 class _LiveMosaicTileState extends State<_LiveMosaicTile> {
   FijkPlayer? _player;
+  String? _resolvedStreamUrl;
   String? _error;
 
   @override
@@ -123,6 +124,9 @@ class _LiveMosaicTileState extends State<_LiveMosaicTile> {
   }
 
   Future<void> _start() async {
+    if (widget.stream.deliveryProtocol == VideoDeliveryProtocol.v380Cloud) {
+      return;
+    }
     final player = FijkPlayer();
     _player = player;
     try {
@@ -132,13 +136,19 @@ class _LiveMosaicTileState extends State<_LiveMosaicTile> {
         ..setPlayerOption('packet-buffering', 0)
         ..setFormatOption('max_delay', 2000 * 1000)
         ..setFormatOption('stimeout', 5000000)
-        ..setFormatOption('reconnect', 1)
-        ..setFormatOption('rtsp_transport', 'tcp');
+        ..setFormatOption('reconnect', 1);
+      if (widget.stream.deliveryProtocol == VideoDeliveryProtocol.rtsp) {
+        options.setFormatOption('rtsp_transport', 'tcp');
+      }
       await player.applyOptions(options);
       if (!mounted) {
         return;
       }
-      await player.setDataSource(widget.stream.streamUrl, autoPlay: true);
+      _resolvedStreamUrl = await resolveCameraPlaybackUrl(
+        widget.stream.streamUrl,
+      );
+      if (!mounted) return;
+      await player.setDataSource(_resolvedStreamUrl!, autoPlay: true);
       if (mounted) {
         setState(() {});
       }
@@ -169,7 +179,12 @@ class _LiveMosaicTileState extends State<_LiveMosaicTile> {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          if (player != null)
+          if (widget.stream.deliveryProtocol == VideoDeliveryProtocol.v380Cloud)
+            WhepVideoView(
+              sourceUrl: widget.stream.streamUrl,
+              fit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+            )
+          else if (player != null)
             FijkView(
               player: player,
               fit: FijkFit.contain,

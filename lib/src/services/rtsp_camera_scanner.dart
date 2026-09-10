@@ -15,7 +15,7 @@ class CameraScanProgress {
 
   String get label {
     if (totalTargets == 0) {
-      return 'Preparing local network scan...';
+      return 'Preparing camera scan...';
     }
 
     return 'Scanning $currentTarget ($completedTargets of $totalTargets)';
@@ -95,6 +95,58 @@ class RtspCameraScanner {
           for (final port in _ports)
             _RtspScanTarget(host: '$prefix.$hostSuffix', port: port),
     ];
+
+    return _scanTargets(
+      targets,
+      onProgress: onProgress,
+      username: username,
+      password: password,
+      preferredPath: preferredPath,
+    );
+  }
+
+  /// Probes one camera address that the user has explicitly supplied. This is
+  /// useful for cameras reached through a VPN, public DNS name, or a router
+  /// port-forward, where local-network discovery cannot see the camera.
+  ///
+  /// Supplying [port] avoids probing the other common RTSP ports. When it is
+  /// omitted, the standard RTSP port list is tried for that one address only.
+  Future<List<RtspCameraCandidate>> scanRemoteHost({
+    required String host,
+    int? port,
+    required void Function(CameraScanProgress progress) onProgress,
+    String username = '',
+    String password = '',
+    String preferredPath = '',
+  }) {
+    final cleanHost = host.trim();
+    if (_cancelled || cleanHost.isEmpty || kIsWeb) {
+      return Future.value(const []);
+    }
+
+    final ports = port == null ? _ports : [port];
+    return _scanTargets(
+      [
+        for (final targetPort in ports)
+          _RtspScanTarget(host: cleanHost, port: targetPort),
+      ],
+      onProgress: onProgress,
+      username: username,
+      password: password,
+      preferredPath: preferredPath,
+    );
+  }
+
+  Future<List<RtspCameraCandidate>> _scanTargets(
+    List<_RtspScanTarget> targets, {
+    required void Function(CameraScanProgress progress) onProgress,
+    required String username,
+    required String password,
+    required String preferredPath,
+  }) async {
+    if (_cancelled || targets.isEmpty) {
+      return const [];
+    }
 
     final candidates = <RtspCameraCandidate>[];
     var completedTargets = 0;

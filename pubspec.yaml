@@ -37,6 +37,7 @@ dependencies:
   crypto: ^3.0.7
   cupertino_icons: ^1.0.8
   flutter_blue_plus: ^2.2.1
+  flutter_webrtc: ^1.6.2
   fijkplayer_plus: ^0.0.1
   google_sign_in: ^6.2.2
   image: ^4.8.0

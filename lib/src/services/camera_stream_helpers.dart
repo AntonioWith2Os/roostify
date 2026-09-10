@@ -92,8 +92,11 @@ String _buildRtspUrl({
       ? ''
       : '${Uri.encodeComponent(cleanUsername)}:${Uri.encodeComponent(password)}@';
   final cleanPath = _normalizeRtspPath(path);
+  final urlHost = host.contains(':') && !host.startsWith('[')
+      ? '[$host]'
+      : host;
 
-  return 'rtsp://$userInfo$host:$port$cleanPath';
+  return 'rtsp://$userInfo$urlHost:$port$cleanPath';
 }
 
 String _normalizeRtspPath(String path) {

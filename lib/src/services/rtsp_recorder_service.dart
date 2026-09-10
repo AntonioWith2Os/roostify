@@ -1,8 +1,8 @@
 part of '../../main.dart';
 
-/// Records an RTSP stream to an MP4 file using FFmpeg Kit.
+/// Records a cloud-delivered live stream to an MP4 file using FFmpeg Kit.
 ///
-/// The recorder connects independently to the RTSP stream (does not interfere
+/// The recorder connects independently to the playback stream (does not interfere
 /// with the existing FijkPlayer playback) and remuxes the stream to an MP4 file
 /// using `-c copy` (no re-encoding, fast and lossless).
 class RtspRecorderService {
@@ -44,14 +44,14 @@ class RtspRecorderService {
     return DateTime.now().difference(_recordingStartTime!);
   }
 
-  /// Start recording the given RTSP stream URL to a local MP4 file.
+  /// Start recording the given video-server playback URL to a local MP4 file.
   ///
   /// The recording is saved under a per-[username] folder so only that user
   /// (and the admin, who can browse every folder) can see it in the
   /// Recordings list. Returns the output file path on success, or throws on
   /// failure. [maxDuration] defaults to, and cannot exceed, 24 hours.
   Future<String> startRecording(
-    String rtspUrl, {
+    String streamUrl, {
     required String username,
     Duration maxDuration = maximumRecordingDuration,
     bool saveToGalleryWhenFinished = false,
@@ -80,19 +80,20 @@ class RtspRecorderService {
     final outputPath = '${recordingsDir.path}/roostify_$timestamp.mp4';
 
     // FFmpeg command:
-    // -rtsp_transport tcp  → use TCP for RTSP (matches fijkplayer default)
-    // -i <url>             → input RTSP stream
+    // RTSP delivery explicitly uses TCP; HLS/HTTP and RTMP let FFmpeg select
+    // their native transport. The input is the cloud playback endpoint, never
+    // the V380 camera's private farm-LAN URL.
     // -c copy              → copy streams without re-encoding (fast, lossless)
     // -t <seconds>         → max recording duration (safety limit)
     // fragmented MP4      → keeps a day-long file recoverable if interrupted
     // -y                   → overwrite output file if it somehow exists
     // Arguments are passed as a list so quotes or spaces in camera credentials
     // cannot alter the FFmpeg command.
+    final protocol = videoDeliveryProtocolFor(streamUrl);
     final arguments = <String>[
-      '-rtsp_transport',
-      'tcp',
+      if (protocol == VideoDeliveryProtocol.rtsp) ...['-rtsp_transport', 'tcp'],
       '-i',
-      rtspUrl,
+      streamUrl,
       '-c',
       'copy',
       '-t',

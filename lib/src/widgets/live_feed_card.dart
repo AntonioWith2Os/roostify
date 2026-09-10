@@ -102,7 +102,7 @@ class ChickenDetectionPainter extends CustomPainter {
 }
 
 enum _LiveFeedPlaybackProfile {
-  auto('Auto', 'Fijk auto', Icons.auto_mode),
+  auto('Auto', 'Video server auto', Icons.auto_mode),
   tcp('TCP', 'Force RTSP over TCP', Icons.settings_ethernet),
   udp('UDP', 'Prefer RTP/UDP', Icons.swap_horiz),
   software('SW', 'Software decoding', Icons.memory);
@@ -145,6 +145,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   _LiveFeedPlaybackProfile _playbackProfile = _LiveFeedPlaybackProfile.tcp;
   bool _diagnosticRunning = false;
   String? _streamProbeStatus;
+  bool _streamProbeSucceeded = false;
   int _controllerGeneration = 0;
   int _automaticRecoveryAttempt = 0;
   bool _hasPlayedCurrentController = false;
@@ -161,8 +162,11 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   final RtspRecorderService _recorder = RtspRecorderService();
   Timer? _recordingTicker;
   bool _isRecording = false;
+  bool _recordingRequested = false;
+  bool _recordingPausedForDisconnect = false;
   bool _recordingBusy = false;
   Duration _recordingElapsed = Duration.zero;
+  int _recordingSegmentId = 0;
 
   bool _wasFullScreen = false;
   Timer? _orientationResetTimer;
@@ -170,12 +174,32 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
 
   bool _showPtzControls = false;
   bool _dataSaverEnabled = false;
+  bool _v380PlaybackRequested = false;
+  String? _resolvedStreamUrl;
 
   void _togglePtzControls() {
     setState(() {
       _showPtzControls = !_showPtzControls;
     });
   }
+
+  bool get _isV380Cloud =>
+      videoDeliveryProtocolFor(widget.streamUrl) ==
+      VideoDeliveryProtocol.v380Cloud;
+
+  bool get _isRtspDelivery =>
+      videoDeliveryProtocolFor(widget.streamUrl) == VideoDeliveryProtocol.rtsp;
+
+  bool get _supportsOnvifPtz =>
+      videoDeliveryProtocolFor(widget.streamUrl) == VideoDeliveryProtocol.rtsp;
+
+  List<_LiveFeedPlaybackProfile> get _availablePlaybackProfiles =>
+      _isRtspDelivery
+      ? _LiveFeedPlaybackProfile.values
+      : const [
+          _LiveFeedPlaybackProfile.auto,
+          _LiveFeedPlaybackProfile.software,
+        ];
 
   bool get _supportsFijkPlayer {
     if (kIsWeb) {
@@ -191,6 +215,9 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   @override
   void initState() {
     super.initState();
+    _playbackProfile = _isRtspDelivery
+        ? _LiveFeedPlaybackProfile.tcp
+        : _LiveFeedPlaybackProfile.auto;
     _liveDetections = List.of(widget.detections);
     unawaited(_loadPreviewPreferences());
   }
@@ -208,13 +235,18 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     setState(() {
       _dataSaverEnabled = dataSaver;
       _aiScanningEnabled = aiScanningEnabled;
+      _v380PlaybackRequested = autoPlay && !dataSaver;
     });
-    if (autoPlay && !dataSaver && _supportsFijkPlayer) {
+    if (autoPlay && !dataSaver && _supportsFijkPlayer && !_isV380Cloud) {
       _replaceController();
     }
   }
 
   void _startManually() {
+    if (_isV380Cloud) {
+      setState(() => _v380PlaybackRequested = true);
+      return;
+    }
     if (_controller != null || !_supportsFijkPlayer) return;
     setState(() => _replaceController());
   }
@@ -229,8 +261,14 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     if (oldWidget.streamUrl != widget.streamUrl &&
         _supportsFijkPlayer &&
         _controller != null) {
-      _playbackProfile = _LiveFeedPlaybackProfile.tcp;
+      _playbackProfile = _isRtspDelivery
+          ? _LiveFeedPlaybackProfile.tcp
+          : _LiveFeedPlaybackProfile.auto;
+      _resolvedStreamUrl = null;
       _replaceController(resetRecovery: true);
+    }
+    if (oldWidget.streamUrl != widget.streamUrl) {
+      _v380PlaybackRequested = false;
     }
   }
 
@@ -317,14 +355,21 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
       if (!_isCurrentController(controller, generation)) {
         return;
       }
-      await controller.setDataSource(widget.streamUrl, autoPlay: true);
+      final playbackUrl = await resolveCameraPlaybackUrl(widget.streamUrl);
+      if (!_isCurrentController(controller, generation)) {
+        return;
+      }
+      _resolvedStreamUrl = playbackUrl;
+      await controller.setDataSource(playbackUrl, autoPlay: true);
     } catch (error) {
       if (!_isCurrentController(controller, generation)) {
         return;
       }
       _startStreamProbe();
       _schedulePlaybackRecovery(generation, delay: _errorRecoveryDelay);
-      _setStreamProbeStatus('Fijk could not open the RTSP stream: $error');
+      _setStreamProbeStatus(
+        'The player could not open the camera stream: $error',
+      );
     }
   }
 
@@ -361,16 +406,18 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
       options.setHostOption('enable-snapshot', 1);
     }
 
-    switch (_playbackProfile) {
-      case _LiveFeedPlaybackProfile.tcp:
-      case _LiveFeedPlaybackProfile.software:
-        options.setFormatOption('rtsp_transport', 'tcp');
-        break;
-      case _LiveFeedPlaybackProfile.udp:
-        options.setFormatOption('rtsp_transport', 'udp');
-        break;
-      case _LiveFeedPlaybackProfile.auto:
-        break;
+    if (_isRtspDelivery) {
+      switch (_playbackProfile) {
+        case _LiveFeedPlaybackProfile.tcp:
+        case _LiveFeedPlaybackProfile.software:
+          options.setFormatOption('rtsp_transport', 'tcp');
+          break;
+        case _LiveFeedPlaybackProfile.udp:
+          options.setFormatOption('rtsp_transport', 'udp');
+          break;
+        case _LiveFeedPlaybackProfile.auto:
+          break;
+      }
     }
 
     return options;
@@ -630,10 +677,10 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
       });
       _diagnosticTimer?.cancel();
       _recoveryTimer?.cancel();
-      if (_streamProbeStatus != null &&
-          !_streamProbeStatus!.startsWith('RTSP stream accepted')) {
+      if (_streamProbeStatus != null && !_streamProbeSucceeded) {
         setState(() {
           _streamProbeStatus = null;
+          _streamProbeSucceeded = false;
         });
       }
       _restoreFullScreenIfPending(controller, _controllerGeneration);
@@ -751,7 +798,8 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     if (_automaticRecoveryAttempt >= _maxAutomaticRecoveryAttempts) {
       setState(() {
         _streamProbeStatus =
-            'Video is still not playing after automatic retries. Check the stream URL, credentials, and camera RTSP setting.';
+            'Video is still not playing after automatic retries. Check the edge gateway, video server, and playback URL.';
+        _streamProbeSucceeded = false;
       });
       return;
     }
@@ -779,6 +827,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     }
 
     final fallbackProfiles = _automaticRecoveryProfiles
+        .where(_availablePlaybackProfiles.contains)
         .where((profile) => profile != _playbackProfile)
         .toList();
     return fallbackProfiles[(attempt - 1) % fallbackProfiles.length];
@@ -799,6 +848,11 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     if (_reportedConnectionOnline == online) return;
     _reportedConnectionOnline = online;
     widget.onConnectionChanged?.call(online);
+    if (online) {
+      unawaited(_resumeRecordingAfterReconnect());
+    } else {
+      unawaited(_pauseRecordingForDisconnect());
+    }
   }
 
   void _selectPlaybackProfile(_LiveFeedPlaybackProfile profile) {
@@ -835,19 +889,52 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   }
 
   Future<void> _probeStreamEndpoint() async {
-    final uri = Uri.tryParse(widget.streamUrl);
+    String playbackUrl;
+    try {
+      playbackUrl =
+          _resolvedStreamUrl ??
+          await resolveCameraPlaybackUrl(widget.streamUrl);
+      _resolvedStreamUrl = playbackUrl;
+    } catch (error) {
+      _setStreamProbeStatus('Could not start the V380 decoder backend: $error');
+      return;
+    }
+    final uri = Uri.tryParse(playbackUrl);
     final host = uri?.host;
-    final port = uri?.hasPort == true ? uri!.port : 554;
+    final scheme = uri?.scheme.toLowerCase();
+    final port = uri?.hasPort == true
+        ? uri!.port
+        : switch (scheme) {
+            'http' => 80,
+            'https' || 'rtmps' => 443,
+            'rtmp' => 1935,
+            _ => 554,
+          };
     final emulatorHostWarning = host == null
         ? null
         : _physicalDeviceHostWarning(host);
 
-    if (uri == null || uri.scheme.toLowerCase() != 'rtsp') {
+    if (videoDeliveryProtocolFor(widget.streamUrl) ==
+        VideoDeliveryProtocol.v380Cloud) {
+      final status = await V380CloudBridgeRegistry.instance.statusFor(
+        widget.streamUrl,
+      );
+      if (status != null) {
+        _setStreamProbeStatus(
+          status,
+          success: status.contains(' is streaming'),
+        );
+        return;
+      }
+    }
+
+    if (uri == null || cloudPlaybackUrlValidationError(playbackUrl) != null) {
       if (!mounted) {
         return;
       }
       setState(() {
-        _streamProbeStatus = 'Invalid RTSP URL.';
+        _streamProbeStatus = 'Invalid cloud playback URL.';
+        _streamProbeSucceeded = false;
       });
       return;
     }
@@ -857,8 +944,35 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
         return;
       }
       setState(() {
-        _streamProbeStatus = 'RTSP URL is missing a CCTV host.';
+        _streamProbeStatus = 'Playback URL is missing a video server host.';
+        _streamProbeSucceeded = false;
       });
+      return;
+    }
+
+    if (!_isRtspDelivery) {
+      try {
+        final socket = await Socket.connect(
+          host,
+          port,
+          timeout: const Duration(seconds: 4),
+        );
+        socket.destroy();
+        _setStreamProbeStatus(
+          'Video server reached at $host:$port. Retrying playback.',
+          success: true,
+        );
+      } on SocketException catch (error) {
+        _setStreamProbeStatus(
+          emulatorHostWarning ??
+              'Cannot reach the video server at $host:$port: ${error.message}.',
+        );
+      } on TimeoutException {
+        _setStreamProbeStatus(
+          emulatorHostWarning ??
+              'The video server at $host:$port did not respond in time.',
+        );
+      }
       return;
     }
 
@@ -871,7 +985,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
 
       if (!optionsResponse.isRtspResponse) {
         _setStreamProbeStatus(
-          'Port $port is open on $host, but it did not answer as RTSP. Check that this IP is the CCTV, not the router.',
+          'The video server port $port is open on $host, but it did not answer as RTSP.',
         );
         return;
       }
@@ -885,7 +999,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
           optionsResponse.statusCode! >= 400 &&
           optionsResponse.statusCode != 405) {
         _setStreamProbeStatus(
-          'CCTV reached, but RTSP OPTIONS was rejected: ${optionsResponse.statusSummary}.',
+          'Video server reached, but RTSP OPTIONS was rejected: ${optionsResponse.statusSummary}.',
         );
         return;
       }
@@ -899,7 +1013,8 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
 
       if (describeResponse.statusCode == 200) {
         _setStreamProbeStatus(
-          'RTSP stream accepted by CCTV at $host:$port. Fijk is using ${_playbackProfile.menuLabel}.',
+          'RTSP delivery accepted by the video server at $host:$port.',
+          success: true,
         );
         return;
       }
@@ -911,14 +1026,14 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
 
       if (describeResponse.statusCode == 404) {
         _setStreamProbeStatus(
-          'CCTV reached, but this stream path was not found. Verify ${uri.path}.',
+          'Video server reached, but this playback path was not found. Verify ${uri.path}.',
         );
         return;
       }
 
       if (describeResponse.isRtspResponse) {
         _setStreamProbeStatus(
-          'CCTV reached, but the stream URL was rejected: ${describeResponse.statusSummary}.',
+          'Video server reached, but the playback URL was rejected: ${describeResponse.statusSummary}.',
         );
         return;
       }
@@ -933,7 +1048,8 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
       setState(() {
         _streamProbeStatus =
             emulatorHostWarning ??
-            'Cannot connect to CCTV at $host:$port: ${error.message}.';
+            'Cannot connect to the video server at $host:$port: ${error.message}.';
+        _streamProbeSucceeded = false;
       });
     } on TimeoutException {
       if (!mounted) {
@@ -942,7 +1058,8 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
       setState(() {
         _streamProbeStatus =
             emulatorHostWarning ??
-            'CCTV at $host:$port did not answer the RTSP handshake in time.';
+            'The video server at $host:$port did not answer the RTSP handshake in time.';
+        _streamProbeSucceeded = false;
       });
     } catch (error) {
       if (!mounted) {
@@ -950,7 +1067,8 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
       }
       setState(() {
         _streamProbeStatus =
-            'CCTV RTSP handshake failed for $host:$port: $error';
+            'Video server RTSP handshake failed for $host:$port: $error';
+        _streamProbeSucceeded = false;
       });
     }
   }
@@ -968,8 +1086,8 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     }
 
     return isAndroidEmulatorHost
-        ? '10.0.2.2 only points to the computer from an Android emulator. On a physical phone, use the CCTV camera LAN IP address instead.'
-        : '$host points to this phone. On a physical device, use the CCTV camera LAN IP address instead.';
+        ? '10.0.2.2 only points to the development computer from an Android emulator. Use the video server hostname on a physical phone.'
+        : '$host points to this phone. Use the reachable video server hostname instead.';
   }
 
   Future<_RtspProbeResponse> _sendRtspRequest(
@@ -1016,12 +1134,13 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     }
   }
 
-  void _setStreamProbeStatus(String status) {
+  void _setStreamProbeStatus(String status, {bool success = false}) {
     if (!mounted) {
       return;
     }
     setState(() {
       _streamProbeStatus = status;
+      _streamProbeSucceeded = success;
     });
   }
 
@@ -1059,36 +1178,44 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   String _authFailureMessage(_RtspProbeResponse response) {
     final authHeader = response.headers['www-authenticate'] ?? '';
     if (authHeader.toLowerCase().contains('digest')) {
-      return 'CCTV reached, but it requires Digest authentication. Fijk will still try to negotiate it; if video fails, check the username, password, and RTSP settings.';
+      return 'Video server reached, but it requires Digest authentication. Use the server-provided playback URL or token.';
     }
 
-    return 'CCTV reached, but RTSP authentication was rejected. Check the username and password.';
+    return 'Video server reached, but RTSP authentication was rejected. Check the server playback credentials.';
   }
 
   Future<void> _toggleRecording() async {
     if (_recordingBusy) {
       return;
     }
-    if (_isRecording) {
+    if (_recordingRequested) {
       await _stopRecording();
     } else {
+      setState(() => _recordingRequested = true);
       await _startRecording();
     }
   }
 
-  Future<void> _startRecording() async {
+  Future<void> _startRecording({bool resumedAfterReconnect = false}) async {
+    if (_recordingBusy || _isRecording || !_recordingRequested) {
+      return;
+    }
+
     setState(() => _recordingBusy = true);
     try {
       await _recorder.startRecording(
-        widget.streamUrl,
+        _resolvedStreamUrl ?? await resolveCameraPlaybackUrl(widget.streamUrl),
         username: widget.recordingOwnerUsername,
       );
       final completion = _recorder.recordingCompletion;
+      final segmentId = ++_recordingSegmentId;
       if (!mounted) {
         return;
       }
+      final shouldPauseImmediately = _reportedConnectionOnline == false;
       setState(() {
         _isRecording = true;
+        _recordingPausedForDisconnect = shouldPauseImmediately;
         _recordingElapsed = Duration.zero;
       });
       _recordingTicker?.cancel();
@@ -1099,26 +1226,48 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
         setState(() => _recordingElapsed = _recorder.recordingDuration);
       });
       if (completion != null) {
-        unawaited(_watchRecordingCompletion(completion));
+        unawaited(_watchRecordingCompletion(completion, segmentId));
       }
       _showRecordingSnack(
-        'Recording started in temporary internal storage for up to 24 hours. Keep this viewer open.',
+        resumedAfterReconnect
+            ? 'Camera reconnected. Recording resumed in a new clip.'
+            : 'Recording started in temporary internal storage for up to 24 hours. Keep this viewer open.',
       );
     } catch (error) {
       if (mounted) {
+        setState(() {
+          _recordingRequested = resumedAfterReconnect;
+          _recordingPausedForDisconnect = resumedAfterReconnect;
+        });
         _showRecordingSnack('Could not start recording: $error');
       }
     } finally {
       if (mounted) {
         setState(() => _recordingBusy = false);
+        if (_recordingPausedForDisconnect && _isRecording) {
+          unawaited(_pauseRecordingForDisconnect());
+        }
       }
     }
   }
 
   Future<void> _stopRecording() async {
+    if (!_recordingRequested) return;
     setState(() => _recordingBusy = true);
     _recordingTicker?.cancel();
     _recordingTicker = null;
+    setState(() {
+      _recordingRequested = false;
+      _recordingPausedForDisconnect = false;
+    });
+    if (!_recorder.isRecording) {
+      setState(() {
+        _isRecording = false;
+        _recordingBusy = false;
+        _recordingElapsed = Duration.zero;
+      });
+      return;
+    }
     try {
       await _recorder.stopRecording();
     } catch (error) {
@@ -1126,6 +1275,10 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
         setState(() => _recordingBusy = false);
         _showRecordingSnack('Could not finalize recording: $error');
         if (_recorder.isRecording) {
+          setState(() {
+            _recordingRequested = true;
+            _recordingPausedForDisconnect = false;
+          });
           _recordingTicker = Timer.periodic(const Duration(seconds: 1), (_) {
             if (mounted) {
               setState(() => _recordingElapsed = _recorder.recordingDuration);
@@ -1136,16 +1289,87 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     }
   }
 
-  Future<void> _watchRecordingCompletion(Future<String?> completion) async {
+  /// FFmpeg cannot pause a live-stream-to-MP4 remux safely. Finalizing the current
+  /// fragmented MP4 preserves the footage before a disconnect; a fresh clip
+  /// is started once playback reconnects.
+  Future<void> _pauseRecordingForDisconnect() async {
+    if (!_recordingRequested) return;
+
+    if (_recordingBusy) {
+      if (mounted) {
+        setState(() => _recordingPausedForDisconnect = true);
+      }
+      return;
+    }
+
+    if (!_isRecording || !_recorder.isRecording) {
+      if (mounted) {
+        setState(() => _recordingPausedForDisconnect = true);
+      }
+      return;
+    }
+
+    setState(() {
+      _recordingPausedForDisconnect = true;
+      _recordingBusy = true;
+      _recordingElapsed = _recorder.recordingDuration;
+    });
+    _recordingTicker?.cancel();
+    _recordingTicker = null;
+
+    try {
+      await _recorder.stopRecording();
+      if (mounted) {
+        _showRecordingSnack(
+          'Camera disconnected. Recording paused and will resume when it reconnects.',
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() => _recordingBusy = false);
+        _showRecordingSnack('Could not pause recording: $error');
+      }
+    }
+  }
+
+  Future<void> _resumeRecordingAfterReconnect() async {
+    if (!_recordingRequested ||
+        !_recordingPausedForDisconnect ||
+        _recordingBusy ||
+        _isRecording) {
+      return;
+    }
+    await _startRecording(resumedAfterReconnect: true);
+  }
+
+  Future<void> _watchRecordingCompletion(
+    Future<String?> completion,
+    int segmentId,
+  ) async {
     final outputPath = await completion;
-    if (mounted) {
+    final completedCurrentSegment = segmentId == _recordingSegmentId;
+    if (mounted && completedCurrentSegment) {
       _recordingTicker?.cancel();
       _recordingTicker = null;
       setState(() {
         _isRecording = false;
         _recordingBusy = false;
-        _recordingElapsed = Duration.zero;
+        if (!_recordingRequested) {
+          _recordingElapsed = Duration.zero;
+        } else {
+          // A recorder exit while still armed is treated as an interrupted
+          // segment. This also covers FFmpeg observing a dropped stream socket
+          // a moment before the player reports the camera offline.
+          _recordingPausedForDisconnect = true;
+        }
       });
+    }
+
+    if (completedCurrentSegment &&
+        _recordingRequested &&
+        _recordingPausedForDisconnect &&
+        _reportedConnectionOnline == true) {
+      unawaited(_resumeRecordingAfterReconnect());
     }
 
     if (outputPath == null) {
@@ -1192,6 +1416,38 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   }
 
   void _enterFullScreen() {
+    if (_isV380Cloud && _v380PlaybackRequested) {
+      unawaited(
+        Navigator.of(context).push<void>(
+          MaterialPageRoute(
+            builder: (context) => Scaffold(
+              backgroundColor: Colors.black,
+              body: SafeArea(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    WhepVideoView(
+                      sourceUrl: widget.streamUrl,
+                      fit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+                    ),
+                    Positioned(
+                      top: 12,
+                      right: 12,
+                      child: _LiveFeedIconButton(
+                        tooltip: 'Exit full screen',
+                        icon: Icons.fullscreen_exit,
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      return;
+    }
     final controller = _controller;
     if (!_supportsFijkPlayer || controller == null) {
       return;
@@ -1298,21 +1554,22 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                   ),
                   const SizedBox(width: 8),
                   _LiveFeedRecordButton(
-                    isRecording: _isRecording,
+                    isRecording: _recordingRequested,
                     busy: _recordingBusy,
                     onPressed: _toggleRecording,
                   ),
-                  const SizedBox(width: 8),
-                  _LiveFeedIconButton(
-                    tooltip: _showPtzControls
-                        ? 'Hide PTZ controls'
-                        : 'Show PTZ controls',
-                    icon: _showPtzControls
-                        ? Icons.control_camera
-                        : Icons.control_camera_outlined,
-                    onPressed: _togglePtzControls,
-                  ),
-                  const SizedBox(width: 8),
+                  if (_supportsOnvifPtz) ...[
+                    const SizedBox(width: 8),
+                    _LiveFeedIconButton(
+                      tooltip: _showPtzControls
+                          ? 'Hide PTZ controls'
+                          : 'Show PTZ controls',
+                      icon: _showPtzControls
+                          ? Icons.control_camera
+                          : Icons.control_camera_outlined,
+                      onPressed: _togglePtzControls,
+                    ),
+                  ],
                   _LiveFeedIconButton(
                     tooltip: 'Exit full screen',
                     icon: Icons.fullscreen_exit,
@@ -1322,7 +1579,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
               ),
             ),
           ),
-          if (_showPtzControls)
+          if (_showPtzControls && _supportsOnvifPtz)
             Positioned(
               top: 68,
               bottom: 64,
@@ -1448,7 +1705,17 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
               Positioned.fill(
                 child: ClipRRect(
                   borderRadius: borderRadius,
-                  child: _supportsFijkPlayer && controller != null
+                  child: _isV380Cloud && _v380PlaybackRequested
+                      ? WhepVideoView(
+                          sourceUrl: widget.streamUrl,
+                          onConnectionChanged: widget.onConnectionChanged,
+                        )
+                      : _isV380Cloud
+                      ? _LiveFeedManualStartState(
+                          dataSaver: _dataSaverEnabled,
+                          onTap: _startManually,
+                        )
+                      : _supportsFijkPlayer && controller != null
                       ? ValueListenableBuilder<FijkValue>(
                           valueListenable: controller,
                           builder: (context, value, _) {
@@ -1546,12 +1813,13 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                   color: const Color(0xFF43E39C),
                 ),
               ),
-              if (_isRecording)
+              if (_recordingRequested)
                 Positioned(
                   top: 52,
                   left: 18,
                   child: _RecordingIndicator(
                     label: _formatRecordingElapsed(_recordingElapsed),
+                    paused: _recordingPausedForDisconnect,
                   ),
                 ),
               Positioned(
@@ -1563,15 +1831,21 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                     _LiveFeedAiToggle(
                       enabled: _aiScanningEnabled,
                       compact: true,
-                      onPressed: _supportsFijkPlayer && controller != null
+                      onPressed:
+                          !_isV380Cloud &&
+                              _supportsFijkPlayer &&
+                              controller != null
                           ? _toggleAiScanning
                           : null,
                     ),
                     const SizedBox(width: 8),
                     _LiveFeedRecordButton(
-                      isRecording: _isRecording,
+                      isRecording: _recordingRequested,
                       busy: _recordingBusy,
-                      onPressed: _supportsFijkPlayer && controller != null
+                      onPressed:
+                          !_isV380Cloud &&
+                              _supportsFijkPlayer &&
+                              controller != null
                           ? _toggleRecording
                           : null,
                     ),
@@ -1579,15 +1853,20 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                     _LiveFeedIconButton(
                       tooltip: 'Full screen',
                       icon: Icons.fullscreen,
-                      onPressed: _supportsFijkPlayer && controller != null
+                      onPressed:
+                          (_isV380Cloud && _v380PlaybackRequested) ||
+                              (_supportsFijkPlayer && controller != null)
                           ? _enterFullScreen
                           : null,
                     ),
-                    const SizedBox(width: 8),
-                    _LiveFeedPlaybackMenu(
-                      selectedProfile: _playbackProfile,
-                      onSelected: _selectPlaybackProfile,
-                    ),
+                    if (!_isV380Cloud) ...[
+                      const SizedBox(width: 8),
+                      _LiveFeedPlaybackMenu(
+                        selectedProfile: _playbackProfile,
+                        profiles: _availablePlaybackProfiles,
+                        onSelected: _selectPlaybackProfile,
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1607,7 +1886,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                       borderRadius: BorderRadius.circular(14),
                     ),
                     child: Text(
-                      widget.streamUrl,
+                      safePlaybackEndpointLabel(widget.streamUrl),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -1632,7 +1911,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                         vertical: 10,
                       ),
                       decoration: BoxDecoration(
-                        color: status.startsWith('RTSP stream accepted')
+                        color: _streamProbeSucceeded
                             ? const Color(0xCC134F36)
                             : const Color(0xCC5A1D24),
                         borderRadius: BorderRadius.circular(14),
@@ -1800,9 +2079,10 @@ class _LiveFeedRecordButton extends StatelessWidget {
 }
 
 class _RecordingIndicator extends StatelessWidget {
-  const _RecordingIndicator({required this.label});
+  const _RecordingIndicator({required this.label, this.paused = false});
 
   final String label;
+  final bool paused;
 
   @override
   Widget build(BuildContext context) {
@@ -1818,15 +2098,15 @@ class _RecordingIndicator extends StatelessWidget {
           Container(
             width: 10,
             height: 10,
-            decoration: const BoxDecoration(
-              color: _appAccent,
+            decoration: BoxDecoration(
+              color: paused ? const Color(0xFFFFCE67) : _appAccent,
               shape: BoxShape.circle,
             ),
           ),
           const SizedBox(width: 8),
-          const Text(
-            'REC',
-            style: TextStyle(
+          Text(
+            paused ? 'PAUSED' : 'REC',
+            style: const TextStyle(
               color: Colors.white,
               fontSize: 13,
               fontWeight: FontWeight.w900,
@@ -1852,10 +2132,12 @@ class _RecordingIndicator extends StatelessWidget {
 class _LiveFeedPlaybackMenu extends StatelessWidget {
   const _LiveFeedPlaybackMenu({
     required this.selectedProfile,
+    required this.profiles,
     required this.onSelected,
   });
 
   final _LiveFeedPlaybackProfile selectedProfile;
+  final List<_LiveFeedPlaybackProfile> profiles;
   final ValueChanged<_LiveFeedPlaybackProfile> onSelected;
 
   @override
@@ -1871,7 +2153,7 @@ class _LiveFeedPlaybackMenu extends StatelessWidget {
         onSelected: onSelected,
         itemBuilder: (context) {
           return [
-            for (final profile in _LiveFeedPlaybackProfile.values)
+            for (final profile in profiles)
               PopupMenuItem<_LiveFeedPlaybackProfile>(
                 value: profile,
                 child: _LiveFeedPlaybackMenuItem(
@@ -2094,7 +2376,7 @@ class _LiveFeedUnsupportedState extends StatelessWidget {
           Icon(Icons.videocam_off_outlined, color: Colors.white70, size: 34),
           SizedBox(height: 12),
           Text(
-            'Live RTSP playback is enabled for Android and iOS builds.',
+            'Live cloud-stream playback is enabled for Android and iOS builds.',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Colors.white70,

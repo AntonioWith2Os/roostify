@@ -9,6 +9,16 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+# Retained only as migration/reference code for pre-edge-gateway builds. These
+# files are not part of the application library because the mobile app no
+# longer discovers the farm LAN or sends ONVIF commands directly to a camera.
+analyzer:
+  exclude:
+    - lib/src/services/camera_stream_helpers.dart
+    - lib/src/services/onvif_ptz_client.dart
+    - lib/src/services/rtsp_camera_scanner.dart
+    - lib/src/widgets/v380_ptz_control_panel.dart
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`

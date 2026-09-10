@@ -40,7 +40,7 @@ class AppController extends ChangeNotifier {
           liveCctvStreams: [
             LiveCctvStream(
               id: 'seed-camera-1',
-              streamUrl: _testRtspStreamUrl,
+              streamUrl: _exampleCloudPlaybackUrl,
               label: 'CCTV',
             ),
           ],
@@ -1180,16 +1180,27 @@ class AppController extends ChangeNotifier {
     return 'stream-${DateTime.now().microsecondsSinceEpoch}-$_streamIdCounter';
   }
 
-  /// Connects a new live camera for [username], in addition to any cameras
-  /// already connected. Returns false (and sets [lastError]) if the URL is
-  /// invalid, already connected, or the [maxLiveCctvStreams] cap is reached.
-  bool addLiveCctvStream(String username, String streamUrl) {
+  /// Adds a playback endpoint for [username]. Cloud endpoints are used by
+  /// default; [allowDirectRtspCamera] permits a camera reached directly on the
+  /// LAN, through a VPN, or through an existing router port-forward.
+  bool addLiveCctvStream(
+    String username,
+    String streamUrl, {
+    String? label,
+    bool allowDirectRtspCamera = false,
+  }) {
     final user = userByUsername(username);
     if (user == null || user.isAdmin) return false;
 
     final cleanStreamUrl = streamUrl.trim();
-    if (cleanStreamUrl.isEmpty) {
-      lastError = 'Enter a valid RTSP stream URL.';
+    final validationError =
+        Uri.tryParse(cleanStreamUrl)?.scheme.toLowerCase() == 'v380'
+        ? v380CloudCameraValidationError(cleanStreamUrl)
+        : allowDirectRtspCamera
+        ? directRtspCameraUrlValidationError(cleanStreamUrl)
+        : cloudPlaybackUrlValidationError(cleanStreamUrl);
+    if (validationError != null) {
+      lastError = validationError;
       notifyListeners();
       return false;
     }
@@ -1216,7 +1227,7 @@ class AppController extends ChangeNotifier {
         // Numbered display name is computed fresh wherever streams are
         // listed (see cctvStreamDisplayLabel), so it stays correct after
         // cameras are added/removed instead of going stale here.
-        label: 'CCTV',
+        label: label?.trim().isNotEmpty == true ? label!.trim() : 'CCTV',
       ),
     );
     lastError = null;
@@ -1229,7 +1240,13 @@ class AppController extends ChangeNotifier {
     final user = userByUsername(username);
     if (user == null || user.isAdmin) return;
 
+    final removed = user.liveCctvStreams
+        .where((stream) => stream.id == streamId)
+        .toList();
     user.liveCctvStreams.removeWhere((stream) => stream.id == streamId);
+    for (final stream in removed) {
+      unawaited(V380CloudBridgeRegistry.instance.stop(stream.streamUrl));
+    }
     _clearCctvFilter(username, streamId);
     notifyListeners();
     unawaited(_persistLiveCctvStreams(user));
@@ -1238,7 +1255,7 @@ class AppController extends ChangeNotifier {
   static String _liveCctvStreamsPrefKey(String username) =>
       'roostify.cctv_streams.$username';
 
-  /// Persists [user]'s connected RTSP URLs so they survive an app restart.
+  /// Persists [user]'s cloud and direct camera URLs across app restarts.
   ///
   /// Always writes, even when the list is empty: an explicit `[]` records
   /// that the user cleared their cameras, distinct from "never touched",
@@ -1253,8 +1270,7 @@ class AppController extends ChangeNotifier {
     );
   }
 
-  /// Restores every user's saved RTSP URLs from the previous app session.
-  /// Call once after the controller is created; safe to await or fire-and-forget.
+  /// Restores every user's saved playback URLs from the previous app session.
   Future<void> loadPersistedLiveCctvStreams() async {
     final prefs = await SharedPreferences.getInstance();
     var restoredAny = false;
@@ -1326,7 +1342,7 @@ class AppController extends ChangeNotifier {
         _maybeEmitAlert(
           category: 'cctv_offline',
           title: 'CCTV camera disconnected',
-          message: '${stream.label} lost its RTSP video connection.',
+          message: '${stream.label} lost its video connection.',
           severity: AlertSeverity.warning,
         ),
       );
@@ -1623,6 +1639,7 @@ class AppController extends ChangeNotifier {
     _sensorClient.removeListener(notifyListeners);
     _sensorClient.dispose();
     _yoloDetector.close();
+    unawaited(V380CloudBridgeRegistry.instance.closeAll());
     unawaited(_alertController.close());
     super.dispose();
   }

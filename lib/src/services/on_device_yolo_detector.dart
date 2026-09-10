@@ -10,7 +10,10 @@ class OnDeviceYoloDetector {
        _modelBytes = modelBytes;
 
   static const double _confidenceThreshold = 0.58;
-  static const double _abnormalConfidenceThreshold = 0.48;
+  // The current NCHW export produces slightly lower abnormal-class scores
+  // than the previous NHWC export. Keep the threshold conservative while
+  // allowing a clearly localized abnormal rooster to reach post-processing.
+  static const double _abnormalConfidenceThreshold = 0.40;
   static const double _abnormalPriorityRatio = 0.90;
   static const double _sameRoosterIouThreshold = 0.35;
   static const double _minimumBoxArea = 0.006;
@@ -29,6 +32,18 @@ class OnDeviceYoloDetector {
     HealthState.normal,
     HealthState.abnormal,
   ];
+
+  @visibleForTesting
+  static ({int width, int height, bool channelsFirst}) debugInputLayout(
+    List<int> shape,
+  ) {
+    final layout = _YoloInputLayout.fromShape(shape);
+    return (
+      width: layout.width,
+      height: layout.height,
+      channelsFirst: layout.channelsFirst,
+    );
+  }
 
   final String _modelAsset;
   final int _interpreterThreads;
@@ -336,8 +351,7 @@ class OnDeviceYoloDetector {
     final inputShape = interpreter.getInputTensor(0).shape;
     final outputShape = interpreter.getOutputTensor(0).shape;
     final metadata = _YoloModelMetadata(
-      inputWidth: _inputWidth(inputShape),
-      inputHeight: _inputHeight(inputShape),
+      inputLayout: _YoloInputLayout.fromShape(inputShape),
       outputElementCount: _elementCount(outputShape),
       outputLayout: _YoloTensorLayout.fromShape(outputShape),
     );
@@ -372,26 +386,13 @@ class OnDeviceYoloDetector {
     return interpreter;
   }
 
-  int _inputHeight(List<int> shape) {
-    if (shape.length == 4 && shape[3] == 3) {
-      return shape[1];
-    }
-    throw FormatException('Expected NHWC RGB input tensor, got $shape.');
-  }
-
-  int _inputWidth(List<int> shape) {
-    if (shape.length == 4 && shape[3] == 3) {
-      return shape[2];
-    }
-    throw FormatException('Expected NHWC RGB input tensor, got $shape.');
-  }
-
   _YoloPreprocessedFrame _preprocessFrame(
     img.Image frame, {
     required _YoloModelMetadata metadata,
   }) {
-    final inputWidth = metadata.inputWidth;
-    final inputHeight = metadata.inputHeight;
+    final inputLayout = metadata.inputLayout;
+    final inputWidth = inputLayout.width;
+    final inputHeight = inputLayout.height;
     final scale = math.min(
       inputWidth / frame.width,
       inputHeight / frame.height,
@@ -413,13 +414,29 @@ class OnDeviceYoloDetector {
 
     final resizedBytes = resized.getBytes(order: img.ChannelOrder.rgb);
     final resizedRowStride = resizedWidth * 3;
-    for (var y = 0; y < resizedHeight; y += 1) {
-      var inputOffset = ((padY + y) * inputWidth + padX) * 3;
-      var resizedOffset = y * resizedRowStride;
-      for (var x = 0; x < resizedWidth; x += 1) {
-        input[inputOffset++] = resizedBytes[resizedOffset++] * _byteToFloat;
-        input[inputOffset++] = resizedBytes[resizedOffset++] * _byteToFloat;
-        input[inputOffset++] = resizedBytes[resizedOffset++] * _byteToFloat;
+    if (inputLayout.channelsFirst) {
+      final channelSize = inputWidth * inputHeight;
+      for (var y = 0; y < resizedHeight; y += 1) {
+        var pixelOffset = (padY + y) * inputWidth + padX;
+        var resizedOffset = y * resizedRowStride;
+        for (var x = 0; x < resizedWidth; x += 1) {
+          input[pixelOffset] = resizedBytes[resizedOffset++] * _byteToFloat;
+          input[channelSize + pixelOffset] =
+              resizedBytes[resizedOffset++] * _byteToFloat;
+          input[channelSize * 2 + pixelOffset] =
+              resizedBytes[resizedOffset++] * _byteToFloat;
+          pixelOffset += 1;
+        }
+      }
+    } else {
+      for (var y = 0; y < resizedHeight; y += 1) {
+        var inputOffset = ((padY + y) * inputWidth + padX) * 3;
+        var resizedOffset = y * resizedRowStride;
+        for (var x = 0; x < resizedWidth; x += 1) {
+          input[inputOffset++] = resizedBytes[resizedOffset++] * _byteToFloat;
+          input[inputOffset++] = resizedBytes[resizedOffset++] * _byteToFloat;
+          input[inputOffset++] = resizedBytes[resizedOffset++] * _byteToFloat;
+        }
       }
     }
 
@@ -1081,16 +1098,51 @@ Map<String, Object?> _liveCameraFrameToMessage(LiveCameraFrame frame) {
 
 class _YoloModelMetadata {
   const _YoloModelMetadata({
-    required this.inputWidth,
-    required this.inputHeight,
+    required this.inputLayout,
     required this.outputElementCount,
     required this.outputLayout,
   });
 
-  final int inputWidth;
-  final int inputHeight;
+  final _YoloInputLayout inputLayout;
   final int outputElementCount;
   final _YoloTensorLayout outputLayout;
+}
+
+class _YoloInputLayout {
+  const _YoloInputLayout({
+    required this.width,
+    required this.height,
+    required this.channelsFirst,
+  });
+
+  final int width;
+  final int height;
+  final bool channelsFirst;
+
+  factory _YoloInputLayout.fromShape(List<int> shape) {
+    if (shape.length != 4 || shape.first != 1) {
+      throw FormatException('Expected a batched RGB input tensor, got $shape.');
+    }
+
+    if (shape[1] == 3) {
+      return _YoloInputLayout(
+        width: shape[3],
+        height: shape[2],
+        channelsFirst: true,
+      );
+    }
+    if (shape[3] == 3) {
+      return _YoloInputLayout(
+        width: shape[2],
+        height: shape[1],
+        channelsFirst: false,
+      );
+    }
+
+    throw FormatException(
+      'Expected NCHW or NHWC RGB input tensor, got $shape.',
+    );
+  }
 }
 
 class _YoloPreprocessedFrame {

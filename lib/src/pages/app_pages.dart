@@ -1895,7 +1895,6 @@ class UserCctvPage extends StatelessWidget {
             children: [
               _CctvCameraCollection(
                 streams: streams,
-                onScan: () => _openManageCameras(context, user),
                 onAdd: () => _openManageCameras(context, user),
                 onView: (stream, index) =>
                     _openCamera(context, user, stream, index),
@@ -1912,14 +1911,12 @@ class UserCctvPage extends StatelessWidget {
 class _CctvCameraCollection extends StatelessWidget {
   const _CctvCameraCollection({
     required this.streams,
-    required this.onScan,
     required this.onAdd,
     required this.onView,
     required this.onManage,
   });
 
   final List<LiveCctvStream> streams;
-  final VoidCallback onScan;
   final VoidCallback onAdd;
   final void Function(LiveCctvStream stream, int index) onView;
   final VoidCallback onManage;
@@ -1951,7 +1948,7 @@ class _CctvCameraCollection extends StatelessWidget {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      'Manage and monitor your CCTV cameras',
+                      'Cloud or local RTSP video with on-device YOLOv8',
                       style: TextStyle(
                         color: context.appColors.mutedText,
                         fontSize: 13,
@@ -1960,16 +1957,10 @@ class _CctvCameraCollection extends StatelessWidget {
                   ],
                 ),
               ),
-              IconButton.outlined(
-                tooltip: 'Scan camera',
-                onPressed: onScan,
-                icon: const Icon(Icons.qr_code_scanner_rounded),
-              ),
-              const SizedBox(width: 7),
               FilledButton.icon(
                 onPressed: onAdd,
-                icon: const Icon(Icons.add_rounded),
-                label: const Text('Add'),
+                icon: const Icon(Icons.add_a_photo_outlined),
+                label: const Text('Cameras'),
               ),
             ],
           ),
@@ -2014,7 +2005,15 @@ class _CctvCameraCard extends StatelessWidget {
     final label = stream.label.isEmpty
         ? cctvStreamDisplayLabel(index, total)
         : stream.label;
-    final endpoint = uri?.host.isNotEmpty == true ? uri!.host : 'RTSP camera';
+    final endpoint = uri?.host.isNotEmpty == true
+        ? uri!.host
+        : 'Cloud video server';
+    final protocolLabel = switch (stream.deliveryProtocol) {
+      VideoDeliveryProtocol.hlsOrHttp => 'HLS / HTTP',
+      VideoDeliveryProtocol.rtsp => 'RTSP delivery',
+      VideoDeliveryProtocol.rtmp => 'RTMP delivery',
+      VideoDeliveryProtocol.v380Cloud => 'V380 Cloud',
+    };
 
     return Container(
       padding: const EdgeInsets.all(10),
@@ -2054,11 +2053,13 @@ class _CctvCameraCard extends StatelessWidget {
                       vertical: 3,
                     ),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF20B66A),
+                      color: stream.isOnline
+                          ? const Color(0xFF20B66A)
+                          : Colors.blueGrey,
                       borderRadius: BorderRadius.circular(99),
                     ),
-                    child: const Text(
-                      'Online',
+                    child: Text(
+                      stream.isOnline ? 'Online' : 'Waiting',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 13,
@@ -2097,7 +2098,7 @@ class _CctvCameraCard extends StatelessWidget {
                   ],
                 ),
                 Text(
-                  'V380 Pro • CH${(index + 1).toString().padLeft(2, '0')}',
+                  '$protocolLabel • CH${(index + 1).toString().padLeft(2, '0')}',
                   style: TextStyle(
                     color: context.appColors.mutedText,
                     fontSize: 13,
@@ -2151,15 +2152,15 @@ class _CctvTabEmptyState extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'Scan the local network or enter an RTSP URL to connect a camera.',
+            'Scan for an RTSP camera on the current Wi-Fi, or add the playback URL from your video server.',
             textAlign: TextAlign.center,
             style: TextStyle(color: colors.mutedText, height: 1.4),
           ),
           const SizedBox(height: 20),
           FilledButton.icon(
             onPressed: onManage,
-            icon: const Icon(Icons.add_link_outlined),
-            label: const Text('Add Camera'),
+            icon: const Icon(Icons.add_a_photo_outlined),
+            label: const Text('Connect Camera'),
           ),
         ],
       ),
@@ -2501,15 +2502,15 @@ const _systemBracketGuides = [
       ),
       (
         'V380 Pro setup',
-        'Use the V380 Pro app or camera settings to connect the camera to Wi-Fi and enable RTSP/ONVIF when available. The app needs the camera IP address, stream path, and login details to preview the feed.',
+        'Connect the V380 to farm Wi-Fi and enable RTSP/ONVIF. On the same Wi-Fi, Roostify can scan for it directly; for remote viewing, configure it on the edge gateway and add the video-server playback URL.',
       ),
       (
         'Online',
-        'The V380 Pro camera feed is reachable and can be used for monitoring or YOLOv8 checking.',
+        'The local or cloud-delivered video is playing and can be inspected on this device by YOLOv8.',
       ),
       (
         'Offline',
-        'The V380 Pro camera feed cannot be reached. Check power, Wi-Fi, RTSP link, and camera login details.',
+        'For a local camera, check power, Wi-Fi, RTSP settings, and login details. For a remote stream, check the edge gateway and playback endpoint.',
       ),
       (
         'Blocked or blurry',
@@ -4545,7 +4546,7 @@ class _SupportChatPageState extends State<SupportChatPage> {
               _FaqEntry(
                 question: 'Why is my CCTV offline?',
                 answer:
-                    'Check camera power, Wi-Fi, RTSP settings, and the camera address.',
+                    'For a local camera, check power, Wi-Fi, RTSP settings, and login details. For a remote stream, check farm Internet, edge gateway health, and the playback URL.',
               ),
               _FaqEntry(
                 question: 'Why are sensor readings unavailable?',
@@ -6943,156 +6944,181 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
   Widget build(BuildContext context) {
     final hasCamera =
         _cameraController != null && _cameraController!.value.isInitialized;
-    final detected = _result?.detected ?? false;
+    final detectionCount = _result?.detectionCount ?? 0;
+    final hasDetections = detectionCount > 0;
     final resultColor = _result?.condition == HealthState.abnormal
         ? HealthState.abnormal.color
         : const Color(0xFF43E39C);
 
     return Scaffold(
-      appBar: AppBar(
-        toolbarHeight: 82,
-        title: const Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Manual Rooster Scan',
-              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
-            ),
-            SizedBox(height: 3),
-            Text(
-              'Point your camera to scan the area',
-              style: TextStyle(color: Color(0xFF8E97A8), fontSize: 13),
-            ),
-          ],
-        ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: OutlinedButton.icon(
-              onPressed: _toggleAutoScan,
-              icon: Icon(
-                _autoScanEnabled
-                    ? Icons.bolt_rounded
-                    : Icons.pause_circle_outline_rounded,
-              ),
-              label: Text(_autoScanEnabled ? 'AUTO SCAN' : 'AUTO OFF'),
-            ),
-          ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 88),
+      backgroundColor: const Color(0xFF070B13),
+      body: Stack(
+        fit: StackFit.expand,
         children: [
-          if (detected) ...[
-            Align(
-              alignment: Alignment.centerLeft,
-              child: _RoosterCountBadge(count: _result!.detectionCount),
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: _ScanStatusCard(
-                    icon: Icons.egg_alt_outlined,
-                    label: _scanStatus!,
-                    color: resultColor,
+          if (_initializing)
+            const Center(child: CircularProgressIndicator())
+          else if (hasCamera) ...[
+            _buildFillingCameraPreview(_cameraController!),
+            IgnorePointer(
+              child: Semantics(
+                label: (_result?.detections ?? const []).isEmpty
+                    ? null
+                    : (_result?.detections ?? const [])
+                          .map(
+                            (detection) =>
+                                '${detection.label} '
+                                '${(detection.confidence * 100).toStringAsFixed(0)}% '
+                                'confidence',
+                          )
+                          .join(', '),
+                child: CustomPaint(
+                  painter: ChickenDetectionPainter(
+                    detections: _result?.detections ?? const [],
                   ),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _ScanStatusCard(
-                    icon: Icons.speed_rounded,
-                    label: 'Confidence ${_result!.confidenceLabel}',
-                    color: resultColor,
-                  ),
+              ),
+            ),
+          ] else
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: Text(
+                  'Camera preview is unavailable on this device or emulator.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white70, height: 1.5),
                 ),
-              ],
+              ),
             ),
-            const SizedBox(height: 14),
-          ],
-          Container(
-            height: 470,
-            clipBehavior: Clip.antiAlias,
-            decoration: BoxDecoration(
-              color: const Color(0xFF070B13),
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(color: context.appColors.border),
-            ),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                if (_initializing)
-                  const Center(child: CircularProgressIndicator())
-                else if (hasCamera) ...[
-                  _buildFillingCameraPreview(_cameraController!),
-                  IgnorePointer(
-                    child: Semantics(
-                      label: (_result?.detections ?? const []).isEmpty
-                          ? null
-                          : (_result?.detections ?? const [])
-                                .map(
-                                  (detection) =>
-                                      '${detection.label} '
-                                      '${(detection.confidence * 100).toStringAsFixed(0)}% '
-                                      'confidence',
-                                )
-                                .join(', '),
-                      child: CustomPaint(
-                        painter: ChickenDetectionPainter(
-                          detections: _result?.detections ?? const [],
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+                child: _ScanOverlayPanel(
+                  child: Row(
+                    children: [
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Manual Rooster Scan',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            SizedBox(height: 2),
+                            Text(
+                              'Point your camera to scan the area',
+                              style: TextStyle(
+                                color: Colors.white70,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ),
-                  ),
-                ] else
-                  const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Text(
-                        'Camera preview is unavailable on this device or emulator.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.white70, height: 1.5),
+                      const SizedBox(width: 8),
+                      _ScanAutoToggle(
+                        enabled: _autoScanEnabled,
+                        onTap: _toggleAutoScan,
                       ),
-                    ),
-                  ),
-                Positioned(
-                  left: 20,
-                  right: 20,
-                  bottom: 18,
-                  child: Text(
-                    detected
-                        ? 'Keep the rooster clearly inside the frame'
-                        : 'Bring the rooster into the frame for better detection',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white70, fontSize: 13),
+                    ],
                   ),
                 ),
-              ],
+              ),
             ),
           ),
-          const SizedBox(height: 14),
-          const _ScanTipsCard(),
-          const SizedBox(height: 18),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              _ScanControlButton(
-                icon: Icons.cameraswitch_outlined,
-                label: 'Switch\nCamera',
-                onTap: _switchCamera,
+          if (hasDetections)
+            Positioned(
+              top: 94,
+              left: 18,
+              child: SafeArea(
+                bottom: false,
+                child: _RoosterCountBadge(count: detectionCount),
               ),
-              _ScanNowButton(
-                analyzing: _analyzing,
-                onTap: _analyzing ? null : _runAnalysis,
+            ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _ScanOverlayPanel(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            hasDetections
+                                ? Icons.egg_alt_outlined
+                                : Icons.center_focus_strong_rounded,
+                            color: resultColor,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 9),
+                          Expanded(
+                            child: Text(
+                              hasDetections
+                                  ? '${_scanStatus ?? 'Rooster detected'} · ${_result!.confidenceLabel} confidence'
+                                  : 'Bring the rooster into the frame for better detection',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                height: 1.25,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 9),
+                    _ScanOverlayPanel(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          _ScanControlButton(
+                            icon: Icons.cameraswitch_outlined,
+                            label: 'Switch',
+                            onTap: _switchCamera,
+                          ),
+                          _ScanNowButton(
+                            analyzing: _analyzing,
+                            onTap: _analyzing ? null : _runAnalysis,
+                          ),
+                          _ScanControlButton(
+                            icon: _torchEnabled
+                                ? Icons.flashlight_on_rounded
+                                : Icons.flashlight_off_rounded,
+                            label: _torchEnabled ? 'Torch on' : 'Torch off',
+                            onTap: _toggleTorch,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              _ScanControlButton(
-                icon: _torchEnabled
-                    ? Icons.flashlight_on_rounded
-                    : Icons.flashlight_off_rounded,
-                label: _torchEnabled ? 'Torch\nOn' : 'Torch\nOff',
-                onTap: _toggleTorch,
-              ),
-            ],
+            ),
           ),
         ],
       ),
@@ -7110,9 +7136,9 @@ class _RoosterCountBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
       decoration: BoxDecoration(
-        color: _appAccent.withValues(alpha: .12),
+        color: const Color(0xCC10151F),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: _appAccent.withValues(alpha: .4)),
+        border: Border.all(color: _appAccent.withValues(alpha: .7)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -7133,125 +7159,71 @@ class _RoosterCountBadge extends StatelessWidget {
   }
 }
 
-class _ScanStatusCard extends StatelessWidget {
-  const _ScanStatusCard({
-    required this.icon,
-    required this.label,
-    required this.color,
-  });
+class _ScanOverlayPanel extends StatelessWidget {
+  const _ScanOverlayPanel({required this.child, this.padding});
 
-  final IconData icon;
-  final String label;
-  final Color color;
+  final Widget child;
+  final EdgeInsetsGeometry? padding;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      constraints: const BoxConstraints(minHeight: 76),
-      padding: const EdgeInsets.all(14),
+      width: double.infinity,
+      padding:
+          padding ?? const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
       decoration: BoxDecoration(
-        color: context.appColors.surface,
-        borderRadius: BorderRadius.circular(17),
-        border: Border.all(color: context.appColors.border),
+        color: const Color(0xB8141924),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: .16)),
       ),
-      child: Row(
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: .12),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(icon, color: color),
-          ),
-          const SizedBox(width: 11),
-          Expanded(
-            child: Text(
-              label,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: color,
-                fontSize: 13,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-          ),
-        ],
-      ),
+      child: child,
     );
   }
 }
 
-class _ScanTipsCard extends StatelessWidget {
-  const _ScanTipsCard();
+class _ScanAutoToggle extends StatelessWidget {
+  const _ScanAutoToggle({required this.enabled, required this.onTap});
+
+  final bool enabled;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(17),
-      decoration: BoxDecoration(
-        color: context.appColors.surface,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: context.appColors.border),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 46,
-            height: 46,
-            decoration: BoxDecoration(
-              color: _appAccent.withValues(alpha: .1),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.lightbulb_outline_rounded,
-              color: _appAccent,
-            ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return Tooltip(
+      message: enabled
+          ? 'Pause automatic scanning'
+          : 'Resume automatic scanning',
+      child: Material(
+        color: enabled
+            ? _appAccent.withValues(alpha: .24)
+            : Colors.white.withValues(alpha: .10),
+        borderRadius: BorderRadius.circular(13),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(13),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                const Text(
-                  'Tips for better scan',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+                Icon(
+                  enabled ? Icons.bolt_rounded : Icons.pause_rounded,
+                  color: enabled ? const Color(0xFFFFCE67) : Colors.white70,
+                  size: 18,
                 ),
-                const SizedBox(height: 6),
-                for (final tip in const [
-                  'Ensure good lighting',
-                  'Keep the rooster clearly visible',
-                  'Avoid blur and obstructions',
-                ])
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 3),
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.check_rounded,
-                          color: _appAccent,
-                          size: 16,
-                        ),
-                        const SizedBox(width: 7),
-                        Expanded(
-                          child: Text(
-                            tip,
-                            style: TextStyle(
-                              color: context.appColors.mutedText,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+                const SizedBox(width: 5),
+                Text(
+                  enabled ? 'Auto' : 'Paused',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
                   ),
+                ),
               ],
             ),
           ),
-          const Icon(Icons.egg_alt_outlined, color: _appAccent, size: 48),
-        ],
+        ),
       ),
     );
   }
@@ -7274,24 +7246,26 @@ class _ScanControlButton extends StatelessWidget {
       borderRadius: BorderRadius.circular(16),
       onTap: onTap,
       child: Container(
-        width: 94,
-        height: 76,
+        width: 76,
+        height: 64,
         decoration: BoxDecoration(
-          color: context.appColors.surface,
+          color: Colors.white.withValues(alpha: .10),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: context.appColors.border),
+          border: Border.all(color: Colors.white.withValues(alpha: .16)),
         ),
-        child: Row(
+        child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 23),
-            const SizedBox(width: 7),
+            Icon(icon, color: Colors.white, size: 21),
+            const SizedBox(height: 3),
             Text(
               label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: context.appColors.mutedText,
-                fontSize: 13,
-                height: 1.3,
+                color: Colors.white70,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
               ),
             ),
           ],
@@ -7313,14 +7287,14 @@ class _ScanNowButton extends StatelessWidget {
       customBorder: const CircleBorder(),
       onTap: onTap,
       child: Container(
-        width: 112,
-        height: 112,
+        width: 88,
+        height: 88,
         decoration: BoxDecoration(
           color: _appAccent,
           shape: BoxShape.circle,
           border: Border.all(
             color: _appAccent.withValues(alpha: .35),
-            width: 8,
+            width: 6,
           ),
           boxShadow: [
             BoxShadow(color: _appAccent.withValues(alpha: .22), blurRadius: 18),
@@ -7340,14 +7314,14 @@ class _ScanNowButton extends StatelessWidget {
                 : const Icon(
                     Icons.camera_alt_outlined,
                     color: Colors.white,
-                    size: 32,
+                    size: 27,
                   ),
-            const SizedBox(height: 5),
+            const SizedBox(height: 3),
             Text(
               analyzing ? 'SCANNING' : 'SCAN NOW',
               style: const TextStyle(
                 color: Colors.white,
-                fontSize: 13,
+                fontSize: 10,
                 fontWeight: FontWeight.w900,
               ),
             ),
