@@ -28,11 +28,11 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
 import 'package:xml/xml.dart';
 import 'package:youtube_player_iframe/youtube_player_iframe.dart';
 
 import 'firebase_options.dart';
+import 'src/services/yolo/yolo_interpreter.dart';
 
 part 'src/app_constants.dart';
 part 'src/rooster_watch_app.dart';

@@ -56,6 +56,11 @@ class RtspRecorderService {
     Duration maxDuration = maximumRecordingDuration,
     bool saveToGalleryWhenFinished = false,
   }) async {
+    if (kIsWeb) {
+      throw UnsupportedError(
+        'Recording is only available in the Roostify mobile app.',
+      );
+    }
     if (_isRecording) {
       throw StateError('A recording is already in progress.');
     }
@@ -341,6 +346,9 @@ class RtspRecorderService {
   /// recordings from every user's folder — intended for admin use only, the
   /// caller must enforce that restriction before calling with no username.
   static Future<List<RecordingFile>> listRecordings({String? username}) async {
+    if (kIsWeb) {
+      return const [];
+    }
     final rootDir = await _recordingsRootDirectory();
     if (!await rootDir.exists()) {
       return const [];
@@ -378,6 +386,9 @@ class RtspRecorderService {
     String path, {
     String? requireOwnerUsername,
   }) async {
+    if (kIsWeb) {
+      return false;
+    }
     if (requireOwnerUsername != null) {
       final ownerDir = '/${_sanitizeUsername(requireOwnerUsername)}/';
       if (!path.replaceAll('\\', '/').contains(ownerDir)) {

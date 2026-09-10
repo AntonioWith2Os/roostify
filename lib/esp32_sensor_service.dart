@@ -104,6 +104,13 @@ class Esp32SensorClient extends ChangeNotifier {
     _setStatus(Esp32SensorConnectionStatus.scanning);
 
     try {
+      if (kIsWeb && !await FlutterBluePlus.isSupported) {
+        _setError(
+          'Bluetooth sensor pairing needs a browser with Web Bluetooth support, such as Chrome or Edge, served over HTTPS.',
+        );
+        return;
+      }
+
       if (!kIsWeb && Platform.isAndroid) {
         await FlutterBluePlus.turnOn(timeout: 8);
       }

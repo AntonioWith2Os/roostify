@@ -49,8 +49,8 @@ class OnDeviceYoloDetector {
   final int _interpreterThreads;
   Uint8List? _modelBytes;
 
-  tfl.Interpreter? _interpreter;
-  Future<tfl.Interpreter>? _loadingInterpreter;
+  YoloInterpreterHandle? _interpreter;
+  Future<YoloInterpreterHandle>? _loadingInterpreter;
   _YoloModelMetadata? _modelMetadata;
   Float32List? _inputBuffer;
   Float32List? _outputBuffer;
@@ -103,6 +103,12 @@ class OnDeviceYoloDetector {
   }
 
   Future<_YoloDetectionWorker> _workerForInference() async {
+    if (kIsWeb) {
+      throw UnsupportedError(
+        'On-device health scanning is only available in the Roostify mobile app.',
+      );
+    }
+
     final existing = _worker;
     if (existing != null) {
       return existing;
@@ -320,7 +326,7 @@ class OnDeviceYoloDetector {
     return shape.fold(1, (product, dimension) => product * dimension);
   }
 
-  Future<tfl.Interpreter> _interpreterForInference() async {
+  Future<YoloInterpreterHandle> _interpreterForInference() async {
     final existing = _interpreter;
     if (existing != null) {
       return existing;
@@ -342,14 +348,14 @@ class OnDeviceYoloDetector {
     }
   }
 
-  _YoloModelMetadata _metadataForInterpreter(tfl.Interpreter interpreter) {
+  _YoloModelMetadata _metadataForInterpreter(YoloInterpreterHandle interpreter) {
     final existing = _modelMetadata;
     if (existing != null) {
       return existing;
     }
 
-    final inputShape = interpreter.getInputTensor(0).shape;
-    final outputShape = interpreter.getOutputTensor(0).shape;
+    final inputShape = interpreter.inputShape;
+    final outputShape = interpreter.outputShape;
     final metadata = _YoloModelMetadata(
       inputLayout: _YoloInputLayout.fromShape(inputShape),
       outputElementCount: _elementCount(outputShape),
@@ -374,16 +380,11 @@ class OnDeviceYoloDetector {
     return bytes;
   }
 
-  Future<tfl.Interpreter> _loadInterpreter() async {
-    // No XNNPACK delegate: a delegate failure aborts natively (uncatchable
-    // from Dart) and crashed the app on the first frame of some devices.
-    final options = tfl.InterpreterOptions()..threads = _interpreterThreads;
-    final interpreter = tfl.Interpreter.fromBuffer(
+  Future<YoloInterpreterHandle> _loadInterpreter() async {
+    return YoloInterpreterHandle.fromBuffer(
       await _loadModelBytes(),
-      options: options,
+      threads: _interpreterThreads,
     );
-    interpreter.allocateTensors();
-    return interpreter;
   }
 
   _YoloPreprocessedFrame _preprocessFrame(
