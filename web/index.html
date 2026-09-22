@@ -1,47 +1,138 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta name="google-signin-client_id" content="402884110739-fsm2ontv9tajkin1seajgphs6d08e3ug.apps.googleusercontent.com">
-  <!--
-    If you are serving your web app in a path other than the root, change the
-    href value below to reflect the base path you are serving from.
-
-    The path provided below has to start and end with a slash "/" in order for
-    it to work correctly.
-
-    For more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
-  -->
-  <base href="$FLUTTER_BASE_HREF">
-
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="Roostify">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Roostify monitors your poultry house: live CCTV, on-device AI health detection, and coop sensor alerts in one app.">
+  <meta name="theme-color" content="#0D1020">
 
-  <!-- iOS meta tags & icons -->
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="Roostify">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
-
-  <!-- Favicon -->
-  <link rel="icon" type="image/png" href="favicon.png"/>
-
-  <title>Roostify</title>
+  <link rel="icon" type="image/png" href="favicon.png">
   <link rel="manifest" href="manifest.json">
+
+  <title>Roostify — Poultry-house monitoring app</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!--
-    You can customize the "flutter_bootstrap.js" script.
-    This is useful to provide a custom configuration to the Flutter loader
-    or to give the user feedback during the initialization process.
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="#top">
+        <img src="img/logo.png" alt="" class="brand-logo">
+        <span>Roostify</span>
+      </a>
+      <nav class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#detection">AI Detection</a>
+        <a href="https://github.com/AntonioWith2Os/roostify" target="_blank" rel="noopener">GitHub</a>
+      </nav>
+      <a class="btn btn-primary btn-small" href="https://github.com/AntonioWith2Os/roostify/releases/latest" target="_blank" rel="noopener">Download</a>
+    </div>
+  </header>
 
-    For more details:
-    * https://docs.flutter.dev/platform-integration/web/initialization
-  -->
-  <script src="flutter_bootstrap.js" async></script>
+  <main>
+    <section id="top" class="hero">
+      <div class="container hero-inner">
+        <div class="hero-copy">
+          <h1>Watch your coop. Catch problems early.</h1>
+          <p class="hero-sub">
+            Roostify puts live CCTV, on-device AI health detection, and coop
+            sensor alerts in one app — so you know what's happening in your
+            poultry house without walking out to check.
+          </p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="https://github.com/AntonioWith2Os/roostify/releases/latest" target="_blank" rel="noopener">
+              Download for Android
+            </a>
+          </div>
+          <p class="hero-note">Free · Android · iOS coming soon</p>
+        </div>
+        <div class="hero-art" aria-hidden="true">
+          <img src="img/icon.png" alt="Roostify app icon" class="hero-icon">
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="features">
+      <div class="container">
+        <h2>Everything the coop needs, in your pocket</h2>
+        <div class="feature-grid">
+          <article class="feature-card">
+            <h3>Live CCTV, your way</h3>
+            <p>
+              Connect through the V380 cloud relay, scan the local farm
+              Wi-Fi for cameras directly, or point at a port-forwarded
+              stream — view every camera fullscreen from one screen.
+            </p>
+          </article>
+          <article class="feature-card">
+            <h3>On-device AI detection</h3>
+            <p>
+              A bundled YOLOv8 model runs right on your phone, flagging
+              normal vs. abnormal behavior in real time — no footage
+              leaves the device to be analyzed.
+            </p>
+          </article>
+          <article class="feature-card">
+            <h3>Coop sensor alerts</h3>
+            <p>
+              DHT11 temperature/humidity and MQ135 air-quality readings
+              stream live from an ESP32 over Wi-Fi, so you get notified
+              the moment conditions drift.
+            </p>
+          </article>
+          <article class="feature-card">
+            <h3>Recordings on demand</h3>
+            <p>
+              Review recorded clips after the fact to see exactly what
+              triggered an alert, whenever it's convenient.
+            </p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="detection" class="detection">
+      <div class="container detection-inner">
+        <div class="detection-copy">
+          <h2>AI that tells healthy from abnormal</h2>
+          <p>
+            Roostify's on-device model continuously inspects the live feed
+            and labels what it sees, with a confidence score attached —
+            so a flagged bird doesn't get lost in hours of footage.
+          </p>
+        </div>
+        <div class="detection-images">
+          <figure>
+            <img src="img/healthy.jpg" alt="Example of a rooster classified as healthy by Roostify's on-device detection">
+            <figcaption>Normal</figcaption>
+          </figure>
+          <figure>
+            <img src="img/abnormal.jpg" alt="Example of a rooster classified as abnormal by Roostify's on-device detection">
+            <figcaption>Abnormal</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta">
+      <div class="container cta-inner">
+        <h2>Get Roostify</h2>
+        <p>Download the latest release and set up your first camera in minutes.</p>
+        <a class="btn btn-primary" href="https://github.com/AntonioWith2Os/roostify/releases/latest" target="_blank" rel="noopener">
+          Download for Android
+        </a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <span>© <span id="year"></span> Roostify. All rights reserved.</span>
+      <a href="https://github.com/AntonioWith2Os/roostify" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
 </body>
 </html>
