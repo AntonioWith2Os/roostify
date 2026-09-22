@@ -174,8 +174,9 @@ class _NewAdminDashboardState extends State<_NewAdminDashboard> {
     final users = controller.farmUsers;
     final warningAlerts = users
         .expand(
-          (u) =>
-              u.monitor.alerts.where((a) => a.severity != AlertSeverity.info),
+          (u) => u.monitor.activeAlerts.where(
+            (a) => a.severity != AlertSeverity.info,
+          ),
         )
         .toList();
     final alerts = warningAlerts.length;
@@ -235,7 +236,16 @@ class _NewAdminDashboardState extends State<_NewAdminDashboard> {
                       onPressed: () => Navigator.push(
                         context,
                         MaterialPageRoute<void>(
-                          builder: (_) => AlertsPage(alerts: warningAlerts),
+                          builder: (_) => AlertsPage(
+                            controller: controller,
+                            alertsOf: () => controller.farmUsers
+                                .expand(
+                                  (u) => u.monitor.activeAlerts.where(
+                                    (a) => a.severity != AlertSeverity.info,
+                                  ),
+                                )
+                                .toList(),
+                          ),
                         ),
                       ),
                       icon: Stack(
@@ -1796,7 +1806,7 @@ class _UserActions extends StatelessWidget {
                   Expanded(
                     child: _UserOverviewTile(
                       icon: Icons.hub_outlined,
-                      value: user.cameraAccessEnabled ? 'ESP32' : 'Offline',
+                      value: user.cameraAccessEnabled ? 'Sensor' : 'Offline',
                       label: 'Node Online',
                       color: _adminGreen,
                     ),
@@ -2220,6 +2230,7 @@ class _NewAdminCctvState extends State<_NewAdminCctv> {
                           MaterialPageRoute<void>(
                             builder: (_) => RecordingsPage(
                               currentUser: widget.controller.session!.user,
+                              controller: widget.controller,
                             ),
                           ),
                         )
@@ -2738,6 +2749,12 @@ class _CameraStreamDialog extends StatelessWidget {
         ? cctvStreamDisplayLabel(index, user.liveCctvStreams.length)
         : stream.label;
     final ip = _AdminCameraTile._cameraHost(stream.streamUrl, index);
+    final protocolLabel = switch (stream.deliveryProtocol) {
+      VideoDeliveryProtocol.hlsOrHttp => 'HLS / HTTP',
+      VideoDeliveryProtocol.rtsp => 'Direct RTSP',
+      VideoDeliveryProtocol.rtmp => 'RTMP',
+      VideoDeliveryProtocol.v380Cloud => 'V380 Cloud',
+    };
     return Dialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
       backgroundColor: context.appColors.surface,
@@ -2902,10 +2919,10 @@ class _CameraStreamDialog extends StatelessWidget {
                       ),
                       SizedBox(
                         width: width,
-                        child: const _CameraInfoItem(
+                        child: _CameraInfoItem(
                           icon: Icons.videocam_outlined,
-                          label: 'Camera Model',
-                          value: 'V380 via Edge Gateway',
+                          label: 'Delivery',
+                          value: protocolLabel,
                         ),
                       ),
                       SizedBox(

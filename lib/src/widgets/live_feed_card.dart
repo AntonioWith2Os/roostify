@@ -11,6 +11,11 @@ class LiveFeedCard extends StatefulWidget {
     this.onConnectionChanged,
     this.expand = false,
     this.displayLabel,
+    this.videoFit = BoxFit.cover,
+    this.showEndpointOverlay = true,
+    this.showLabelOverlay = true,
+    this.showStreamProbeOverlay = true,
+    this.onStreamStatusChanged,
   });
 
   final String streamUrl;
@@ -35,6 +40,31 @@ class LiveFeedCard extends StatefulWidget {
   /// Overrides the default "LIVE CCTV" tag, e.g. with "CCTV 1" when several
   /// cameras are shown at once.
   final String? displayLabel;
+
+  /// How the camera frame is fitted inside the available viewport. The
+  /// standalone viewer uses [BoxFit.contain] so portrait feeds are never
+  /// cropped; compact previews retain the existing edge-to-edge treatment.
+  final BoxFit videoFit;
+
+  /// Lets a parent present the endpoint in its own information panel instead
+  /// of duplicating it over the video.
+  final bool showEndpointOverlay;
+
+  /// Lets a parent that already shows the camera name and live status
+  /// elsewhere (e.g. its own app bar) hide the redundant name tag over the
+  /// video, freeing that space so it can never collide with the AI/record/
+  /// fullscreen controls pinned to the top-right.
+  final bool showLabelOverlay;
+
+  /// Lets a parent render the connection/recovery status banner itself
+  /// (e.g. pinned to the bottom of the whole screen) instead of it floating
+  /// over the video. Pair with [onStreamStatusChanged] to receive updates.
+  final bool showStreamProbeOverlay;
+
+  /// Fires whenever the connection/recovery status message changes, so a
+  /// parent that sets [showStreamProbeOverlay] to false can still show it
+  /// somewhere of its own choosing. `null` means there's nothing to show.
+  final void Function(String? message, bool succeeded)? onStreamStatusChanged;
 
   @override
   State<LiveFeedCard> createState() => _LiveFeedCardState();
@@ -125,16 +155,30 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   StreamSubscription<Duration>? _positionSubscription;
 
   static const _streamCachingMs = 2000;
+  // ffmpeg's rtsp demuxer is given this long to sit on a silent socket
+  // (connecting or mid-stream) before it reports a failure on its own — see
+  // the 'stimeout'/'rw_timeout' options below. Every recovery delay that
+  // might tear down and restart a still-connecting-or-playing controller
+  // must stay comfortably longer than this, or the app's own watchdog
+  // preempts ffmpeg's timeout and turns an ordinary slow-but-working
+  // handshake or a V380 burst pause into an endless restart loop.
+  static const _networkSocketTimeout = Duration(seconds: 30);
   static const _slowStartDiagnosticDelay = Duration(seconds: 8);
-  static const _startupRecoveryDelay = Duration(seconds: 14);
-  static const _stallRecoveryDelay = Duration(seconds: 15);
+  static const _startupRecoveryDelay = Duration(seconds: 34);
+  static const _stallRecoveryDelay = Duration(seconds: 34);
   static const _playbackWatchdogInterval = Duration(seconds: 3);
-  static const _playbackProgressTimeout = Duration(seconds: 18);
+  static const _playbackProgressTimeout = Duration(seconds: 34);
   static const _errorRecoveryDelay = Duration(seconds: 5);
   static const _stablePlaybackResetDelay = Duration(minutes: 2);
   static const _inspectionWarmupDelay = Duration(seconds: 3);
   static const _inspectionFailureLimit = 1;
   static const _maxAutomaticRecoveryAttempts = 4;
+  // Once automatic recovery exhausts every playback profile without success,
+  // keep trying at this slower cadence instead of giving up for good — a
+  // camera that comes back online (reboot, Wi-Fi blip) should reconnect on
+  // its own rather than sitting on a dead error message until someone
+  // notices and manually retries.
+  static const _exhaustedRecoveryCooldown = Duration(minutes: 1);
   static const _automaticRecoveryProfiles = [
     _LiveFeedPlaybackProfile.tcp,
     _LiveFeedPlaybackProfile.auto,
@@ -146,6 +190,11 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   bool _diagnosticRunning = false;
   String? _streamProbeStatus;
   bool _streamProbeSucceeded = false;
+  // Tracks what was last handed to widget.onStreamStatusChanged so build()
+  // only notifies the parent when the status actually changed, rather than
+  // on every rebuild.
+  String? _lastNotifiedStreamProbeStatus;
+  bool _lastNotifiedStreamProbeSucceeded = false;
   int _controllerGeneration = 0;
   int _automaticRecoveryAttempt = 0;
   bool _hasPlayedCurrentController = false;
@@ -153,7 +202,10 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   Duration? _lastPlaybackPosition;
   DateTime? _lastPlaybackProgressAt;
   bool _hasObservedPlaybackProgress = false;
-  bool _aiScanningEnabled = false;
+  // Defaults on so live detection actually runs the moment a camera opens,
+  // instead of needing to be discovered and switched on by hand; the
+  // per-camera preference below still lets someone turn it back off.
+  bool _aiScanningEnabled = true;
   bool _inspectionRunning = false;
   int _consecutiveInspectionFailures = 0;
   String? _aiStatusMessage;
@@ -174,7 +226,6 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
 
   bool _showPtzControls = false;
   bool _dataSaverEnabled = false;
-  bool _v380PlaybackRequested = false;
   String? _resolvedStreamUrl;
 
   void _togglePtzControls() {
@@ -190,11 +241,38 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   bool get _isRtspDelivery =>
       videoDeliveryProtocolFor(widget.streamUrl) == VideoDeliveryProtocol.rtsp;
 
+  // The on-device V380 engine's local RTSP server only ever speaks
+  // TCP-interleaved RTP (see V380LocalRtspServer), so playback needs the
+  // same forced-tcp transport as a real RTSP camera, even though it isn't
+  // ONVIF-capable like one (see _supportsOnvifPtz below).
+  bool get _requiresTcpTransport => _isRtspDelivery || _isV380Cloud;
+
+  // Real RTSP cameras default to hardware (MediaCodec) decode via the "tcp"
+  // profile, which real camera RTP streams tolerate fine. The V380 engine's
+  // RTP muxer is a from-scratch, in-app implementation rather than a
+  // battle-tested camera firmware's, so default it to "software" decode
+  // instead - hardware decoders are far less forgiving of any bitstream
+  // imperfection and have been observed to crash the player on it, whereas
+  // ffmpeg's software decoder degrades gracefully. Users can still switch
+  // profiles manually (see _availablePlaybackProfiles).
+  _LiveFeedPlaybackProfile get _defaultPlaybackProfile {
+    if (_isRtspDelivery) return _LiveFeedPlaybackProfile.tcp;
+    if (_isV380Cloud) return _LiveFeedPlaybackProfile.software;
+    return _LiveFeedPlaybackProfile.auto;
+  }
+
   bool get _supportsOnvifPtz =>
       videoDeliveryProtocolFor(widget.streamUrl) == VideoDeliveryProtocol.rtsp;
 
+  // Gated on _requiresTcpTransport, not _isRtspDelivery: that's exactly the
+  // set of protocols _playerOptionsForProfile actually applies rtsp_transport
+  // for, so it's also exactly the set where "TCP" vs "UDP" is a real choice
+  // rather than a no-op. V380 Cloud qualifies (its resolved playback URL is
+  // itself an rtsp:// URL, served by the on-device V380LocalRtspServer),
+  // getting the same four options a local RTSP camera does; HLS/HTTP and
+  // RTMP streams stay restricted since rtsp_transport never applies to them.
   List<_LiveFeedPlaybackProfile> get _availablePlaybackProfiles =>
-      _isRtspDelivery
+      _requiresTcpTransport
       ? _LiveFeedPlaybackProfile.values
       : const [
           _LiveFeedPlaybackProfile.auto,
@@ -215,9 +293,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   @override
   void initState() {
     super.initState();
-    _playbackProfile = _isRtspDelivery
-        ? _LiveFeedPlaybackProfile.tcp
-        : _LiveFeedPlaybackProfile.auto;
+    _playbackProfile = _defaultPlaybackProfile;
     _liveDetections = List.of(widget.detections);
     unawaited(_loadPreviewPreferences());
   }
@@ -231,22 +307,17 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     if (!mounted) return;
     final autoPlay = prefs.getBool('roostify.app.autoplay') ?? true;
     final dataSaver = prefs.getBool('roostify.app.data_saver') ?? false;
-    final aiScanningEnabled = prefs.getBool(_aiScanningPreferenceKey) ?? false;
+    final aiScanningEnabled = prefs.getBool(_aiScanningPreferenceKey) ?? true;
     setState(() {
       _dataSaverEnabled = dataSaver;
       _aiScanningEnabled = aiScanningEnabled;
-      _v380PlaybackRequested = autoPlay && !dataSaver;
     });
-    if (autoPlay && !dataSaver && _supportsFijkPlayer && !_isV380Cloud) {
+    if (autoPlay && !dataSaver && _supportsFijkPlayer) {
       _replaceController();
     }
   }
 
   void _startManually() {
-    if (_isV380Cloud) {
-      setState(() => _v380PlaybackRequested = true);
-      return;
-    }
     if (_controller != null || !_supportsFijkPlayer) return;
     setState(() => _replaceController());
   }
@@ -261,14 +332,9 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     if (oldWidget.streamUrl != widget.streamUrl &&
         _supportsFijkPlayer &&
         _controller != null) {
-      _playbackProfile = _isRtspDelivery
-          ? _LiveFeedPlaybackProfile.tcp
-          : _LiveFeedPlaybackProfile.auto;
+      _playbackProfile = _defaultPlaybackProfile;
       _resolvedStreamUrl = null;
       _replaceController(resetRecovery: true);
-    }
-    if (oldWidget.streamUrl != widget.streamUrl) {
-      _v380PlaybackRequested = false;
     }
   }
 
@@ -397,16 +463,18 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
         (_dataSaverEnabled ? _streamCachingMs ~/ 2 : _streamCachingMs) * 1000,
       )
       // V380-class cameras can pause between bursts for longer than five
-      // seconds. Allow a genuine 30-second network silence before failing.
-      ..setFormatOption('stimeout', 30000000)
-      ..setFormatOption('rw_timeout', 30000000)
+      // seconds. Allow a genuine network silence before failing — see
+      // _networkSocketTimeout for why every app-level recovery delay must
+      // stay longer than this.
+      ..setFormatOption('stimeout', _networkSocketTimeout.inMicroseconds)
+      ..setFormatOption('rw_timeout', _networkSocketTimeout.inMicroseconds)
       ..setFormatOption('reconnect', 1);
 
     if (_aiScanningEnabled) {
       options.setHostOption('enable-snapshot', 1);
     }
 
-    if (_isRtspDelivery) {
+    if (_requiresTcpTransport) {
       switch (_playbackProfile) {
         case _LiveFeedPlaybackProfile.tcp:
         case _LiveFeedPlaybackProfile.software:
@@ -796,11 +864,21 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     _startStreamProbe();
 
     if (_automaticRecoveryAttempt >= _maxAutomaticRecoveryAttempts) {
+      // Don't sit on a dead error forever — a camera that reboots or a
+      // Wi-Fi blip that clears should reconnect on its own. Reset the
+      // attempt budget and run the full profile cycle again after a longer
+      // cooldown instead of requiring the viewer to notice and retry by
+      // hand.
+      _automaticRecoveryAttempt = 0;
       setState(() {
         _streamProbeStatus =
-            'Video is still not playing after automatic retries. Check the edge gateway, video server, and playback URL.';
+            'Video is still not playing after automatic retries. Check the edge gateway, video server, and playback URL — will keep retrying in the background.';
         _streamProbeSucceeded = false;
       });
+      _schedulePlaybackRecovery(
+        _controllerGeneration,
+        delay: _exhaustedRecoveryCooldown,
+      );
       return;
     }
 
@@ -1416,68 +1494,11 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   }
 
   void _enterFullScreen() {
-    if (_isV380Cloud && _v380PlaybackRequested) {
-      unawaited(
-        Navigator.of(context).push<void>(
-          MaterialPageRoute(
-            builder: (context) => Scaffold(
-              backgroundColor: Colors.black,
-              body: SafeArea(
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    WhepVideoView(
-                      sourceUrl: widget.streamUrl,
-                      fit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
-                    ),
-                    Positioned(
-                      top: 12,
-                      right: 12,
-                      child: _LiveFeedIconButton(
-                        tooltip: 'Exit full screen',
-                        icon: Icons.fullscreen_exit,
-                        onPressed: () => Navigator.of(context).pop(),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-      return;
-    }
     final controller = _controller;
     if (!_supportsFijkPlayer || controller == null) {
       return;
     }
     controller.enterFullScreen();
-  }
-
-  Rect _videoRectForViewport(Size viewport, Size? videoSize, BoxFit fit) {
-    if (videoSize == null ||
-        videoSize.isEmpty ||
-        viewport.isEmpty ||
-        !viewport.width.isFinite ||
-        !viewport.height.isFinite) {
-      return Offset.zero & viewport;
-    }
-
-    final scale = fit == BoxFit.contain
-        ? math.min(
-            viewport.width / videoSize.width,
-            viewport.height / videoSize.height,
-          )
-        : math.max(
-            viewport.width / videoSize.width,
-            viewport.height / videoSize.height,
-          );
-    final renderedSize = Size(
-      videoSize.width * scale,
-      videoSize.height * scale,
-    );
-    return Alignment.center.inscribe(renderedSize, Offset.zero & viewport);
   }
 
   Widget _detectionOverlay(Rect videoRect) {
@@ -1528,55 +1549,72 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
         children: [
           if (_liveDetections.isNotEmpty) _detectionOverlay(texturePos),
           Positioned(
+            // This panel only ever exists in the fully immersive fullscreen
+            // route (system status/nav bars are hidden — see
+            // _pushFullScreenWidget's `overlays: []`), so there's no real
+            // system chrome left to dodge here — anchor straight to the
+            // physical edges.
             top: 12,
             left: 12,
             right: 12,
-            child: SafeArea(
-              bottom: false,
-              child: Row(
-                children: [
-                  if (!compactControls)
-                    SeverityTag(
+            // mainAxisAlignment.spaceBetween, not a Spacer(), is what
+            // actually guarantees the button cluster sits flush against the
+            // right edge here. A Spacer() next to a same-flex Flexible(label)
+            // splits the row's free space 50/50 between them up front; the
+            // label (loose fit) then renders at its own smaller intrinsic
+            // width and leaves its unused half of that split as dead space
+            // in front of the buttons instead of handing it to the Spacer —
+            // confirmed on-device: the row itself measured the full expected
+            // width, but the button cluster stopped ~250px short of it, and
+            // that gap was inert to taps. Grouping the buttons into their
+            // own unflexed Row and letting spaceBetween place the two groups
+            // avoids that flex split entirely.
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                if (!compactControls)
+                  Flexible(
+                    child: SeverityTag(
                       label: widget.displayLabel ?? 'LIVE CCTV',
                       color: const Color(0xFF43E39C),
-                    )
-                  else
-                    const Icon(
-                      Icons.circle,
-                      color: Color(0xFF43E39C),
-                      size: 11,
                     ),
-                  const Spacer(),
-                  _LiveFeedAiToggle(
-                    enabled: _aiScanningEnabled,
-                    compact: compactControls,
-                    onPressed: _toggleAiScanning,
-                  ),
-                  const SizedBox(width: 8),
-                  _LiveFeedRecordButton(
-                    isRecording: _recordingRequested,
-                    busy: _recordingBusy,
-                    onPressed: _toggleRecording,
-                  ),
-                  if (_supportsOnvifPtz) ...[
+                  )
+                else
+                  const Icon(Icons.circle, color: Color(0xFF43E39C), size: 11),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _LiveFeedAiToggle(
+                      enabled: _aiScanningEnabled,
+                      compact: compactControls,
+                      onPressed: _toggleAiScanning,
+                    ),
                     const SizedBox(width: 8),
+                    _LiveFeedRecordButton(
+                      isRecording: _recordingRequested,
+                      busy: _recordingBusy,
+                      onPressed: _toggleRecording,
+                    ),
+                    if (_supportsOnvifPtz) ...[
+                      const SizedBox(width: 8),
+                      _LiveFeedIconButton(
+                        tooltip: _showPtzControls
+                            ? 'Hide PTZ controls'
+                            : 'Show PTZ controls',
+                        icon: _showPtzControls
+                            ? Icons.control_camera
+                            : Icons.control_camera_outlined,
+                        onPressed: _togglePtzControls,
+                      ),
+                    ],
                     _LiveFeedIconButton(
-                      tooltip: _showPtzControls
-                          ? 'Hide PTZ controls'
-                          : 'Show PTZ controls',
-                      icon: _showPtzControls
-                          ? Icons.control_camera
-                          : Icons.control_camera_outlined,
-                      onPressed: _togglePtzControls,
+                      tooltip: 'Exit full screen',
+                      icon: Icons.fullscreen_exit,
+                      onPressed: player.exitFullScreen,
                     ),
                   ],
-                  _LiveFeedIconButton(
-                    tooltip: 'Exit full screen',
-                    icon: Icons.fullscreen_exit,
-                    onPressed: player.exitFullScreen,
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
           if (_showPtzControls && _supportsOnvifPtz)
@@ -1682,8 +1720,25 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
     super.dispose();
   }
 
+  void _notifyStreamStatusIfChanged() {
+    final callback = widget.onStreamStatusChanged;
+    if (callback == null) {
+      return;
+    }
+    if (_streamProbeStatus == _lastNotifiedStreamProbeStatus &&
+        _streamProbeSucceeded == _lastNotifiedStreamProbeSucceeded) {
+      return;
+    }
+    _lastNotifiedStreamProbeStatus = _streamProbeStatus;
+    _lastNotifiedStreamProbeSucceeded = _streamProbeSucceeded;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      callback(_streamProbeStatus, _streamProbeSucceeded);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    _notifyStreamStatusIfChanged();
     final controller = _controller;
     final borderRadius = widget.expand
         ? BorderRadius.zero
@@ -1705,17 +1760,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
               Positioned.fill(
                 child: ClipRRect(
                   borderRadius: borderRadius,
-                  child: _isV380Cloud && _v380PlaybackRequested
-                      ? WhepVideoView(
-                          sourceUrl: widget.streamUrl,
-                          onConnectionChanged: widget.onConnectionChanged,
-                        )
-                      : _isV380Cloud
-                      ? _LiveFeedManualStartState(
-                          dataSaver: _dataSaverEnabled,
-                          onTap: _startManually,
-                        )
-                      : _supportsFijkPlayer && controller != null
+                  child: _supportsFijkPlayer && controller != null
                       ? ValueListenableBuilder<FijkValue>(
                           valueListenable: controller,
                           builder: (context, value, _) {
@@ -1726,7 +1771,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                             final videoRect = _videoRectForViewport(
                               viewport,
                               value.size,
-                              BoxFit.cover,
+                              widget.videoFit,
                             );
                             return Stack(
                               fit: StackFit.expand,
@@ -1737,7 +1782,9 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                                   ),
                                   child: FijkView(
                                     player: controller,
-                                    fit: FijkFit.cover,
+                                    fit: widget.videoFit == BoxFit.contain
+                                        ? FijkFit.contain
+                                        : FijkFit.cover,
                                     fsFit: FijkFit.contain,
                                     fs: true,
                                     color: Colors.black,
@@ -1769,7 +1816,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                                 IgnorePointer(
                                   child: DecoratedBox(
                                     decoration: BoxDecoration(
-                                      borderRadius: BorderRadius.circular(24),
+                                      borderRadius: borderRadius,
                                       border: Border.all(
                                         color: Colors.white.withValues(
                                           alpha: 0.16,
@@ -1806,103 +1853,117 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                 ),
               ),
               Positioned(
-                top: 18,
-                left: 18,
-                child: SeverityTag(
-                  label: widget.displayLabel ?? 'LIVE CCTV',
-                  color: const Color(0xFF43E39C),
+                top: 14,
+                left: 14,
+                right: 14,
+                // mainAxisAlignment.spaceBetween (not a Spacer()) is what
+                // actually guarantees the control cluster sits flush against
+                // the right edge: a Spacer() next to a same-flex
+                // Flexible(label) splits the row's free space 50/50 between
+                // them up front, and the label — rendering at its own
+                // smaller intrinsic width — leaves its unused half as dead,
+                // untappable space in front of the controls instead of
+                // handing it back to the Spacer (confirmed on the
+                // fullscreen panel below, which had this exact bug).
+                // Grouping the controls into their own unflexed Row and
+                // letting spaceBetween place the two groups avoids the flex
+                // split entirely.
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    if (widget.showLabelOverlay)
+                      Flexible(
+                        child: SeverityTag(
+                          label: widget.displayLabel ?? 'LIVE CCTV',
+                          color: const Color(0xFF43E39C),
+                        ),
+                      )
+                    else
+                      const SizedBox.shrink(),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _LiveFeedAiToggle(
+                          enabled: _aiScanningEnabled,
+                          compact: true,
+                          onPressed: _supportsFijkPlayer && controller != null
+                              ? _toggleAiScanning
+                              : null,
+                        ),
+                        const SizedBox(width: 8),
+                        _LiveFeedRecordButton(
+                          isRecording: _recordingRequested,
+                          busy: _recordingBusy,
+                          onPressed: _supportsFijkPlayer && controller != null
+                              ? _toggleRecording
+                              : null,
+                        ),
+                        const SizedBox(width: 8),
+                        _LiveFeedIconButton(
+                          tooltip: 'Full screen',
+                          icon: Icons.fullscreen,
+                          onPressed: _supportsFijkPlayer && controller != null
+                              ? _enterFullScreen
+                              : null,
+                        ),
+                        const SizedBox(width: 8),
+                        _LiveFeedPlaybackMenu(
+                          selectedProfile: _playbackProfile,
+                          profiles: _availablePlaybackProfiles,
+                          onSelected: _selectPlaybackProfile,
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
               if (_recordingRequested)
                 Positioned(
-                  top: 52,
-                  left: 18,
+                  top: 54,
+                  left: 14,
                   child: _RecordingIndicator(
                     label: _formatRecordingElapsed(_recordingElapsed),
                     paused: _recordingPausedForDisconnect,
                   ),
                 ),
-              Positioned(
-                top: 12,
-                right: 12,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _LiveFeedAiToggle(
-                      enabled: _aiScanningEnabled,
-                      compact: true,
-                      onPressed:
-                          !_isV380Cloud &&
-                              _supportsFijkPlayer &&
-                              controller != null
-                          ? _toggleAiScanning
-                          : null,
-                    ),
-                    const SizedBox(width: 8),
-                    _LiveFeedRecordButton(
-                      isRecording: _recordingRequested,
-                      busy: _recordingBusy,
-                      onPressed:
-                          !_isV380Cloud &&
-                              _supportsFijkPlayer &&
-                              controller != null
-                          ? _toggleRecording
-                          : null,
-                    ),
-                    const SizedBox(width: 8),
-                    _LiveFeedIconButton(
-                      tooltip: 'Full screen',
-                      icon: Icons.fullscreen,
-                      onPressed:
-                          (_isV380Cloud && _v380PlaybackRequested) ||
-                              (_supportsFijkPlayer && controller != null)
-                          ? _enterFullScreen
-                          : null,
-                    ),
-                    if (!_isV380Cloud) ...[
-                      const SizedBox(width: 8),
-                      _LiveFeedPlaybackMenu(
-                        selectedProfile: _playbackProfile,
-                        profiles: _availablePlaybackProfiles,
-                        onSelected: _selectPlaybackProfile,
+              if (widget.showEndpointOverlay)
+                Positioned(
+                  left: 18,
+                  right: 18,
+                  bottom: 18,
+                  child: Align(
+                    alignment: Alignment.bottomLeft,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
                       ),
-                    ],
-                  ],
-                ),
-              ),
-              Positioned(
-                left: 18,
-                right: 18,
-                bottom: 18,
-                child: Align(
-                  alignment: Alignment.bottomLeft,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.45),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Text(
-                      safePlaybackEndpointLabel(widget.streamUrl),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.45),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Text(
+                        safePlaybackEndpointLabel(widget.streamUrl),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-              if (_streamProbeStatus case final status?)
+              if (widget.showStreamProbeOverlay && _streamProbeStatus != null)
                 Positioned(
                   left: 18,
                   right: 18,
-                  bottom: 58,
+                  // Sits just above the endpoint overlay when that's shown;
+                  // otherwise it can drop all the way to the bottom edge
+                  // instead of floating mid-frame over the placeholder text.
+                  bottom: widget.showEndpointOverlay ? 58 : 18,
                   child: Align(
                     alignment: Alignment.bottomLeft,
                     child: Container(
@@ -1917,7 +1978,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
                         borderRadius: BorderRadius.circular(14),
                       ),
                       child: Text(
-                        status,
+                        _streamProbeStatus!,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(

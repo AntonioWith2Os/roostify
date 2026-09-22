@@ -1,7 +1,7 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:coolapp/main.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -58,117 +58,44 @@ void main() {
     expect(parsed.password, 'secret:@ value');
   });
 
-  test('new V380 Cloud sources keep camera credentials on the backend', () {
+  test('a V380 Cloud source without credentials fails validation', () {
+    // There's no backend anymore to fall back to a configured default
+    // username/password - the app connects with exactly what's entered.
     final source = buildV380CloudCameraUri(deviceId: '12345678');
 
     expect(source, 'v380://12345678');
-    expect(v380CloudCameraValidationError(source), isNull);
-    final parsed = V380CloudCameraConfig.parse(source);
-    expect(parsed.deviceId, 12345678);
-    expect(parsed.username, isEmpty);
-    expect(parsed.password, isEmpty);
+    expect(v380CloudCameraValidationError(source), contains('username'));
   });
 
-  test('V380 backend status uses the API host for loopback RTSP URLs', () {
-    final status = V380BackendCameraStatus.fromJson({
-      'cameraId': '12345678',
-      'status': 'online',
-      'rtspUrl': 'rtsp://localhost:8554/camera/12345678',
-      'webRtcUrl': 'https://stream.example.com/camera/12345678/whep',
-      'lastError': null,
-    });
+  test('a V380 Cloud source requires a username but allows a blank password', () {
+    // Some V380 cameras are configured with no password at all.
+    final blankPassword = buildV380CloudCameraUri(
+      deviceId: '12345678',
+      username: 'admin',
+    );
+    expect(v380CloudCameraValidationError(blankPassword), isNull);
+    expect(V380CloudCameraConfig.parse(blankPassword).password, '');
 
-    expect(
-      status.playbackUrl(Uri.parse('https://decoder.example.com:8080')),
-      'rtsp://decoder.example.com:8554/camera/12345678',
+    final complete = buildV380CloudCameraUri(
+      deviceId: '12345678',
+      username: 'admin',
+      password: 'camera-password',
     );
-    expect(status.userMessage, contains('is streaming'));
-    expect(
-      status.webRtcPlaybackUrl(Uri.parse('https://api.example.com')),
-      'https://stream.example.com/camera/12345678/whep',
-    );
+    expect(v380CloudCameraValidationError(complete), isNull);
   });
 
-  test('V380 WebRTC loopback URL keeps the MediaMTX port', () {
-    final status = V380BackendCameraStatus.fromJson({
-      'cameraId': '12345678',
-      'status': 'online',
-      'rtspUrl': null,
-      'webRtcUrl': 'http://localhost:8889/camera/12345678/whep',
-      'lastError': null,
-    });
+  test('the V380 cloud dispatch sign matches the reference algorithm', () {
+    // Mirrors DispatchRelayServer.ComputeSha1Hash in
+    // cs_tmp/V380Decoder/src/DispatchRelayServer.cs: sha1(baseString), lowercase hex.
+    const deviceId = 12345678;
+    const platform = 10001;
+    const timestamp = 1700000000;
+    final baseString = 'dev_id=$deviceId&platform=$platform&timestamp=${timestamp}hsdata2022';
+    final sign = sha1.convert(utf8.encode(baseString)).toString();
 
-    expect(
-      status.webRtcPlaybackUrl(Uri.parse('http://10.0.2.2:8080')),
-      'http://10.0.2.2:8889/camera/12345678/whep',
-    );
+    expect(sign, hasLength(40));
+    expect(sign, equals(sign.toLowerCase()));
   });
-
-  test(
-    'V380 backend client connects, checks status, and disconnects',
-    () async {
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      addTearDown(() => server.close(force: true));
-      final requests =
-          <({String method, String path, String apiKey, String body})>[];
-      server.listen((request) async {
-        final body = await utf8.decoder.bind(request).join();
-        requests.add((
-          method: request.method,
-          path: request.uri.path,
-          apiKey: request.headers.value('X-API-Key') ?? '',
-          body: body,
-        ));
-        if (request.uri.path.endsWith('/disconnect')) {
-          request.response.statusCode = HttpStatus.noContent;
-        } else {
-          request.response
-            ..statusCode = request.method == 'POST'
-                ? HttpStatus.accepted
-                : HttpStatus.ok
-            ..headers.contentType = ContentType.json
-            ..write(
-              jsonEncode({
-                'cameraId': '12345678',
-                'status': request.method == 'POST' ? 'connecting' : 'online',
-                'rtspUrl': 'rtsp://127.0.0.1:8554/camera/12345678',
-                'webRtcUrl': 'http://127.0.0.1:8889/camera/12345678/whep',
-                'lastError': null,
-              }),
-            );
-        }
-        await request.response.close();
-      });
-
-      final client = V380BackendClient(
-        baseUrl: 'http://127.0.0.1:${server.port}',
-        apiKey: 'test-key',
-      );
-      const config = V380CloudCameraConfig(deviceId: 12345678);
-
-      final realHttp = _RealHttpOverrides();
-      late V380BackendCameraStatus connected;
-      late V380BackendCameraStatus current;
-      await HttpOverrides.runZoned(() async {
-        connected = await client.connectCamera(config);
-        current = await client.cameraStatus(config.deviceId);
-        await client.disconnectCamera(config.deviceId);
-      }, createHttpClient: realHttp.createHttpClient);
-
-      expect(connected.status, 'connecting');
-      expect(current.status, 'online');
-      expect(requests.map((request) => '${request.method} ${request.path}'), [
-        'POST /api/cameras/connect',
-        'GET /api/cameras/12345678/status',
-        'POST /api/cameras/12345678/disconnect',
-      ]);
-      expect(requests.every((request) => request.apiKey == 'test-key'), isTrue);
-      expect(jsonDecode(requests.first.body), {
-        'cameraId': '12345678',
-        'source': 'cloud',
-      });
-    },
-  );
 
   test('controller accepts a V380 Cloud device source', () {
     SharedPreferences.setMockInitialValues({});
@@ -234,31 +161,15 @@ void main() {
     );
 
     expect(find.text('Manage Cameras'), findsOneWidget);
-    expect(find.text('Cloud playback URL'), findsOneWidget);
-    expect(find.text('Add Cloud Stream'), findsOneWidget);
     expect(find.text('Scan local network'), findsOneWidget);
-    expect(find.text('Port-forwarded camera'), findsOneWidget);
-    expect(find.text('V380 Cloud camera'), findsOneWidget);
+    // V380 Cloud camera adding is hidden for now (_v380CloudCameraAddingEnabled
+    // in app_constants.dart) while that path's reliability against real
+    // cameras is still being worked out - see that constant's doc comment.
+    expect(find.text('V380 Cloud camera'), findsNothing);
 
-    await tester.tap(find.text('V380 Cloud camera'));
-    await tester.pumpAndSettle();
-    expect(find.text('V380 device ID'), findsOneWidget);
-    expect(find.text('Connect V380 Camera'), findsOneWidget);
-    expect(find.text('Camera username'), findsNothing);
-    expect(find.text('Camera password'), findsNothing);
-    await tester.tap(find.text('V380 Cloud camera'));
-    await tester.pumpAndSettle();
-
-    await tester.ensureVisible(find.text('Scan local network'));
     await tester.tap(find.text('Scan local network'));
     await tester.pumpAndSettle();
     expect(find.text('Scan Cameras'), findsOneWidget);
-
-    await tester.ensureVisible(find.text('Port-forwarded camera'));
-    await tester.tap(find.text('Port-forwarded camera'));
-    await tester.pumpAndSettle();
-    expect(find.text('Public IP or hostname'), findsOneWidget);
-    expect(find.text('Test & Find Stream'), findsOneWidget);
   });
 
   test('controller accepts a direct local RTSP camera with credentials', () {
@@ -298,5 +209,3 @@ void main() {
     expect(user.liveCctvStreams.single.streamUrl, contains(':10554/live'));
   });
 }
-
-class _RealHttpOverrides extends HttpOverrides {}

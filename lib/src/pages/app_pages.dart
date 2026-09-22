@@ -13,12 +13,25 @@ class _StartupPageState extends State<StartupPage> {
   static const _fallbackSplashAsset = 'assets/startup.jpeg';
   static const _splashVideoAsset = 'asset:///assets/splash.mp4';
   static const _staticFallbackDuration = Duration(milliseconds: 3600);
-  static const _videoFallbackDuration = Duration(seconds: 5);
+  // Only a safety net for "the video never actually started rendering" (a
+  // missing/corrupt asset, an unsupported codec, a decoder failure). This
+  // timer is cancelled the moment real frames are on screen, so it can never
+  // race against — and cut short — an intro that's genuinely playing; a
+  // slow device just needs more of this window to get the player through
+  // asset load + native init + first-frame decode before anything is on
+  // screen, not less time to actually watch the video once it starts.
+  static const _videoStartupTimeout = Duration(seconds: 5);
+  // Fallback once playback has started but the player never reports a
+  // duration (so the precise runtime-based timer below can't be set up).
+  // Comfortably longer than the bundled splash clip's own ~3s runtime so it
+  // never trips during an ordinary play-through.
+  static const _videoStuckTimeout = Duration(seconds: 12);
 
   FijkPlayer? _player;
   Timer? _fallbackTimer;
   bool _videoFailed = false;
   bool _finished = false;
+  bool _videoStarted = false;
 
   bool get _supportsVideoSplash {
     if (kIsWeb) {
@@ -36,7 +49,7 @@ class _StartupPageState extends State<StartupPage> {
     super.initState();
     final supportsVideoSplash = _supportsVideoSplash;
     _fallbackTimer = Timer(
-      supportsVideoSplash ? _videoFallbackDuration : _staticFallbackDuration,
+      supportsVideoSplash ? _videoStartupTimeout : _staticFallbackDuration,
       _finish,
     );
 
@@ -64,6 +77,31 @@ class _StartupPageState extends State<StartupPage> {
     if (player == null || !mounted) return;
     if (player.value.completed) {
       _finish();
+      return;
+    }
+    if (!_videoStarted && player.value.videoRenderStart) {
+      _videoStarted = true;
+      // The intro is genuinely on screen now — stop racing it against the
+      // startup-failure timer.
+      _fallbackTimer?.cancel();
+
+      // Finish right when the clip's own reported runtime elapses instead
+      // of only waiting on the native `completed` event: with looping
+      // enabled (setLoop above), that event doesn't reliably fire the
+      // moment the first play-through ends on every device, which is what
+      // made the transition to the dashboard either cut the intro short
+      // (the startup-failure timer above racing an intro that just hadn't
+      // reported "rendering" yet) or stall for the full stuck-playback
+      // window below. The reported duration is known as soon as the player
+      // prepares, so this reliably finishes exactly once the intro has
+      // actually played out.
+      final duration = player.value.duration;
+      _fallbackTimer = Timer(
+        duration > Duration.zero
+            ? duration + const Duration(milliseconds: 150)
+            : _videoStuckTimeout,
+        _finish,
+      );
     }
   }
 
@@ -152,8 +190,9 @@ class LandingPage extends StatelessWidget {
                         children: [
                           _LandingLoginPanel(
                             onUserTap: () => _openLogin(context, UserRole.user),
-                            onAdminTap: () =>
-                                _openLogin(context, UserRole.admin),
+                            onAdminTap: _adminLoginEnabled
+                                ? () => _openLogin(context, UserRole.admin)
+                                : null,
                           ),
                           const SizedBox(height: 24),
                           GridView.count(
@@ -223,14 +262,19 @@ class _LoginPageState extends State<LoginPage> {
   final _passwordController = TextEditingController();
   late UserRole _selectedRole;
   String? _error;
-  bool _signingInWithGoogle = false;
   bool _signingInWithPassword = false;
   bool _passwordVisible = false;
 
   @override
   void initState() {
     super.initState();
-    _selectedRole = widget.expectedRole;
+    // Ignore an admin expectedRole (e.g. logging out of an admin session
+    // reopens LoginPage with expectedRole: session.user.role) when admin
+    // login is disabled for this build - there must be no way to land on an
+    // admin-mode login screen at all, not just no button that reaches one.
+    _selectedRole = !_adminLoginEnabled && widget.expectedRole == UserRole.admin
+        ? UserRole.user
+        : widget.expectedRole;
   }
 
   @override
@@ -268,30 +312,6 @@ class _LoginPageState extends State<LoginPage> {
       setState(() {
         _error = widget.controller.lastError;
         _signingInWithPassword = false;
-      });
-      return;
-    }
-
-    _openSession(session);
-  }
-
-  Future<void> _signInWithGoogle() async {
-    // Disable the button while the native Google account chooser is open.
-    setState(() {
-      _error = null;
-      _signingInWithGoogle = true;
-    });
-
-    final session = await widget.controller.signInWithGoogle(
-      expectedRole: _selectedRole,
-    );
-
-    if (!mounted) return;
-
-    if (session == null) {
-      setState(() {
-        _error = widget.controller.lastError;
-        _signingInWithGoogle = false;
       });
       return;
     }
@@ -650,85 +670,48 @@ class _LoginPageState extends State<LoginPage> {
                                           ),
                                         ),
                                       ),
-                                      const SizedBox(height: 10),
-                                      const _LoginDivider(),
-                                      const SizedBox(height: 10),
-                                      SizedBox(
-                                        height: 52,
-                                        child: FilledButton.icon(
-                                          style: FilledButton.styleFrom(
-                                            backgroundColor: Colors.white,
-                                            foregroundColor: const Color(
-                                              0xFF141820,
+                                      if (_adminLoginEnabled) ...[
+                                        const SizedBox(height: 10),
+                                        const _LoginDivider(),
+                                        const SizedBox(height: 10),
+                                        SizedBox(
+                                          height: 52,
+                                          child: OutlinedButton.icon(
+                                            style: OutlinedButton.styleFrom(
+                                              foregroundColor: _loginOrange,
+                                              side: BorderSide(
+                                                color: isAdmin
+                                                    ? Colors.white
+                                                    : _loginOrange,
+                                                width: 1.3,
+                                              ),
+                                              shape: const StadiumBorder(),
                                             ),
-                                            shape: const StadiumBorder(),
-                                          ),
-                                          onPressed: _signingInWithGoogle
-                                              ? null
-                                              : _signInWithGoogle,
-                                          icon: _signingInWithGoogle
-                                              ? const SizedBox.square(
-                                                  dimension: 19,
-                                                  child:
-                                                      CircularProgressIndicator(
-                                                        strokeWidth: 2,
-                                                        color: Color(
-                                                          0xFF4285F4,
-                                                        ),
-                                                      ),
-                                                )
-                                              : const _GoogleMark(size: 22),
-                                          label: Text(
-                                            _signingInWithGoogle
-                                                ? l10n.loginGoogleOpening
-                                                : l10n.loginGoogleUser,
-                                            style: const TextStyle(
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.w800,
+                                            onPressed: () {
+                                              setState(() {
+                                                _selectedRole = isAdmin
+                                                    ? UserRole.user
+                                                    : UserRole.admin;
+                                                _error = null;
+                                              });
+                                            },
+                                            icon: Icon(
+                                              isAdmin
+                                                  ? Icons.person_outline_rounded
+                                                  : Icons.shield_outlined,
                                             ),
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(height: 10),
-                                      const _LoginDivider(),
-                                      const SizedBox(height: 10),
-                                      SizedBox(
-                                        height: 52,
-                                        child: OutlinedButton.icon(
-                                          style: OutlinedButton.styleFrom(
-                                            foregroundColor: _loginOrange,
-                                            side: BorderSide(
-                                              color: isAdmin
-                                                  ? Colors.white
-                                                  : _loginOrange,
-                                              width: 1.3,
-                                            ),
-                                            shape: const StadiumBorder(),
-                                          ),
-                                          onPressed: () {
-                                            setState(() {
-                                              _selectedRole = isAdmin
-                                                  ? UserRole.user
-                                                  : UserRole.admin;
-                                              _error = null;
-                                            });
-                                          },
-                                          icon: Icon(
-                                            isAdmin
-                                                ? Icons.person_outline_rounded
-                                                : Icons.shield_outlined,
-                                          ),
-                                          label: Text(
-                                            isAdmin
-                                                ? 'User Access'
-                                                : 'Admin Access',
-                                            style: const TextStyle(
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.w900,
+                                            label: Text(
+                                              isAdmin
+                                                  ? 'User Access'
+                                                  : 'Admin Access',
+                                              style: const TextStyle(
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.w900,
+                                              ),
                                             ),
                                           ),
                                         ),
-                                      ),
+                                      ],
                                       const SizedBox(height: 14),
                                       Wrap(
                                         alignment: WrapAlignment.center,
@@ -1249,6 +1232,30 @@ class _SupportChatBubble extends StatelessWidget {
   }
 }
 
+/// Whether one sensor gauge (DHT11 or MQ135) should render as available, and
+/// what to say when it isn't. Distinguishes the whole farm being offline
+/// (no Wi-Fi data at all) from just this one sensor misbehaving while the
+/// ESP32 is otherwise online and posting.
+(bool available, String status) _sensorAvailability({
+  required bool sensorOnline,
+  required bool subSensorAvailable,
+  required bool everConfigured,
+  required String sensorLabel,
+}) {
+  if (!sensorOnline) {
+    return (
+      false,
+      everConfigured
+          ? 'Sensor offline — check its Wi-Fi connection.'
+          : 'No sensor data yet — set up the sensor\'s Wi-Fi.',
+    );
+  }
+  if (!subSensorAvailable) {
+    return (false, '$sensorLabel is not responding — check the wiring.');
+  }
+  return (true, '');
+}
+
 class UserDashboardPage extends StatelessWidget {
   const UserDashboardPage({
     super.key,
@@ -1263,7 +1270,7 @@ class UserDashboardPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final user = controller.userByUsername(session.user.username)!;
     final monitor = user.monitor;
-    final activeWarningCount = monitor.alerts
+    final activeWarningCount = monitor.activeAlerts
         .where((alert) => alert.severity != AlertSeverity.info)
         .length;
     unawaited(controller.maybeShowDailySummary(user.username));
@@ -1306,6 +1313,24 @@ class UserDashboardPage extends StatelessWidget {
             ],
           ),
           actions: [
+            IconButton(
+              tooltip: 'Sensor reading log',
+              icon: const Icon(Icons.history_rounded),
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => SensorReadingLogPage(
+                      controller: controller,
+                      readingLogOf: () =>
+                          controller
+                              .userByUsername(user.username)
+                              ?.sensorReadingLog ??
+                          const [],
+                    ),
+                  ),
+                );
+              },
+            ),
             Padding(
               padding: const EdgeInsets.only(right: 12),
               child: Semantics(
@@ -1322,7 +1347,15 @@ class UserDashboardPage extends StatelessWidget {
                     onPressed: () {
                       Navigator.of(context).push(
                         MaterialPageRoute<void>(
-                          builder: (_) => AlertsPage(alerts: monitor.alerts),
+                          builder: (_) => AlertsPage(
+                            controller: controller,
+                            alertsOf: () =>
+                                controller
+                                    .userByUsername(user.username)
+                                    ?.monitor
+                                    .activeAlerts ??
+                                const [],
+                          ),
                         ),
                       );
                     },
@@ -1334,21 +1367,21 @@ class UserDashboardPage extends StatelessWidget {
         ),
         body: Builder(
           builder: (context) {
-            final temperatureAlerts = monitor.alerts
+            final temperatureAlerts = monitor.activeAlerts
                 .where(
                   (alert) =>
                       alert.category == 'Temperature' ||
                       alert.category == 'Environment',
                 )
                 .toList();
-            final humidityAlerts = monitor.alerts
+            final humidityAlerts = monitor.activeAlerts
                 .where(
                   (alert) =>
                       alert.category == 'Humidity' ||
                       alert.category == 'Environment',
                 )
                 .toList();
-            final airAlerts = monitor.alerts
+            final airAlerts = monitor.activeAlerts
                 .where(
                   (alert) =>
                       alert.category == 'Air Pollution' ||
@@ -1358,9 +1391,20 @@ class UserDashboardPage extends StatelessWidget {
             // Count each alert once even when it shows on two cards (the
             // combined heat-and-humidity warning appears on both).
             final activeWarnings = activeWarningCount;
-            final sensorOnline =
-                controller.sensorConnectionStatus ==
-                Esp32SensorConnectionStatus.connected;
+            final sensorOnline = monitor.isLive;
+            final everConfigured = monitor.lastUpdatedAt != null;
+            final (dhtOk, dhtStatus) = _sensorAvailability(
+              sensorOnline: sensorOnline,
+              subSensorAvailable: monitor.dhtAvailable,
+              everConfigured: everConfigured,
+              sensorLabel: 'DHT11 sensor',
+            );
+            final (airOk, airPpmStatus) = _sensorAvailability(
+              sensorOnline: sensorOnline,
+              subSensorAvailable: monitor.airAvailable,
+              everConfigured: everConfigured,
+              sensorLabel: 'MQ135 sensor',
+            );
 
             return SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 88),
@@ -1368,7 +1412,9 @@ class UserDashboardPage extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   _FarmOverviewCard(
-                    cctvCount: user.liveCctvStreams.length,
+                    controller: controller,
+                    username: user.username,
+                    cctvStreams: user.liveCctvStreams,
                     alertCount: activeWarnings,
                     sensorOnline: sensorOnline,
                   ),
@@ -1392,50 +1438,49 @@ class UserDashboardPage extends StatelessWidget {
                         physics: const NeverScrollableScrollPhysics(),
                         crossAxisSpacing: 10,
                         mainAxisSpacing: 10,
-                        childAspectRatio: constraints.maxWidth < 420 ? .44 : .6,
+                        childAspectRatio: constraints.maxWidth < 420
+                            ? .38
+                            : .52,
                         children: [
                           CircularSensorGauge(
                             title: 'Temperature',
-                            value: monitor.dhtAvailable
+                            value: dhtOk
                                 ? monitor.temperature.toStringAsFixed(1)
-                                : 'Offline',
-                            unit: monitor.dhtAvailable ? '°C' : '',
-                            progress: monitor.temperature / 45,
+                                : '0',
+                            unit: dhtOk ? '°C' : '',
+                            progress: dhtOk ? monitor.temperature / 45 : 0,
                             icon: Icons.thermostat_outlined,
-                            status: monitor.dhtAvailable
+                            status: dhtOk
                                 ? monitor.temperatureStatus
-                                : 'DHT sensor offline — check wiring',
+                                : dhtStatus,
                             level: monitor.temperatureLevel,
+                            available: dhtOk,
                             accent: const Color(0xFFFF453A),
                             alerts: temperatureAlerts,
                           ),
                           CircularSensorGauge(
                             title: 'Humidity',
-                            value: monitor.dhtAvailable
+                            value: dhtOk
                                 ? monitor.humidity.toStringAsFixed(0)
-                                : 'Offline',
-                            unit: monitor.dhtAvailable ? '%' : '',
-                            progress: monitor.humidity / 100,
+                                : '0',
+                            unit: dhtOk ? '%' : '',
+                            progress: dhtOk ? monitor.humidity / 100 : 0,
                             icon: Icons.water_drop_outlined,
-                            status: monitor.dhtAvailable
-                                ? monitor.humidityStatus
-                                : 'DHT sensor offline — check wiring',
+                            status: dhtOk ? monitor.humidityStatus : dhtStatus,
                             level: monitor.humidityLevel,
+                            available: dhtOk,
                             accent: const Color(0xFF3B82F6),
                             alerts: humidityAlerts,
                           ),
                           CircularSensorGauge(
                             title: 'Air Pollution',
-                            value: monitor.airAvailable
-                                ? '${monitor.airPpm}'
-                                : 'Offline',
-                            unit: monitor.airAvailable ? 'ppm' : '',
-                            progress: monitor.airPpm / 50,
+                            value: airOk ? '${monitor.airPpm}' : '0',
+                            unit: airOk ? 'ppm' : '',
+                            progress: airOk ? monitor.airPpm / 50 : 0,
                             icon: Icons.air_outlined,
-                            status: monitor.airAvailable
-                                ? monitor.airStatus
-                                : 'MQ135 sensor offline — check wiring',
+                            status: airOk ? monitor.airStatus : airPpmStatus,
                             level: monitor.airLevel,
+                            available: airOk,
                             accent: const Color(0xFFFF7A00),
                             alerts: airAlerts,
                           ),
@@ -1463,18 +1508,24 @@ class UserDashboardPage extends StatelessWidget {
                           height: 58,
                           decoration: BoxDecoration(
                             color:
-                                (activeWarnings == 0
+                                (!sensorOnline
+                                        ? context.appColors.mutedText
+                                        : activeWarnings == 0
                                         ? const Color(0xFF26C281)
                                         : _appAccent)
                                     .withValues(alpha: .12),
                             shape: BoxShape.circle,
                           ),
                           child: Icon(
-                            activeWarnings == 0
+                            !sensorOnline
+                                ? Icons.sensors_off_outlined
+                                : activeWarnings == 0
                                 ? Icons.verified_user_outlined
                                 : Icons.gpp_maybe_outlined,
                             size: 30,
-                            color: activeWarnings == 0
+                            color: !sensorOnline
+                                ? context.appColors.mutedText
+                                : activeWarnings == 0
                                 ? const Color(0xFF26C281)
                                 : _appAccent,
                           ),
@@ -1482,7 +1533,9 @@ class UserDashboardPage extends StatelessWidget {
                         const SizedBox(width: 12),
                         Expanded(
                           child: Text(
-                            activeWarnings == 0
+                            !sensorOnline
+                                ? 'Sensor not connected — conditions can\'t be verified. Set up the sensor\'s Wi-Fi to monitor your farm.'
+                                : activeWarnings == 0
                                 ? 'Farm conditions look safe. Tap a sensor card to see its details.'
                                 : 'Tap a sensor card with a badge to see its warnings. The Guides tab explains each warning.',
                             style: TextStyle(
@@ -1496,14 +1549,23 @@ class UserDashboardPage extends StatelessWidget {
                         TextButton.icon(
                           onPressed: () => Navigator.of(context).push(
                             MaterialPageRoute<void>(
-                              builder: (_) =>
-                                  AlertsPage(alerts: monitor.alerts),
+                              builder: (_) => AlertsPage(
+                                controller: controller,
+                                alertsOf: () =>
+                                    controller
+                                        .userByUsername(user.username)
+                                        ?.monitor
+                                        .activeAlerts ??
+                                    const [],
+                              ),
                             ),
                           ),
                           icon: const Icon(Icons.chevron_right_rounded),
                           iconAlignment: IconAlignment.end,
                           label: Text(
-                            activeWarnings == 0
+                            !sensorOnline
+                                ? 'NO SENSOR'
+                                : activeWarnings == 0
                                 ? 'ALL CLEAR'
                                 : '$activeWarnings ACTIVE',
                           ),
@@ -1521,53 +1583,126 @@ class UserDashboardPage extends StatelessWidget {
   }
 }
 
-class _FarmOverviewCard extends StatelessWidget {
+class _FarmOverviewCard extends StatefulWidget {
   const _FarmOverviewCard({
-    required this.cctvCount,
+    required this.controller,
+    required this.username,
+    required this.cctvStreams,
     required this.alertCount,
     required this.sensorOnline,
   });
-  final int cctvCount;
+
+  final AppController controller;
+  final String username;
+  final List<LiveCctvStream> cctvStreams;
   final int alertCount;
   final bool sensorOnline;
 
   @override
+  State<_FarmOverviewCard> createState() => _FarmOverviewCardState();
+}
+
+class _FarmOverviewCardState extends State<_FarmOverviewCard> {
+  static const _refreshInterval = Duration(seconds: 30);
+
+  Timer? _refreshTimer;
+  bool _checking = false;
+  int? _reachableCount;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_refreshReachability());
+    _refreshTimer = Timer.periodic(
+      _refreshInterval,
+      (_) => unawaited(_refreshReachability()),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _FarmOverviewCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.cctvStreams.length != widget.cctvStreams.length) {
+      unawaited(_refreshReachability());
+    }
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refreshReachability() async {
+    if (widget.cctvStreams.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _reachableCount = 0;
+        _checking = false;
+      });
+      return;
+    }
+    if (_checking) return;
+
+    if (mounted) setState(() => _checking = true);
+    final reachable = await widget.controller.countReachableCctvStreams(
+      widget.username,
+    );
+    if (!mounted) return;
+    setState(() {
+      _reachableCount = reachable;
+      _checking = false;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final total = widget.cctvStreams.length;
+    final reachable = _reachableCount;
+    final cctvValue = reachable == null ? '…' : '$reachable';
+    final cctvDetail = total == 0
+        ? 'None added'
+        : reachable == null
+        ? 'Checking...'
+        : '$reachable of $total online';
+
     return Row(
       children: [
         Expanded(
           child: _OverviewMetric(
             icon: Icons.videocam_outlined,
-            value: '$cctvCount',
-            label: 'CCTV Connect',
-            detail: cctvCount == 1 ? 'Connected' : 'Connections',
+            value: cctvValue,
+            label: 'CCTV Online',
+            detail: cctvDetail,
             color: _appAccent,
-            semanticLabel: cctvCount == 1
-                ? 'CCTV Connect: 1 connection'
-                : 'CCTV Connect: $cctvCount connections',
+            semanticLabel: total == 0
+                ? 'CCTV Online: no cameras added'
+                : reachable == null
+                ? 'CCTV Online: checking reachability'
+                : 'CCTV Online: $reachable of $total cameras reachable',
           ),
         ),
         const SizedBox(width: 9),
         Expanded(
           child: _OverviewMetric(
             icon: Icons.memory_rounded,
-            value: sensorOnline ? '1' : '0',
-            label: 'ESP32 Sensor',
-            detail: sensorOnline ? 'Online' : 'Offline',
+            value: widget.sensorOnline ? '1' : '0',
+            label: 'Environmental Sensor',
+            detail: widget.sensorOnline ? 'Online' : 'Offline',
             color: const Color(0xFF5E83FF),
             semanticLabel:
-                'ESP32 Sensor: ${sensorOnline ? 'Online' : 'Offline'}',
+                'Environmental Sensor: ${widget.sensorOnline ? 'Online' : 'Offline'}',
           ),
         ),
         const SizedBox(width: 9),
         Expanded(
           child: _OverviewMetric(
             icon: Icons.notifications_none_rounded,
-            value: '$alertCount',
+            value: '${widget.alertCount}',
             label: 'Alerts',
             detail: 'Today',
             color: const Color(0xFFFF5252),
-            semanticLabel: 'Alerts: $alertCount today',
+            semanticLabel: 'Alerts: ${widget.alertCount} today',
           ),
         ),
       ],
@@ -2168,7 +2303,7 @@ class _CctvTabEmptyState extends StatelessWidget {
   }
 }
 
-class _CctvViewerPage extends StatelessWidget {
+class _CctvViewerPage extends StatefulWidget {
   const _CctvViewerPage({
     required this.controller,
     required this.user,
@@ -2182,40 +2317,135 @@ class _CctvViewerPage extends StatelessWidget {
   final String displayLabel;
 
   @override
+  State<_CctvViewerPage> createState() => _CctvViewerPageState();
+}
+
+class _CctvViewerPageState extends State<_CctvViewerPage> {
+  // Kept here, rather than inside the video tile, so the banner can be
+  // pinned to the bottom of the whole screen instead of floating over the
+  // camera image.
+  String? _streamStatus;
+  bool _streamStatusOk = false;
+
+  void _handleStreamStatus(String? message, bool succeeded) {
+    if (!mounted) return;
+    setState(() {
+      _streamStatus = message;
+      _streamStatusOk = succeeded;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black.withValues(alpha: .82),
-        foregroundColor: Colors.white,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(displayLabel),
-            const Row(
+    return AnimatedBuilder(
+      animation: widget.controller,
+      builder: (context, _) {
+        final colors = context.appColors;
+        final currentUser =
+            widget.controller.userByUsername(widget.user.username) ??
+            widget.user;
+        final activeStream = currentUser.liveCctvStreams.firstWhere(
+          (candidate) => candidate.id == widget.stream.id,
+          orElse: () => widget.stream,
+        );
+        final isOnline = activeStream.isOnline;
+
+        return Scaffold(
+          backgroundColor: colors.background,
+          appBar: AppBar(
+            backgroundColor: colors.background,
+            surfaceTintColor: Colors.transparent,
+            titleSpacing: 4,
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.circle, color: Color(0xFF26C281), size: 8),
-                SizedBox(width: 5),
-                Text(
-                  'Live',
-                  style: TextStyle(
-                    color: Color(0xFF26C281),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                  ),
+                Text(widget.displayLabel),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.circle,
+                      color: isOnline
+                          ? const Color(0xFF26C281)
+                          : colors.mutedText,
+                      size: 8,
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      isOnline ? 'Live feed' : 'Connecting to camera',
+                      style: TextStyle(
+                        color: isOnline
+                            ? const Color(0xFF26C281)
+                            : colors.mutedText,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
-          ],
-        ),
-      ),
-      body: SafeArea(
+          ),
+          body: SafeArea(
+            top: false,
+            child: Column(
+              children: [
+                // A bounded, landscape viewport prevents the live player from
+                // consuming the screen. Contain mode preserves every part of
+                // a portrait or landscape CCTV frame.
+                AspectRatio(
+                  aspectRatio: 16 / 10,
+                  child: _CctvFeedTile(
+                    controller: widget.controller,
+                    user: currentUser,
+                    stream: activeStream,
+                    displayLabel: widget.displayLabel,
+                    onStreamStatusChanged: _handleStreamStatus,
+                  ),
+                ),
+                Expanded(child: _CctvViewerDetailsPanel(stream: activeStream)),
+                if (_streamStatus case final status?)
+                  _CctvStreamStatusBanner(
+                    message: status,
+                    succeeded: _streamStatusOk,
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// The connection/recovery status banner, pinned to the very bottom of the
+/// screen instead of floating over the camera image where it could cover
+/// the video or its placeholder text.
+class _CctvStreamStatusBanner extends StatelessWidget {
+  const _CctvStreamStatusBanner({
+    required this.message,
+    required this.succeeded,
+  });
+
+  final String message;
+  final bool succeeded;
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: succeeded ? const Color(0xFF134F36) : const Color(0xFF5A1D24),
+      child: SafeArea(
         top: false,
-        child: _CctvFeedTile(
-          controller: controller,
-          user: user,
-          stream: stream,
-          displayLabel: displayLabel,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          child: Text(
+            message,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              height: 1.3,
+            ),
+          ),
         ),
       ),
     );
@@ -2228,12 +2458,14 @@ class _CctvFeedTile extends StatelessWidget {
     required this.user,
     required this.stream,
     required this.displayLabel,
+    this.onStreamStatusChanged,
   });
 
   final AppController controller;
   final AppUser user;
   final LiveCctvStream stream;
   final String displayLabel;
+  final void Function(String? message, bool succeeded)? onStreamStatusChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -2241,6 +2473,11 @@ class _CctvFeedTile extends StatelessWidget {
       key: ValueKey(stream.id),
       expand: true,
       displayLabel: displayLabel,
+      videoFit: BoxFit.contain,
+      showEndpointOverlay: false,
+      showLabelOverlay: false,
+      showStreamProbeOverlay: false,
+      onStreamStatusChanged: onStreamStatusChanged,
       streamUrl: stream.streamUrl,
       recordingOwnerUsername: user.username,
       controller: controller,
@@ -2255,6 +2492,317 @@ class _CctvFeedTile extends StatelessWidget {
       onConnectionChanged: (online) {
         controller.markCctvConnectionStatus(user.username, stream.id, online);
       },
+    );
+  }
+}
+
+/// The viewer's persistent lower panel. Keeping detection results here makes
+/// them readable without covering the camera frame, while the live card still
+/// owns frame capture, recording, and playback controls.
+class _CctvViewerDetailsPanel extends StatelessWidget {
+  const _CctvViewerDetailsPanel({required this.stream});
+
+  final LiveCctvStream stream;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    final inspection = stream.inspection;
+    final protocol = switch (stream.deliveryProtocol) {
+      VideoDeliveryProtocol.hlsOrHttp => 'HLS / HTTP',
+      VideoDeliveryProtocol.rtsp => 'RTSP',
+      VideoDeliveryProtocol.rtmp => 'RTMP',
+      VideoDeliveryProtocol.v380Cloud => 'V380 Cloud',
+    };
+    final detectionCount = inspection.detectionCount;
+    // CctvInspectionResult.waitingForFrame() is a static placeholder that
+    // always blames AI scanning being off — but AI scanning may already be
+    // on, with the camera itself just not connected yet. Point at the real
+    // blocker instead of a state the model has no way to know is wrong.
+    final stillWaitingOnCamera =
+        inspection.state == CctvInspectionState.waitingForFrame &&
+        !stream.isOnline;
+    final resultLabel = stillWaitingOnCamera
+        ? 'Waiting for camera'
+        : inspection.resultLabel;
+    final resultMessage = stillWaitingOnCamera
+        ? "The camera stream hasn't connected yet. Detection resumes automatically once live video is playing."
+        : inspection.message;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        border: Border(top: BorderSide(color: colors.border)),
+      ),
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: colors.border,
+                borderRadius: BorderRadius.circular(99),
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Live detection',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+                ),
+              ),
+              SeverityTag(
+                label: inspection.state.label,
+                color: inspection.state.color,
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: _CctvViewerMetric(
+                  emoji: '🐔',
+                  label: 'Detected',
+                  value: detectionCount == null ? '—' : '$detectionCount',
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _CctvViewerMetric(
+                  icon: Icons.auto_graph_rounded,
+                  label: 'Confidence',
+                  value: inspection.confidenceLabel,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _CctvViewerMetric(
+                  icon: Icons.schedule_outlined,
+                  label: 'Last checked',
+                  value: inspection.inspectedAtLabel,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: inspection.condition.color.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: inspection.condition.color.withValues(alpha: 0.35),
+              ),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  inspection.detected
+                      ? Icons.health_and_safety_outlined
+                      : Icons.visibility_outlined,
+                  color: inspection.condition.color,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        resultLabel,
+                        style: const TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        resultMessage,
+                        style: TextStyle(
+                          color: colors.mutedText,
+                          fontSize: 13,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (inspection.detections.isNotEmpty) ...[
+            const SizedBox(height: 18),
+            Text(
+              'Current detections',
+              style: TextStyle(
+                color: colors.mutedText,
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final detection in inspection.detections)
+                  _CctvDetectionChip(detection: detection),
+              ],
+            ),
+          ],
+          const SizedBox(height: 22),
+          Text(
+            'Camera details',
+            style: TextStyle(
+              color: colors.mutedText,
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 9),
+          _CctvViewerDetailRow(
+            icon: Icons.link_outlined,
+            label: 'Stream',
+            value: safePlaybackEndpointLabel(stream.streamUrl),
+          ),
+          const SizedBox(height: 10),
+          _CctvViewerDetailRow(
+            icon: Icons.settings_ethernet_outlined,
+            label: 'Delivery',
+            value: protocol,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CctvViewerMetric extends StatelessWidget {
+  const _CctvViewerMetric({
+    this.icon,
+    this.emoji,
+    required this.label,
+    required this.value,
+  }) : assert(
+         (icon == null) != (emoji == null),
+         'Provide exactly one of icon or emoji.',
+       );
+
+  final IconData? icon;
+
+  /// A Unicode glyph (e.g. a chicken emoji) used in place of [icon] when no
+  /// Material icon for the concept exists.
+  final String? emoji;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Container(
+      padding: const EdgeInsets.all(11),
+      decoration: BoxDecoration(
+        color: colors.surfaceRaised,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (icon != null)
+            Icon(icon, size: 18, color: colors.mutedText)
+          else
+            // Emoji glyphs render visually larger/bolder than a vector Icon
+            // at the same declared font size, and Text's line-height doesn't
+            // match Icon's tight 18x18 box - both throw off row alignment
+            // with the icon-based cards next to this one. Boxing it to the
+            // same 18x18 footprint with a smaller font size lines it up.
+            SizedBox(
+              width: 18,
+              height: 18,
+              child: Center(
+                child: Text(emoji!, style: const TextStyle(fontSize: 15)),
+              ),
+            ),
+          const SizedBox(height: 9),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: colors.mutedText, fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CctvDetectionChip extends StatelessWidget {
+  const _CctvDetectionChip({required this.detection});
+
+  final ChickenDetection detection;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = detection.condition.color;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(99),
+        border: Border.all(color: color.withValues(alpha: 0.30)),
+      ),
+      child: Text(
+        '${detection.label} ${(detection.confidence * 100).toStringAsFixed(0)}%',
+        style: TextStyle(
+          color: color,
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+class _CctvViewerDetailRow extends StatelessWidget {
+  const _CctvViewerDetailRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: colors.mutedText),
+        const SizedBox(width: 10),
+        Text('$label  ', style: TextStyle(color: colors.mutedText)),
+        Expanded(
+          child: Text(
+            value,
+            textAlign: TextAlign.right,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -2498,19 +3046,19 @@ const _systemBracketGuides = [
     entries: [
       (
         'Camera model',
-        'The camera model used by this app is V380 Pro. It provides the live CCTV feed that the app can monitor through a network stream.',
+        'This app works with RTSP/ONVIF-capable IP cameras on your farm\'s Wi-Fi, such as the V380 Pro. It provides the live CCTV feed that the app can monitor through a network stream.',
       ),
       (
-        'V380 Pro setup',
-        'Connect the V380 to farm Wi-Fi and enable RTSP/ONVIF. On the same Wi-Fi, Roostify can scan for it directly; for remote viewing, configure it on the edge gateway and add the video-server playback URL.',
+        'Camera setup',
+        'Connect the camera to farm Wi-Fi and enable RTSP/ONVIF. On the same Wi-Fi, open Manage Cameras and use Scan Local Network to find and add it.',
       ),
       (
         'Online',
-        'The local or cloud-delivered video is playing and can be inspected on this device by YOLOv8.',
+        'The local video is playing and can be inspected on this device by YOLOv8.',
       ),
       (
         'Offline',
-        'For a local camera, check power, Wi-Fi, RTSP settings, and login details. For a remote stream, check the edge gateway and playback endpoint.',
+        'Check power, Wi-Fi, RTSP settings, and login details for the camera.',
       ),
       (
         'Blocked or blurry',
@@ -4551,7 +5099,7 @@ class _SupportChatPageState extends State<SupportChatPage> {
               _FaqEntry(
                 question: 'Why are sensor readings unavailable?',
                 answer:
-                    'Reconnect the ESP32 and confirm Bluetooth and sensor power are enabled.',
+                    'Reconnect the sensor and confirm Bluetooth and sensor power are enabled.',
               ),
               _FaqEntry(
                 question: 'How do I report a detection problem?',
@@ -4632,7 +5180,7 @@ class _SupportChatPageState extends State<SupportChatPage> {
                       title: 'Sensor Issue',
                       subtitle: 'Having trouble with a sensor?',
                       onTap: () => _messageController.text =
-                          'I need help with an ESP32 sensor: ',
+                          'I need help with an environmental sensor: ',
                     ),
                     _SupportHubRow(
                       icon: Icons.videocam_outlined,
@@ -4833,112 +5381,89 @@ class ProfilePage extends StatelessWidget {
   final Session session;
 
   Future<void> _confirmLogout(BuildContext context) async {
-    var rememberDevice = false;
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(26),
-            side: BorderSide(color: _appAccent.withValues(alpha: .55)),
-          ),
-          title: Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Log Out?',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontWeight: FontWeight.w900),
-                ),
-              ),
-              IconButton(
-                tooltip: 'Close',
-                onPressed: () => Navigator.of(dialogContext).pop(false),
-                icon: const Icon(Icons.close_rounded),
-              ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 82,
-                height: 82,
-                decoration: BoxDecoration(
-                  color: _appAccent.withValues(alpha: .08),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: _appAccent.withValues(alpha: .45)),
-                ),
-                child: const Icon(
-                  Icons.logout_rounded,
-                  color: _appAccent,
-                  size: 40,
-                ),
-              ),
-              const SizedBox(height: 18),
-              const Text(
-                'Are you sure you want to log out of your Roostify account on this device?',
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(26),
+          side: BorderSide(color: _appAccent.withValues(alpha: .55)),
+        ),
+        title: Row(
+          children: [
+            const Expanded(
+              child: Text(
+                'Log Out?',
                 textAlign: TextAlign.center,
-                style: TextStyle(height: 1.45),
+                style: TextStyle(fontWeight: FontWeight.w900),
               ),
-              const SizedBox(height: 14),
-              CheckboxListTile(
-                contentPadding: EdgeInsets.zero,
-                value: rememberDevice,
-                onChanged: (value) =>
-                    setDialogState(() => rememberDevice = value ?? false),
-                title: const Text(
-                  'Remember this device',
-                  style: TextStyle(fontWeight: FontWeight.w800),
-                ),
-                subtitle: const Text('Skip sign-in on this device next time.'),
-                controlAffinity: ListTileControlAffinity.leading,
-              ),
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: context.appColors.surfaceRaised,
-                  borderRadius: BorderRadius.circular(15),
-                  border: Border.all(color: context.appColors.border),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(Icons.shield_outlined, color: _appAccent),
-                    SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        'You can sign back in using your username, password, or connected Google account.',
-                        style: TextStyle(fontSize: 13, height: 1.4),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            OutlinedButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Cancel'),
             ),
-            FilledButton.icon(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              icon: const Icon(Icons.logout_rounded),
-              label: const Text('Log Out'),
+            IconButton(
+              tooltip: 'Close',
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              icon: const Icon(Icons.close_rounded),
             ),
           ],
         ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 82,
+              height: 82,
+              decoration: BoxDecoration(
+                color: _appAccent.withValues(alpha: .08),
+                shape: BoxShape.circle,
+                border: Border.all(color: _appAccent.withValues(alpha: .45)),
+              ),
+              child: const Icon(
+                Icons.logout_rounded,
+                color: _appAccent,
+                size: 40,
+              ),
+            ),
+            const SizedBox(height: 18),
+            const Text(
+              'Are you sure you want to log out of your Roostify account on this device?',
+              textAlign: TextAlign.center,
+              style: TextStyle(height: 1.45),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: dialogContext.appColors.surfaceRaised,
+                borderRadius: BorderRadius.circular(15),
+                border: Border.all(color: dialogContext.appColors.border),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.shield_outlined, color: _appAccent),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'You can sign back in using your username, password, or connected Google account.',
+                      style: TextStyle(fontSize: 13, height: 1.4),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          OutlinedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            icon: const Icon(Icons.logout_rounded),
+            label: const Text('Log Out'),
+          ),
+        ],
       ),
     );
     if (confirmed != true || !context.mounted) return;
-    if (rememberDevice) {
-      await controller.rememberThisDevice(
-        session.user.username,
-        session.user.role,
-      );
-    } else {
-      await controller.forgetThisDevice();
-    }
     await controller.signOut();
     if (!context.mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
@@ -5025,20 +5550,11 @@ class ProfilePage extends StatelessWidget {
                 ),
               ),
               _ProfileMenuRow(
-                icon: Icons.account_circle_outlined,
-                label: 'Connected Accounts',
-                trailing: const _GoogleMark(size: 24),
-                onTap: () => _showProfileContentDialog(
-                  context,
-                  ConnectedAccountsPage(controller: controller),
-                ),
-              ),
-              _ProfileMenuRow(
                 icon: Icons.video_library_outlined,
                 label: user.isAdmin ? 'All Recordings' : 'My Recordings',
                 onTap: () => _showProfileContentDialog(
                   context,
-                  RecordingsPage(currentUser: user),
+                  RecordingsPage(currentUser: user, controller: controller),
                 ),
               ),
               _ProfileMenuRow(
@@ -5112,297 +5628,6 @@ class ProfilePage extends StatelessWidget {
             ),
     );
   }
-}
-
-class ConnectedAccountsPage extends StatefulWidget {
-  const ConnectedAccountsPage({super.key, required this.controller});
-
-  final AppController controller;
-
-  @override
-  State<ConnectedAccountsPage> createState() => _ConnectedAccountsPageState();
-}
-
-class _ConnectedAccountsPageState extends State<ConnectedAccountsPage> {
-  bool _syncProfile = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadSyncPreferences();
-  }
-
-  Future<void> _loadSyncPreferences() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (!mounted) return;
-    setState(() {
-      _syncProfile = prefs.getBool('roostify.sync.profile') ?? true;
-    });
-  }
-
-  Future<void> _saveAndClose() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('roostify.sync.profile', _syncProfile);
-    if (mounted) Navigator.of(context).pop();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: widget.controller,
-      builder: (context, _) {
-        final session = widget.controller.session;
-        final connected = session?.email != null;
-        final colors = context.appColors;
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text('Connected Accounts'),
-            leading: IconButton(
-              tooltip: 'Close',
-              onPressed: () => Navigator.of(context).pop(),
-              icon: const Icon(Icons.close_rounded),
-            ),
-          ),
-          body: ListView(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
-            children: [
-              const _ProfileSubpageIntro(
-                icon: Icons.group_outlined,
-                title: 'Connected Accounts',
-                subtitle: 'Link or manage external sign-in accounts.',
-              ),
-              const SizedBox(height: 18),
-              _ConnectedAccountCard(
-                connected: connected,
-                email: session?.email,
-                onTap: () async {
-                  if (connected) {
-                    await widget.controller.unlinkGoogleAccount();
-                    return;
-                  }
-                  final linked = await widget.controller.linkGoogleAccount();
-                  if (!context.mounted || linked) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        widget.controller.lastError ??
-                            'Could not connect Google.',
-                      ),
-                    ),
-                  );
-                },
-              ),
-              if (connected) ...[
-                const SizedBox(height: 10),
-                _SwitchConnectedAccountRow(
-                  onTap: () async {
-                    final linked = await widget.controller.linkGoogleAccount();
-                    if (!context.mounted || linked) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          widget.controller.lastError ??
-                              'Could not switch Google account.',
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ],
-              const SizedBox(height: 22),
-              const Text(
-                'Sync Permissions',
-                style: TextStyle(fontWeight: FontWeight.w900),
-              ),
-              const SizedBox(height: 8),
-              Container(
-                decoration: BoxDecoration(
-                  color: colors.surface,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: colors.border),
-                ),
-                child: SwitchListTile(
-                  secondary: const Icon(
-                    Icons.person_outline_rounded,
-                    color: _appAccent,
-                  ),
-                  title: const Text(
-                    'Sync profile information',
-                    style: TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  subtitle: const Text(
-                    'When you sign in with Google, use its name for your '
-                    'Roostify profile',
-                  ),
-                  value: _syncProfile,
-                  onChanged: (value) => setState(() => _syncProfile = value),
-                ),
-              ),
-              const SizedBox(height: 22),
-              SizedBox(
-                height: 54,
-                child: FilledButton.icon(
-                  onPressed: _saveAndClose,
-                  icon: const Icon(Icons.save_outlined),
-                  label: const Text('Save Connections'),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _ConnectedAccountCard extends StatelessWidget {
-  const _ConnectedAccountCard({
-    required this.connected,
-    required this.email,
-    required this.onTap,
-  });
-
-  final bool connected;
-  final String? email;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.appColors;
-    return Material(
-      color: colors.surface,
-      borderRadius: BorderRadius.circular(16),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: colors.border),
-          ),
-          child: Row(
-            children: [
-              const _GoogleMark(size: 30),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Google',
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    if (connected) ...[
-                      const SizedBox(height: 3),
-                      Text(
-                        email!,
-                        style: TextStyle(color: colors.mutedText, fontSize: 13),
-                      ),
-                      const SizedBox(height: 4),
-                      const Text(
-                        'Manage',
-                        style: TextStyle(
-                          color: _appAccent,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ] else ...[
-                      const SizedBox(height: 3),
-                      Text(
-                        'Not connected',
-                        style: TextStyle(color: colors.mutedText, fontSize: 13),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              if (connected)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 9,
-                    vertical: 5,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF26C281).withValues(alpha: .1),
-                    borderRadius: BorderRadius.circular(99),
-                  ),
-                  child: const Text(
-                    'Connected',
-                    style: TextStyle(
-                      color: Color(0xFF26C281),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                )
-              else
-                Icon(Icons.chevron_right_rounded, color: colors.mutedText),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SwitchConnectedAccountRow extends StatelessWidget {
-  const _SwitchConnectedAccountRow({required this.onTap});
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => Material(
-    color: context.appColors.surface,
-    borderRadius: BorderRadius.circular(16),
-    child: InkWell(
-      borderRadius: BorderRadius.circular(16),
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: context.appColors.border),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: context.appColors.border),
-              ),
-              child: const Icon(Icons.swap_horiz_rounded),
-            ),
-            const SizedBox(width: 12),
-            const Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Switch Google account',
-                    style: TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  SizedBox(height: 3),
-                  Text(
-                    // Roostify only keeps one linked Google account at a
-                    // time; this replaces it rather than adding a second.
-                    'Replace this with a different Google account',
-                    style: TextStyle(fontSize: 13),
-                  ),
-                ],
-              ),
-            ),
-            const Icon(Icons.chevron_right_rounded),
-          ],
-        ),
-      ),
-    ),
-  );
 }
 
 class NotificationPreferencesPage extends StatefulWidget {
@@ -5824,7 +6049,7 @@ class _ProfileSummaryCard extends StatelessWidget {
                 VerticalDivider(color: colors.border, width: 1),
                 Expanded(
                   child: _ProfileStat(
-                    value: '${user.monitor.alerts.length}',
+                    value: '${user.monitor.activeAlerts.length}',
                     label: 'Alerts',
                   ),
                 ),
@@ -6719,18 +6944,119 @@ class _AdminPageHeader extends StatelessWidget {
   );
 }
 
+/// Shows warning alerts live: rebuilt on every [controller] notification (a
+/// new sensor reading, in particular) so a threshold crossed - or cleared -
+/// while this page is already open shows up immediately, instead of only
+/// reflecting whatever was active the moment the alert bell was tapped.
 class AlertsPage extends StatelessWidget {
-  const AlertsPage({super.key, required this.alerts});
+  const AlertsPage({super.key, required this.controller, required this.alertsOf});
 
-  final List<AlertItem> alerts;
+  final AppController controller;
+  final List<AlertItem> Function() alertsOf;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Warning Alerts')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-        children: alerts.map((alert) => AlertCard(alert: alert)).toList(),
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) => Scaffold(
+        appBar: AppBar(title: const Text('Warning Alerts')),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          children: alertsOf()
+              .map((alert) => AlertCard(alert: alert))
+              .toList(),
+        ),
+      ),
+    );
+  }
+}
+
+/// Shows every notable reading the app has received this session - anything
+/// outside the normal temperature/humidity/air-quality range
+/// ([AppUser.sensorReadingLog]) - newest first, live-updating the same way
+/// [AlertsPage] does as new readings arrive while this page is open.
+class SensorReadingLogPage extends StatelessWidget {
+  const SensorReadingLogPage({
+    super.key,
+    required this.controller,
+    required this.readingLogOf,
+  });
+
+  final AppController controller;
+  final List<SensorReadingLogEntry> Function() readingLogOf;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final entries = readingLogOf();
+        return Scaffold(
+          appBar: AppBar(title: const Text('Sensor Reading Log')),
+          body: entries.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    child: Text(
+                      'No threshold readings yet this session — conditions '
+                      'have stayed within the normal range.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: context.appColors.mutedText),
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+                  itemCount: entries.length,
+                  itemBuilder: (context, index) =>
+                      _SensorReadingLogRow(entry: entries[index]),
+                ),
+        );
+      },
+    );
+  }
+}
+
+class _SensorReadingLogRow extends StatelessWidget {
+  const _SensorReadingLogRow({required this.entry});
+
+  final SensorReadingLogEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: colors.border),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 76,
+            child: Text(
+              _timeLabelFor(entry.recordedAt),
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              entry.dhtAvailable
+                  ? '${entry.temperature.toStringAsFixed(1)}°C · ${entry.humidity.toStringAsFixed(0)}% humidity'
+                  : 'DHT11 not responding',
+              style: TextStyle(
+                color: entry.dhtAvailable ? null : colors.mutedText,
+              ),
+            ),
+          ),
+          Text(
+            entry.airAvailable ? '${entry.airPpm} ppm' : 'MQ135 offline',
+            style: TextStyle(color: colors.mutedText, fontWeight: FontWeight.w700),
+          ),
+        ],
       ),
     );
   }
@@ -6760,6 +7086,11 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
   int _cameraIndex = 0;
   String? _scanStatus;
   ManualScanResult? _result;
+
+  /// A photo picked from the gallery, shown (and inspected) in place of the
+  /// live camera feed until the user switches back. Null means the live
+  /// camera preview is showing, same as before this feature existed.
+  Uint8List? _pickedImageBytes;
 
   @override
   void initState() {
@@ -6838,16 +7169,23 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
 
   Future<void> _runAnalysis() async {
     if (_analyzing) return;
+    final pickedImageBytes = _pickedImageBytes;
     final cameraController = _cameraController;
     setState(() {
       _analyzing = true;
       if (_result == null) {
-        _scanStatus = 'Running automatic scan...';
+        _scanStatus = pickedImageBytes != null
+            ? 'Analyzing photo...'
+            : 'Running automatic scan...';
       }
     });
     try {
-      final result =
-          cameraController == null || !cameraController.value.isInitialized
+      final result = pickedImageBytes != null
+          ? await widget.controller.inspectManualFrame(
+              widget.user.username,
+              pickedImageBytes,
+            )
+          : cameraController == null || !cameraController.value.isInitialized
           ? widget.controller.generateManualScan()
           : await widget.controller.inspectManualFrame(
               widget.user.username,
@@ -6857,7 +7195,7 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
       setState(() {
         _result = result;
         _analyzing = false;
-        _scanStatus = result.detected ? _statusForManualResult(result) : null;
+        _scanStatus = _statusForManualResult(result);
       });
     } catch (error) {
       if (!mounted) return;
@@ -6897,6 +7235,53 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
     await oldController?.dispose();
     if (!mounted) return;
     await _setupCamera(cameraIndex: (_cameraIndex + 1) % cameras.length);
+  }
+
+  Future<void> _pickFromGallery() async {
+    if (_analyzing) return;
+    _autoScanTimer?.cancel();
+    final XFile? picked;
+    try {
+      picked = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1600,
+        maxHeight: 1600,
+        imageQuality: 90,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open the gallery: $error')),
+      );
+      _scheduleNextScan(immediate: true);
+      return;
+    }
+    if (picked == null) {
+      // Cancelled - resume live scanning if that's where the user was.
+      if (mounted && _pickedImageBytes == null) {
+        _scheduleNextScan(immediate: true);
+      }
+      return;
+    }
+
+    final bytes = await picked.readAsBytes();
+    if (!mounted) return;
+    setState(() {
+      _pickedImageBytes = bytes;
+      _result = null;
+      _scanStatus = null;
+    });
+    await _runAnalysis();
+  }
+
+  void _returnToLiveCamera() {
+    if (_pickedImageBytes == null) return;
+    setState(() {
+      _pickedImageBytes = null;
+      _result = null;
+      _scanStatus = 'Starting automatic scan...';
+    });
+    _scheduleNextScan(immediate: true);
   }
 
   Future<void> _toggleTorch() async {
@@ -6942,6 +7327,7 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
 
   @override
   Widget build(BuildContext context) {
+    final pickedImageBytes = _pickedImageBytes;
     final hasCamera =
         _cameraController != null && _cameraController!.value.isInitialized;
     final detectionCount = _result?.detectionCount ?? 0;
@@ -6949,35 +7335,46 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
     final resultColor = _result?.condition == HealthState.abnormal
         ? HealthState.abnormal.color
         : const Color(0xFF43E39C);
+    // Detection boxes are normalized 0-1, so they line up correctly as long
+    // as whatever's shown (live preview or a picked photo) exactly fills
+    // this same overlay box - never letterboxed/cropped independently of it.
+    final detectionOverlay = IgnorePointer(
+      child: Semantics(
+        label: (_result?.detections ?? const []).isEmpty
+            ? null
+            : (_result?.detections ?? const [])
+                  .map(
+                    (detection) =>
+                        '${detection.label} '
+                        '${(detection.confidence * 100).toStringAsFixed(0)}% '
+                        'confidence',
+                  )
+                  .join(', '),
+        child: CustomPaint(
+          painter: ChickenDetectionPainter(
+            detections: _result?.detections ?? const [],
+          ),
+        ),
+      ),
+    );
 
     return Scaffold(
       backgroundColor: const Color(0xFF070B13),
       body: Stack(
         fit: StackFit.expand,
         children: [
-          if (_initializing)
+          if (pickedImageBytes != null) ...[
+            Image.memory(
+              pickedImageBytes,
+              fit: BoxFit.fill,
+              gaplessPlayback: true,
+            ),
+            detectionOverlay,
+          ] else if (_initializing)
             const Center(child: CircularProgressIndicator())
           else if (hasCamera) ...[
             _buildFillingCameraPreview(_cameraController!),
-            IgnorePointer(
-              child: Semantics(
-                label: (_result?.detections ?? const []).isEmpty
-                    ? null
-                    : (_result?.detections ?? const [])
-                          .map(
-                            (detection) =>
-                                '${detection.label} '
-                                '${(detection.confidence * 100).toStringAsFixed(0)}% '
-                                'confidence',
-                          )
-                          .join(', '),
-                child: CustomPaint(
-                  painter: ChickenDetectionPainter(
-                    detections: _result?.detections ?? const [],
-                  ),
-                ),
-              ),
-            ),
+            detectionOverlay,
           ] else
             const Center(
               child: Padding(
@@ -7000,22 +7397,28 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
                 child: _ScanOverlayPanel(
                   child: Row(
                     children: [
-                      const Expanded(
+                      Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
+                            const Text(
                               'Manual Rooster Scan',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 color: Colors.white,
                                 fontSize: 18,
                                 fontWeight: FontWeight.w900,
                               ),
                             ),
-                            SizedBox(height: 2),
+                            const SizedBox(height: 2),
                             Text(
-                              'Point your camera to scan the area',
-                              style: TextStyle(
+                              pickedImageBytes != null
+                                  ? 'Reviewing a photo from your gallery'
+                                  : 'Point your camera to scan the area',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
                                 color: Colors.white70,
                                 fontSize: 12,
                               ),
@@ -7024,10 +7427,14 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      _ScanAutoToggle(
-                        enabled: _autoScanEnabled,
-                        onTap: _toggleAutoScan,
-                      ),
+                      if (pickedImageBytes == null) ...[
+                        _ScanAutoToggle(
+                          enabled: _autoScanEnabled,
+                          onTap: _toggleAutoScan,
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      _GalleryPickButton(onTap: _pickFromGallery),
                     ],
                   ),
                 ),
@@ -7073,7 +7480,9 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
                             child: Text(
                               hasDetections
                                   ? '${_scanStatus ?? 'Rooster detected'} · ${_result!.confidenceLabel} confidence'
-                                  : 'Bring the rooster into the frame for better detection',
+                                  : _result == null
+                                  ? 'Bring the rooster into the frame for better detection'
+                                  : _scanStatus ?? 'No rooster detected',
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
@@ -7097,9 +7506,13 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
                           _ScanControlButton(
-                            icon: Icons.cameraswitch_outlined,
-                            label: 'Switch',
-                            onTap: _switchCamera,
+                            icon: pickedImageBytes != null
+                                ? Icons.videocam_outlined
+                                : Icons.cameraswitch_outlined,
+                            label: pickedImageBytes != null ? 'Live' : 'Switch',
+                            onTap: pickedImageBytes != null
+                                ? _returnToLiveCamera
+                                : _switchCamera,
                           ),
                           _ScanNowButton(
                             analyzing: _analyzing,
@@ -7143,7 +7556,7 @@ class _RoosterCountBadge extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.pets_rounded, color: _appAccent, size: 15),
+          const Text('🐔', style: TextStyle(fontSize: 15)),
           const SizedBox(width: 6),
           Text(
             count == 1 ? '1 rooster found' : '$count roosters found',
@@ -7221,6 +7634,35 @@ class _ScanAutoToggle extends StatelessWidget {
                   ),
                 ),
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _GalleryPickButton extends StatelessWidget {
+  const _GalleryPickButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Pick a photo to scan',
+      child: Material(
+        color: Colors.white.withValues(alpha: .10),
+        borderRadius: BorderRadius.circular(13),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(13),
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            child: Icon(
+              Icons.photo_library_outlined,
+              color: Colors.white,
+              size: 18,
             ),
           ),
         ),

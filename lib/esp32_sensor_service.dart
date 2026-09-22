@@ -7,9 +7,9 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 const esp32SensorDeviceName = 'DominiGo-ESP32';
 const esp32SensorServiceUuid = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
-const esp32SensorNotifyUuid = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+const esp32SensorConfigUuid = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
 
-enum Esp32SensorConnectionStatus {
+enum Esp32ProvisioningStatus {
   disconnected,
   scanning,
   connecting,
@@ -17,6 +17,9 @@ enum Esp32SensorConnectionStatus {
   error,
 }
 
+/// One environmental reading, as stored under `farms/{uid}/status/latest` in
+/// Postgres (see [SupabaseBackendService.watchLatestSensor]). The ESP32
+/// posts these directly over Wi-Fi; nothing here comes over Bluetooth.
 class Esp32SensorReading {
   const Esp32SensorReading({
     required this.temperatureC,
@@ -32,81 +35,93 @@ class Esp32SensorReading {
   final int airQualityPpm;
   final DateTime receivedAt;
 
-  /// False when the most recent payload reported the DHT sensor as
-  /// unreadable (bad wiring, disconnected, etc). [temperatureC] and
-  /// [humidityPercent] are then carried forward from the last good
-  /// reading rather than being fresh.
+  /// False when the ESP32 reported the DHT sensor as unreadable (bad wiring,
+  /// disconnected, etc) on its most recent upload. [temperatureC] and
+  /// [humidityPercent] are then a placeholder rather than a fresh reading.
   final bool dhtAvailable;
 
   /// Same as [dhtAvailable] but for the MQ135 air-quality sensor.
   final bool airAvailable;
 }
 
-class Esp32SensorClient extends ChangeNotifier {
+/// One nearby environmental sensor found while searching for setup, before
+/// it's been connected to. Wraps the underlying BLE device so nothing
+/// outside this file needs to depend on flutter_blue_plus types directly.
+class DiscoveredEsp32Device {
+  const DiscoveredEsp32Device._(this.id, this.rssi, this._device);
+
+  /// Stable per-device identifier (its Bluetooth address). Only used to tell
+  /// otherwise-identical sensors apart in a list - a raw Bluetooth address
+  /// isn't meaningful to a farmer, so the UI shows a short suffix of it at
+  /// most, never the full [id].
+  final String id;
+  final int rssi;
+  final BluetoothDevice _device;
+
+  /// Last 4 characters of [id] with separators stripped, for a compact
+  /// "which one is this" hint when more than one sensor is found nearby.
+  String get shortId {
+    final compact = id.replaceAll(RegExp('[^A-Za-z0-9]'), '').toUpperCase();
+    return compact.length <= 4
+        ? compact
+        : compact.substring(compact.length - 4);
+  }
+}
+
+/// Bluetooth Low Energy client used ONLY to set up an ESP32: pairing it with
+/// a Wi-Fi network and the signed-in farmer's account, or resetting that
+/// configuration ("forget Wi-Fi"). Once the ESP32 is on Wi-Fi, it posts
+/// sensor readings straight to Supabase itself - the app never needs a BLE
+/// connection to see live data, only to (re)configure the device.
+class Esp32ProvisioningClient extends ChangeNotifier {
   static final Guid _serviceGuid = Guid(esp32SensorServiceUuid);
-  static final Guid _notifyGuid = Guid(esp32SensorNotifyUuid);
+  static final Guid _configGuid = Guid(esp32SensorConfigUuid);
   static const Duration _scanTimeout = Duration(seconds: 12);
   static const Duration _connectTimeout = Duration(seconds: 14);
 
-  Esp32SensorConnectionStatus _status =
-      Esp32SensorConnectionStatus.disconnected;
+  Esp32ProvisioningStatus _status = Esp32ProvisioningStatus.disconnected;
   BluetoothDevice? _device;
+  final List<DiscoveredEsp32Device> _discoveredDevices = [];
   StreamSubscription<List<ScanResult>>? _scanSubscription;
   StreamSubscription<BluetoothConnectionState>? _connectionSubscription;
-  StreamSubscription<List<int>>? _valueSubscription;
-  ValueChanged<Esp32SensorReading>? _onReading;
-  Esp32SensorReading? _latestReading;
+  BluetoothCharacteristic? _configCharacteristic;
   String? _lastError;
-  String _rxBuffer = '';
+  String? _wifiProvisioningStatus;
+  bool _isProvisioningWifi = false;
   bool _disposed = false;
 
-  Esp32SensorConnectionStatus get status => _status;
-  Esp32SensorReading? get latestReading => _latestReading;
+  Esp32ProvisioningStatus get status => _status;
   String? get lastError => _lastError;
+  String? get wifiProvisioningStatus => _wifiProvisioningStatus;
+  bool get isProvisioningWifi => _isProvisioningWifi;
+  bool get canProvisionWifi => isConnected && _configCharacteristic != null;
   bool get isBusy =>
-      _status == Esp32SensorConnectionStatus.scanning ||
-      _status == Esp32SensorConnectionStatus.connecting;
-  bool get isConnected => _status == Esp32SensorConnectionStatus.connected;
+      _status == Esp32ProvisioningStatus.scanning ||
+      _status == Esp32ProvisioningStatus.connecting;
+  bool get isConnected => _status == Esp32ProvisioningStatus.connected;
 
-  String get statusLabel => switch (_status) {
-    Esp32SensorConnectionStatus.disconnected => 'ESP32 sensor not connected',
-    Esp32SensorConnectionStatus.scanning =>
-      'Scanning for $esp32SensorDeviceName',
-    Esp32SensorConnectionStatus.connecting => 'Connecting to ESP32 sensor',
-    Esp32SensorConnectionStatus.connected => _connectedLabel(),
-    Esp32SensorConnectionStatus.error =>
-      _lastError ?? 'ESP32 sensor connection failed',
-  };
+  /// Sensors found by the most recent [startDiscovery] call, updated live as
+  /// more advertise themselves. Stays populated after the scan window ends
+  /// so the picker UI can still be browsed/tapped; cleared only when a new
+  /// discovery starts.
+  List<DiscoveredEsp32Device> get discoveredDevices =>
+      List.unmodifiable(_discoveredDevices);
 
-  /// The BLE link can be "connected" while never actually having produced a
-  /// usable reading (no notification has arrived yet, or every payload so
-  /// far failed to parse) — those are silent no-ops for the caller
-  /// otherwise, so distinguish them instead of always claiming success.
-  String _connectedLabel() {
-    if (_lastError != null) return _lastError!;
-    if (_latestReading == null) return 'Connected — waiting for first reading...';
-    return 'Receiving live ESP32 readings';
-  }
+  /// Scans for nearby environmental sensors and adds each one found to
+  /// [discoveredDevices] as it's seen - it does not connect to anything on
+  /// its own. Call [connectToDevice] once the user picks one from that list.
+  Future<void> startDiscovery() async {
+    if (isBusy) return;
 
-  /// True once connected if the most recent payload failed to parse, so the
-  /// UI can flag it instead of showing a plain "connected" state.
-  bool get hasReadIssue =>
-      _status == Esp32SensorConnectionStatus.connected && _lastError != null;
-
-  Future<void> connect({
-    required ValueChanged<Esp32SensorReading> onReading,
-  }) async {
-    if (isBusy || isConnected) return;
-
-    _onReading = onReading;
     _lastError = null;
-    _rxBuffer = '';
-    _setStatus(Esp32SensorConnectionStatus.scanning);
+    _wifiProvisioningStatus = null;
+    _discoveredDevices.clear();
+    _setStatus(Esp32ProvisioningStatus.scanning);
 
     try {
       if (kIsWeb && !await FlutterBluePlus.isSupported) {
         _setError(
-          'Bluetooth sensor pairing needs a browser with Web Bluetooth support, such as Chrome or Edge, served over HTTPS.',
+          'Bluetooth setup needs a browser with Web Bluetooth support, such as Chrome or Edge, served over HTTPS.',
         );
         return;
       }
@@ -140,10 +155,11 @@ class Esp32SensorClient extends ChangeNotifier {
           .first
           .timeout(_scanTimeout + const Duration(seconds: 2));
 
-      if (_status == Esp32SensorConnectionStatus.scanning) {
-        _setError(
-          'ESP32 not found. Make sure $esp32SensorDeviceName is powered nearby.',
-        );
+      // The scan window ran out on its own. Finding nothing isn't an error
+      // here - the picker shows an empty state with a "Search Again" button
+      // - so just drop back to idle instead of raising a hard error.
+      if (_status == Esp32ProvisioningStatus.scanning) {
+        _setStatus(Esp32ProvisioningStatus.disconnected);
       }
     } on TimeoutException catch (error) {
       await _stopScanQuietly();
@@ -154,15 +170,25 @@ class Esp32SensorClient extends ChangeNotifier {
     }
   }
 
+  /// Stops an in-progress [startDiscovery] scan without disconnecting from
+  /// anything, e.g. because the user picked a device before the scan window
+  /// naturally ended.
+  Future<void> stopDiscovery() async {
+    await _stopScanQuietly();
+    if (_status == Esp32ProvisioningStatus.scanning) {
+      _setStatus(Esp32ProvisioningStatus.disconnected);
+    }
+  }
+
   Future<void> disconnect() async {
     await _stopScanQuietly();
     await _scanSubscription?.cancel();
     _scanSubscription = null;
-    await _valueSubscription?.cancel();
-    _valueSubscription = null;
     await _connectionSubscription?.cancel();
     _connectionSubscription = null;
-    _rxBuffer = '';
+    _configCharacteristic = null;
+    _isProvisioningWifi = false;
+    _wifiProvisioningStatus = null;
 
     final device = _device;
     _device = null;
@@ -175,18 +201,27 @@ class Esp32SensorClient extends ChangeNotifier {
     }
 
     _lastError = null;
-    _setStatus(Esp32SensorConnectionStatus.disconnected);
+    _setStatus(Esp32ProvisioningStatus.disconnected);
   }
 
   void _handleScanResults(List<ScanResult> results) {
-    if (_status != Esp32SensorConnectionStatus.scanning) return;
+    if (_status != Esp32ProvisioningStatus.scanning) return;
 
+    var changed = false;
     for (final result in results) {
-      if (_matchesSensor(result)) {
-        unawaited(_connectToDevice(result.device));
-        return;
+      if (!_matchesSensor(result)) continue;
+      final id = result.device.remoteId.str;
+      final index = _discoveredDevices.indexWhere((d) => d.id == id);
+      final entry = DiscoveredEsp32Device._(id, result.rssi, result.device);
+      if (index == -1) {
+        _discoveredDevices.add(entry);
+        changed = true;
+      } else if (_discoveredDevices[index].rssi != result.rssi) {
+        _discoveredDevices[index] = entry;
+        changed = true;
       }
     }
+    if (changed) _notify();
   }
 
   bool _matchesSensor(ScanResult result) {
@@ -201,19 +236,25 @@ class Esp32SensorClient extends ChangeNotifier {
         platformName == esp32SensorDeviceName;
   }
 
-  Future<void> _connectToDevice(BluetoothDevice device) async {
-    if (_status != Esp32SensorConnectionStatus.scanning) return;
+  /// Connects to one of [discoveredDevices], stopping any in-progress scan
+  /// first. Deliberately callable while [status] is still `scanning` - the
+  /// whole point of listing devices as they're found is to let the user tap
+  /// one before the scan window ends, so only an already-in-progress
+  /// connection attempt (or an existing connection) blocks a new one.
+  Future<void> connectToDevice(DiscoveredEsp32Device target) async {
+    if (_status == Esp32ProvisioningStatus.connecting || isConnected) return;
 
-    _setStatus(Esp32SensorConnectionStatus.connecting);
+    _setStatus(Esp32ProvisioningStatus.connecting);
     await _stopScanQuietly();
 
+    final device = target._device;
     try {
       _device = device;
       await _connectionSubscription?.cancel();
       _connectionSubscription = device.connectionState.listen((state) {
         if (state == BluetoothConnectionState.disconnected &&
-            _status == Esp32SensorConnectionStatus.connected) {
-          _setStatus(Esp32SensorConnectionStatus.disconnected);
+            _status == Esp32ProvisioningStatus.connected) {
+          _setStatus(Esp32ProvisioningStatus.disconnected);
         }
       });
 
@@ -222,245 +263,190 @@ class Esp32SensorClient extends ChangeNotifier {
       }
 
       final services = await device.discoverServices();
-      final characteristic = _findNotifyCharacteristic(services);
-      if (characteristic == null) {
-        throw StateError('Sensor data characteristic was not found.');
+      _configCharacteristic = _findConfigCharacteristic(services);
+      if (_configCharacteristic == null) {
+        throw StateError(
+          'This sensor does not support Wi-Fi setup yet. Update its firmware, then try again.',
+        );
       }
 
-      await _valueSubscription?.cancel();
-      _valueSubscription = characteristic.onValueReceived.listen(
-        _handleSensorBytes,
-        onError: (Object error) => _setError(_friendlyError(error)),
-      );
-
-      if (characteristic.properties.read) {
-        final currentValue = await characteristic.read(timeout: 8);
-        _handleSensorBytes(currentValue);
-      }
-
-      await characteristic.setNotifyValue(true);
       _lastError = null;
-      _setStatus(Esp32SensorConnectionStatus.connected);
+      _setStatus(Esp32ProvisioningStatus.connected);
     } catch (error) {
       await disconnect();
       _setError(_friendlyError(error));
     }
   }
 
-  BluetoothCharacteristic? _findNotifyCharacteristic(
+  BluetoothCharacteristic? _findConfigCharacteristic(
     List<BluetoothService> services,
   ) {
     for (final service in services) {
       if (service.uuid != _serviceGuid) continue;
       for (final characteristic in service.characteristics) {
-        if (characteristic.uuid == _notifyGuid) {
-          return characteristic;
-        }
+        if (characteristic.uuid == _configGuid) return characteristic;
       }
     }
     return null;
   }
 
-  // The firmware sends a fresh, self-contained "{...}\n" reading on every
-  // notification — never a continuation of a previous one. If a single BLE
-  // packet ever arrives short (e.g. the negotiated ATT MTU is smaller than
-  // the ~50-byte payload, which the ESP32 BLE stack silently truncates to
-  // rather than fragmenting across packets), that fragment would otherwise
-  // sit in the buffer forever, get concatenated with the *next* unrelated
-  // notification, and never again match a complete "\n"-terminated or
-  // balanced-brace payload — i.e. readings would stop updating permanently
-  // after a single bad packet. Capping the buffer and recovering from the
-  // most recent "{" keeps this self-healing instead.
-  static const int _maxBufferLength = 512;
-
-  void _handleSensorBytes(List<int> bytes) {
-    if (bytes.isEmpty) return;
-
-    _rxBuffer += utf8.decode(bytes, allowMalformed: true);
-    if (_rxBuffer.length > _maxBufferLength) {
-      final lastBrace = _rxBuffer.lastIndexOf('{');
-      _rxBuffer = lastBrace == -1 ? '' : _rxBuffer.substring(lastBrace);
+  /// Sends the Wi-Fi details to the ESP32's BLE configuration characteristic.
+  /// The ESP32 stores the network details locally and uses them to connect
+  /// to Wi-Fi and post readings to Supabase; the UID is only a label used to
+  /// tag those readings and is not used as Supabase credentials.
+  Future<String> provisionWifi({
+    required String ssid,
+    required String password,
+    String? ownerUid,
+  }) async {
+    final normalizedSsid = ssid.trim();
+    final normalizedOwnerUid = ownerUid?.trim();
+    if (normalizedSsid.isEmpty || normalizedSsid.length > 32) {
+      throw ArgumentError.value(
+        ssid,
+        'ssid',
+        'Use a Wi-Fi name of 1–32 characters.',
+      );
+    }
+    if (password.length > 63) {
+      throw ArgumentError.value(
+        password,
+        'password',
+        'Use a Wi-Fi password of at most 63 characters.',
+      );
+    }
+    if (normalizedOwnerUid != null && normalizedOwnerUid.length > 128) {
+      throw ArgumentError.value(
+        ownerUid,
+        'ownerUid',
+        'The account identifier is too long.',
+      );
     }
 
-    while (_rxBuffer.contains('\n')) {
-      final newline = _rxBuffer.indexOf('\n');
-      final payload = _rxBuffer.substring(0, newline).trim();
-      _rxBuffer = _rxBuffer.substring(newline + 1);
-      _parseAndEmit(payload);
+    final characteristic = _configCharacteristic;
+    if (!isConnected || characteristic == null) {
+      throw StateError(
+        'This sensor\'s firmware does not support Wi-Fi setup. Update it, then reconnect.',
+      );
     }
 
-    final candidate = _extractBalancedJsonObject(_rxBuffer);
-    if (candidate != null) {
-      _rxBuffer = '';
-      _parseAndEmit(candidate);
-    }
-  }
-
-  /// Finds the first complete `{...}` object in [buffer] by brace counting,
-  /// instead of requiring the *entire* trimmed buffer to start and end with
-  /// braces — a stray leading/trailing byte shouldn't block an otherwise
-  /// complete payload from parsing.
-  String? _extractBalancedJsonObject(String buffer) {
-    final start = buffer.indexOf('{');
-    if (start == -1) return null;
-
-    var depth = 0;
-    for (var i = start; i < buffer.length; i++) {
-      if (buffer[i] == '{') depth++;
-      if (buffer[i] == '}') {
-        depth--;
-        if (depth == 0) return buffer.substring(start, i + 1);
-      }
-    }
-    return null;
-  }
-
-  void _parseAndEmit(String payload) {
-    if (payload.isEmpty) return;
-
-    final reading = _parseReading(payload);
-    if (reading == null) {
-      _lastError = 'ESP32 sent unreadable sensor data.';
-      _notify();
-      return;
-    }
-
-    _latestReading = reading;
-    _lastError = reading.dhtAvailable && reading.airAvailable
-        ? null
-        : _sensorFaultMessage(reading);
-    _onReading?.call(reading);
+    _isProvisioningWifi = true;
+    _wifiProvisioningStatus = 'Sending Wi-Fi settings to the sensor…';
     _notify();
-  }
 
-  String _sensorFaultMessage(Esp32SensorReading reading) {
-    if (!reading.dhtAvailable && !reading.airAvailable) {
-      return 'DHT and air quality sensors are not responding — check the wiring.';
-    }
-    if (!reading.dhtAvailable) {
-      return 'DHT sensor is not responding — check the wiring.';
-    }
-    return 'Air quality sensor is not responding — check the wiring.';
-  }
-
-  Esp32SensorReading? _parseReading(String payload) {
     try {
-      final decoded = jsonDecode(payload);
-      if (decoded is Map<String, dynamic> && decoded.isNotEmpty) {
-        final temperature = _numberFrom(decoded, const [
-          'temperature',
-          'temperatureC',
-          'temp',
-          't',
-        ]);
-        final humidity = _numberFrom(decoded, const [
-          'humidity',
-          'humidityPercent',
-          'h',
-        ]);
-        final airQuality = _numberFrom(decoded, const [
-          'airQuality',
-          'air_quality',
-          'airPpm',
-          'ppm',
-          'aq',
-        ]);
-
-        return _mergeWithLastKnown(
-          temperature: temperature,
-          humidity: humidity,
-          airQuality: airQuality,
+      await _writeConfigCommand(characteristic, 'SSID:$normalizedSsid');
+      await _writeConfigCommand(characteristic, 'PASSWORD:$password');
+      if (normalizedOwnerUid != null && normalizedOwnerUid.isNotEmpty) {
+        await _writeConfigCommand(
+          characteristic,
+          'OWNER_UID:$normalizedOwnerUid',
         );
       }
-    } catch (_) {
-      return _parseKeyValueReading(payload);
+      await _writeConfigCommand(characteristic, 'SAVE');
+      final response = await _writeConfigCommand(characteristic, 'CONNECT');
+      _wifiProvisioningStatus = response;
+      if (!response.startsWith('OK:')) {
+        throw StateError(response);
+      }
+      return response;
+    } catch (error) {
+      _wifiProvisioningStatus = _friendlyError(error);
+      rethrow;
+    } finally {
+      _isProvisioningWifi = false;
+      _notify();
+    }
+  }
+
+  /// Wipes the ESP32's saved Wi-Fi network, password, and owner UID, so it
+  /// falls back to BLE-only setup mode.
+  Future<String> forgetWifi() async {
+    final characteristic = _configCharacteristic;
+    if (!isConnected || characteristic == null) {
+      throw StateError(
+        'Connect to the sensor over Bluetooth before forgetting its Wi-Fi.',
+      );
     }
 
-    return _parseKeyValueReading(payload);
+    _isProvisioningWifi = true;
+    _wifiProvisioningStatus = 'Clearing the sensor\'s saved Wi-Fi…';
+    _notify();
+
+    try {
+      final response = await _writeConfigCommand(characteristic, 'CLEAR');
+      _wifiProvisioningStatus = response;
+      if (!response.startsWith('OK:')) {
+        throw StateError(response);
+      }
+      return response;
+    } catch (error) {
+      _wifiProvisioningStatus = _friendlyError(error);
+      rethrow;
+    } finally {
+      _isProvisioningWifi = false;
+      _notify();
+    }
   }
 
-  Esp32SensorReading? _parseKeyValueReading(String payload) {
-    final temperature = _matchNumber(
-      payload,
-      RegExp(
-        r'(?:temperature|temp|t)\s*[:=]\s*(-?\d+(?:\.\d+)?)',
-        caseSensitive: false,
-      ),
-    );
-    final humidity = _matchNumber(
-      payload,
-      RegExp(
-        r'(?:humidity|hum|h)\s*[:=]\s*(-?\d+(?:\.\d+)?)',
-        caseSensitive: false,
-      ),
-    );
-    final airQuality = _matchNumber(
-      payload,
-      RegExp(
-        r'(?:airQuality|air_quality|air|ppm|aq)\s*[:=]\s*(-?\d+(?:\.\d+)?)',
-        caseSensitive: false,
-      ),
-    );
+  /// Slower BLE commands that block on-device (connecting to Wi-Fi, or
+  /// scanning for it) need more room than a plain config write.
+  static const _slowCommands = {'CONNECT', 'SCAN_WIFI'};
 
-    return _mergeWithLastKnown(
-      temperature: temperature,
-      humidity: humidity,
-      airQuality: airQuality,
-    );
-  }
-
-  /// The firmware still emits a reading every cycle even when the DHT or the
-  /// MQ135 can't be read (bad wiring, disconnected, etc), reporting the
-  /// affected field(s) as `null` instead of dropping the payload entirely.
-  /// Missing fields fall back to the last known-good value so the rest of
-  /// the app keeps working off real numbers, while [Esp32SensorReading.
-  /// dhtAvailable]/[Esp32SensorReading.airAvailable] tell the UI the value
-  /// is stale rather than pretending it's fresh. If a sensor has *never*
-  /// reported a value (e.g. it's been offline since the very first reading),
-  /// there's no last-known value to fall back to — that alone must not
-  /// blank out the *other*, currently-working sensor, so it falls back to
-  /// 0 instead of discarding the whole reading.
-  Esp32SensorReading? _mergeWithLastKnown({
-    required double? temperature,
-    required double? humidity,
-    required double? airQuality,
-  }) {
-    final last = _latestReading;
-    final dhtAvailable = temperature != null && humidity != null;
-    final airAvailable = airQuality != null;
-
-    if (!dhtAvailable && !airAvailable && last == null) {
-      // Nothing usable in this payload and no history to fall back on.
-      return null;
+  /// Asks the connected sensor to scan for nearby Wi-Fi networks and returns
+  /// the SSIDs it can see, strongest signal first. Runs on the sensor's own
+  /// radio, not the phone's - that's the one that actually needs to reach
+  /// the network once configured, and the two don't always see the same
+  /// set even when they're right next to each other.
+  Future<List<String>> scanWifiNetworks() async {
+    final characteristic = _configCharacteristic;
+    if (!isConnected || characteristic == null) {
+      throw StateError(
+        'Connect to the sensor over Bluetooth before scanning for Wi-Fi.',
+      );
     }
 
-    final resolvedTemperature = temperature ?? last?.temperatureC ?? 0;
-    final resolvedHumidity = humidity ?? last?.humidityPercent ?? 0;
-    final resolvedAir = airQuality?.round() ?? last?.airQualityPpm ?? 0;
-
-    return Esp32SensorReading(
-      temperatureC: resolvedTemperature,
-      humidityPercent: resolvedHumidity,
-      airQualityPpm: resolvedAir,
-      receivedAt: DateTime.now(),
-      dhtAvailable: dhtAvailable,
-      airAvailable: airAvailable,
-    );
-  }
-
-  double? _numberFrom(Map<String, dynamic> map, List<String> keys) {
-    for (final key in keys) {
-      final value = map[key];
-      if (value is num) return value.toDouble();
-      if (value is String) return double.tryParse(value);
+    final response = await _writeConfigCommand(characteristic, 'SCAN_WIFI');
+    if (!response.startsWith('OK:')) {
+      throw StateError(response);
     }
-    return null;
+    final payload = response.substring(3);
+    if (payload.isEmpty) return const [];
+    return payload.split('|').where((ssid) => ssid.isNotEmpty).toList();
   }
 
-  double? _matchNumber(String value, RegExp pattern) {
-    final match = pattern.firstMatch(value);
-    if (match == null) return null;
-    return double.tryParse(match.group(1)!);
+  Future<String> _writeConfigCommand(
+    BluetoothCharacteristic characteristic,
+    String command,
+  ) async {
+    final canWriteWithResponse = characteristic.properties.write;
+    final canWriteWithoutResponse =
+        characteristic.properties.writeWithoutResponse;
+    if (!canWriteWithResponse && !canWriteWithoutResponse) {
+      throw StateError(
+        'The sensor\'s Wi-Fi setup characteristic is not writable.',
+      );
+    }
+
+    final timeoutSeconds = _slowCommands.contains(command) ? 22 : 8;
+
+    await characteristic.write(
+      utf8.encode(command),
+      withoutResponse: !canWriteWithResponse,
+      timeout: timeoutSeconds,
+    );
+
+    if (!characteristic.properties.read) return 'OK:$command sent';
+    // The ESP32 updates the characteristic value inside its write callback.
+    // A brief wait avoids racing the following GATT read on slower phones.
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    final response = utf8
+        .decode(
+          await characteristic.read(timeout: timeoutSeconds),
+          allowMalformed: true,
+        )
+        .trim();
+    return response.isEmpty ? 'OK:$command sent' : response;
   }
 
   Future<void> _stopScanQuietly() async {
@@ -473,14 +459,14 @@ class Esp32SensorClient extends ChangeNotifier {
     }
   }
 
-  void _setStatus(Esp32SensorConnectionStatus status) {
+  void _setStatus(Esp32ProvisioningStatus status) {
     _status = status;
     _notify();
   }
 
   void _setError(String message) {
     _lastError = message;
-    _status = Esp32SensorConnectionStatus.error;
+    _status = Esp32ProvisioningStatus.error;
     _notify();
   }
 
@@ -501,7 +487,6 @@ class Esp32SensorClient extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     unawaited(_scanSubscription?.cancel());
-    unawaited(_valueSubscription?.cancel());
     unawaited(_connectionSubscription?.cancel());
     unawaited(_stopScanQuietly());
     final device = _device;

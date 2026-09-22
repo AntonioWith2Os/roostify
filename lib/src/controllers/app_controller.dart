@@ -105,16 +105,38 @@ class AppController extends ChangeNotifier {
     _persistedStateLoaded = _loadPersistedAccountsAndThreads();
   }
 
+  Timer? _liveStatusTicker;
+
+  /// MonitorSnapshot.isLive is a pure function of DateTime.now() versus the
+  /// last reading's timestamp, but nothing re-evaluates it purely because
+  /// time passed - notifyListeners() otherwise only fires when a new reading
+  /// actually arrives. Without this, a sensor that goes silent never gets
+  /// marked offline: the dashboard just keeps showing whatever was last
+  /// rendered indefinitely, since nothing prompts it to check the clock
+  /// again. Ticking well inside _liveThreshold keeps that a prompt reaction
+  /// instead of an indefinite freeze.
+  ///
+  /// Deliberately opt-in rather than started from the constructor: this is
+  /// a real, uncancelled Timer.periodic, and flutter_test's fake-async zone
+  /// fails any test that ends with one still pending - which almost every
+  /// test in this suite would, since most construct an AppController
+  /// directly without ever mounting the real app shell that would dispose
+  /// it. Only the actual app entry point (RoosterWatchApp) calls this.
+  void startLiveStatusTicking() {
+    if (_liveStatusTicker != null) return;
+    _liveStatusTicker = Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => notifyListeners(),
+    );
+  }
+
   final List<CameraDescription> cameras;
   final List<AppUser> _users;
   final List<SupportThread> _supportThreads;
-  final Esp32SensorClient _sensorClient = Esp32SensorClient();
+  final Esp32ProvisioningClient _sensorClient = Esp32ProvisioningClient();
   final OnDeviceYoloDetector _yoloDetector = OnDeviceYoloDetector();
-  final GoogleSignIn _googleSignIn = GoogleSignIn(
-    scopes: const ['email', 'profile'],
-  );
-  final FirebaseBackendService _firebase = FirebaseBackendService();
-  final Map<String, StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>>
+  final SupabaseBackendService _supabase = SupabaseBackendService();
+  final Map<String, StreamSubscription<List<Map<String, dynamic>>>>
   _farmStatusSubscriptions = {};
   final Map<String, CctvInspectionResult> _cctvCandidates = {};
   final Map<String, int> _cctvCandidateHits = {};
@@ -154,11 +176,22 @@ class AppController extends ChangeNotifier {
       _supportThreads.where((thread) => !thread.resolved).length;
   int get unreadSupportCount =>
       _supportThreads.where((thread) => thread.unreadByAdmin).length;
-  Esp32SensorConnectionStatus get sensorConnectionStatus =>
-      _sensorClient.status;
-  Esp32SensorReading? get latestSensorReading => _sensorClient.latestReading;
-  String get sensorStatusLabel => _sensorClient.statusLabel;
-  bool get sensorHasReadIssue => _sensorClient.hasReadIssue;
+
+  /// BLE setup-link status - only meaningful while actively (re)configuring
+  /// an environmental sensor's Wi-Fi. Not related to whether live sensor
+  /// data is flowing; see [sensorOnline] for that.
+  Esp32ProvisioningStatus get esp32SetupStatus => _sensorClient.status;
+  String? get esp32SetupError => _sensorClient.lastError;
+  List<DiscoveredEsp32Device> get discoveredEsp32Devices =>
+      _sensorClient.discoveredDevices;
+  bool get canConfigureSensorWifi => _sensorClient.canProvisionWifi;
+  bool get isConfiguringSensorWifi => _sensorClient.isProvisioningWifi;
+  String? get sensorWifiProvisioningStatus =>
+      _sensorClient.wifiProvisioningStatus;
+
+  /// True when the signed-in user's own farm has a recent reading posted by
+  /// their ESP32 over Wi-Fi (see [MonitorSnapshot.isLive]).
+  bool get sensorOnline => _session?.user.monitor.isLive ?? false;
   AppThemePreference get themePreference => _themePreference;
   Locale get languageLocale => _languageLocale;
 
@@ -336,44 +369,100 @@ class AppController extends ChangeNotifier {
     await prefs.remove(_rememberRoleKey);
   }
 
-  /// Restores a session remembered via [rememberThisDevice], if any. Called
-  /// once at app startup, before falling back to the login screen.
+  /// Restores a session remembered via [rememberThisDevice] (set
+  /// automatically on every successful sign-in — see [_openSupabaseSession]),
+  /// if any. Called once at app startup, before falling back to the login
+  /// screen.
   Future<Session?> restoreRememberedSession() async {
     final prefs = await SharedPreferences.getInstance();
     final username = prefs.getString(_rememberUsernameKey);
     final roleName = prefs.getString(_rememberRoleKey);
     if (username == null || roleName == null) return null;
 
-    if (!_firebase.isReady) return null;
-    final firebaseUser = _firebase.currentUser;
-    if (firebaseUser == null) return null;
-
-    await _persistedStateLoaded;
-
     final role = UserRole.values.where((r) => r.name == roleName).firstOrNull;
     if (role == null) return null;
 
-    try {
-      final data = await _firebase.profileFor(firebaseUser.uid);
-      if (data == null) return null;
-      final user = _upsertFirebaseProfile(firebaseUser.uid, data);
-      if (user.username != username || user.role != role) return null;
+    final supabaseUser = _supabase.currentUser;
+    if (supabaseUser == null) return null;
 
-      if (user.isAdmin) {
-        await _loadFirebaseUsersForAdmin();
-        _listenToFarmStatuses();
-      }
+    await _persistedStateLoaded;
+
+    // A previous session already persisted this exact profile locally (see
+    // _applyPersistedAccounts / _persistAccounts) — trust it and land on the
+    // dashboard immediately instead of blocking on a fresh fetch. The
+    // profile is still re-fetched, just in the background, to pick up
+    // role/detail changes made elsewhere.
+    final cachedUser = userByUsername(username);
+    if (cachedUser != null && cachedUser.role == role) {
+      lastError = null;
+      _session = Session(user: cachedUser, email: supabaseUser.email);
+      notifyListeners();
+
+      // Every session needs this: a farmer's own farm status (their live
+      // sensor data) as much as an admin's view across every farm.
+      _listenToFarmStatuses();
+      unawaited(_reconcileRememberedProfile(supabaseUser, username, role));
+      return _session;
+    }
+
+    try {
+      final data = await _supabase.profileFor(supabaseUser.id);
+      if (data == null) return null;
+      final user = _upsertProfile(supabaseUser.id, data);
+      if (user.username != username || user.role != role) return null;
 
       lastError = null;
       _session = Session(
         user: userByUsername(user.username) ?? user,
-        email: firebaseUser.email,
-        photoUrl: firebaseUser.photoURL,
+        email: supabaseUser.email,
       );
       notifyListeners();
+
+      // The admin farm-user list isn't needed to land on the dashboard, only
+      // to populate it — fetch it in the background instead of making
+      // startup wait through a second round trip on top of the profile
+      // fetch above. A farmer session has no roster to load first, so its
+      // own farm status can be listened to immediately.
+      if (user.isAdmin) {
+        unawaited(
+          _loadUsersForAdmin().then((_) {
+            _listenToFarmStatuses();
+            notifyListeners();
+          }),
+        );
+      } else {
+        _listenToFarmStatuses();
+      }
+
       return _session;
-    } on FirebaseException {
+    } on PostgrestException {
       return null;
+    }
+  }
+
+  /// Refreshes a remembered-session profile after the dashboard has already
+  /// been shown from the locally cached copy (see
+  /// [restoreRememberedSession]). Best-effort: a stale cache is corrected
+  /// once this lands, and a network hiccup here just leaves the cached
+  /// profile in place rather than disrupting an already-open session.
+  Future<void> _reconcileRememberedProfile(
+    User supabaseUser,
+    String username,
+    UserRole role,
+  ) async {
+    try {
+      final data = await _supabase.profileFor(supabaseUser.id);
+      if (data == null) return;
+      final user = _upsertProfile(supabaseUser.id, data);
+      if (user.username != username || user.role != role) return;
+
+      if (user.isAdmin) {
+        await _loadUsersForAdmin();
+      }
+      _listenToFarmStatuses();
+      notifyListeners();
+    } on PostgrestException {
+      // Offline or a database hiccup — keep using the cached profile.
     }
   }
 
@@ -493,14 +582,59 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> connectEsp32Sensor(String username) {
-    return _sensorClient.connect(
-      onReading: (reading) => _applyEsp32Reading(username, reading),
+  /// Searches for nearby environmental sensors over Bluetooth, populating
+  /// [discoveredEsp32Devices] as they're found - see [connectToEsp32Device]
+  /// for picking one to actually set up.
+  Future<void> startEsp32Discovery() {
+    return _sensorClient.startDiscovery();
+  }
+
+  Future<void> stopEsp32Discovery() {
+    return _sensorClient.stopDiscovery();
+  }
+
+  /// Opens the BLE link used only to (re)configure a sensor - never to
+  /// stream sensor data, which travels over Wi-Fi -> Supabase instead.
+  Future<void> connectToEsp32Device(DiscoveredEsp32Device device) {
+    return _sensorClient.connectToDevice(device);
+  }
+
+  Future<void> disconnectEsp32Setup() {
+    return _sensorClient.disconnect();
+  }
+
+  /// Provisions the Wi-Fi network through the connected sensor's BLE setup
+  /// characteristic. The device receives an account UID only when this is a
+  /// real signed-in Supabase session; it remains a label, not a credential.
+  Future<String> configureEsp32Wifi({
+    required String username,
+    required String ssid,
+    required String password,
+  }) {
+    final user = userByUsername(username);
+    if (user == null || user.isAdmin) {
+      throw StateError('Sign in as a farmer before configuring a sensor.');
+    }
+
+    final ownerUid = _supabase.currentUser?.id == user.accountId
+        ? user.accountId
+        : null;
+    return _sensorClient.provisionWifi(
+      ssid: ssid,
+      password: password,
+      ownerUid: ownerUid,
     );
   }
 
-  Future<void> disconnectEsp32Sensor() {
-    return _sensorClient.disconnect();
+  /// Wipes the sensor's saved Wi-Fi network, password, and owner UID over
+  /// the already-open BLE setup link (see [connectToEsp32Device]).
+  Future<String> forgetEsp32Wifi() {
+    return _sensorClient.forgetWifi();
+  }
+
+  /// Nearby Wi-Fi network names as seen by the connected sensor itself.
+  Future<List<String>> scanEsp32WifiNetworks() {
+    return _sensorClient.scanWifiNetworks();
   }
 
   List<GuidelineItem> get guides => const [
@@ -542,50 +676,45 @@ class AppController extends ChangeNotifier {
       notifyListeners();
       return null;
     }
-    if (!_firebase.isReady) {
-      lastError = 'Firebase is not available on this platform.';
-      notifyListeners();
-      return null;
-    }
 
     try {
-      final credential = await _firebase.signInWithPassword(
+      final credential = await _supabase.signInWithPassword(
         usernameOrEmail: cleanUsername,
         password: cleanPassword,
       );
-      final firebaseUser = credential.user;
-      if (firebaseUser == null) {
-        throw FirebaseAuthException(code: 'invalid-credential');
+      final supabaseUser = credential.user;
+      if (supabaseUser == null) {
+        throw const AuthException('Invalid username or password.');
       }
-      final data = await _firebase.profileFor(firebaseUser.uid);
+      final data = await _supabase.profileFor(supabaseUser.id);
       if (data == null) {
-        await _firebase.signOut();
+        await _supabase.signOut();
         lastError =
-            'This Firebase account has no Roostify profile. Ask an administrator to provision it.';
+            'This account has no Roostify profile. Ask an administrator to provision it.';
         notifyListeners();
         return null;
       }
 
-      final user = _upsertFirebaseProfile(firebaseUser.uid, data);
+      final user = _upsertProfile(supabaseUser.id, data);
       if (user.role != expectedRole) {
-        await _firebase.signOut();
+        await _supabase.signOut();
         lastError = _roleMismatchMessage(expectedRole);
         notifyListeners();
         return null;
       }
 
       if (user.isAdmin) {
-        await _loadFirebaseUsersForAdmin();
-        _listenToFarmStatuses();
+        await _loadUsersForAdmin();
       }
-      return _openFirebaseSession(
+      _listenToFarmStatuses();
+      return _openSupabaseSession(
         userByUsername(user.username) ?? user,
-        firebaseUser,
+        supabaseUser,
       );
-    } on FirebaseAuthException catch (error) {
-      lastError = _friendlyFirebaseAuthError(error);
-    } on FirebaseException catch (error) {
-      lastError = error.message ?? 'Unable to connect to Firebase.';
+    } on AuthException catch (error) {
+      lastError = _friendlyAuthError(error);
+    } on PostgrestException catch (error) {
+      lastError = error.message;
     } catch (_) {
       lastError = 'Unable to sign in. Check your connection and try again.';
     }
@@ -593,81 +722,12 @@ class AppController extends ChangeNotifier {
     return null;
   }
 
-  Future<Session?> signInWithGoogle({required UserRole expectedRole}) async {
-    if (!_firebase.isReady) {
-      lastError = 'Firebase is not available on this platform.';
-      notifyListeners();
-      return null;
-    }
-    try {
-      final googleAccount = await _googleSignIn.signIn();
-
-      if (googleAccount == null) {
-        lastError = 'Google sign-in was cancelled.';
-        notifyListeners();
-        return null;
-      }
-
-      final credential = await _firebase.signInWithGoogle(googleAccount);
-      final firebaseUser = credential.user;
-      if (firebaseUser == null) {
-        throw FirebaseAuthException(code: 'invalid-credential');
-      }
-      var data = await _firebase.profileFor(firebaseUser.uid);
-      if (data == null && expectedRole == UserRole.user) {
-        data = await _firebase.ensureStandardUserProfile(
-          firebaseUser,
-          preferredUsername: googleAccount.email.split('@').first,
-        );
-      }
-      if (data == null) {
-        await _firebase.signOut();
-        lastError =
-            'Google admin access must be provisioned by a Roostify administrator.';
-        notifyListeners();
-        return null;
-      }
-
-      final user = _upsertFirebaseProfile(firebaseUser.uid, data);
-      if (user.role != expectedRole) {
-        await _firebase.signOut();
-        lastError = _roleMismatchMessage(expectedRole);
-        notifyListeners();
-        return null;
-      }
-      await _applyGoogleProfileIfSyncEnabled(user, googleAccount);
-      if (user.isAdmin) {
-        await _loadFirebaseUsersForAdmin();
-        _listenToFarmStatuses();
-      }
-      return _openFirebaseSession(
-        userByUsername(user.username) ?? user,
-        firebaseUser,
-        photoUrl: googleAccount.photoUrl,
-      );
-    } on FirebaseAuthException catch (error) {
-      lastError = _friendlyFirebaseAuthError(error);
-      notifyListeners();
-      return null;
-    } catch (error) {
-      lastError =
-          'Unable to sign in with Google. Check Firebase Google sign-in setup.';
-      notifyListeners();
-      return null;
-    }
-  }
-
-  Session _openFirebaseSession(
-    AppUser user,
-    User firebaseUser, {
-    String? photoUrl,
-  }) {
+  Session _openSupabaseSession(AppUser user, User supabaseUser) {
     lastError = null;
-    _session = Session(
-      user: user,
-      email: firebaseUser.email,
-      photoUrl: photoUrl ?? firebaseUser.photoURL,
-    );
+    _session = Session(user: user, email: supabaseUser.email);
+    // Stay signed in across app restarts by default, the same as any other
+    // mobile app — no separate opt-in needed. Explicit sign-out clears this.
+    unawaited(rememberThisDevice(user.username, user.role));
     if (user.firstLoginAt == null) {
       user.firstLoginAt = DateTime.now();
       unawaited(_persistAccounts());
@@ -682,26 +742,36 @@ class AppController extends ChangeNotifier {
         : 'This account is not registered as a user.';
   }
 
-  String _friendlyFirebaseAuthError(FirebaseAuthException error) {
+  String _friendlyAuthError(AuthException error) {
+    // GoTrue's own message for wrong-password/unknown-email sign-in attempts
+    // ("Invalid login credentials") is already fine as-is and has no
+    // dedicated error code to switch on - only the cases below need
+    // rewording.
     return switch (error.code) {
-      'invalid-credential' ||
-      'user-not-found' ||
-      'wrong-password' => 'Invalid username or password.',
-      'user-disabled' => 'This account has been disabled.',
-      'network-request-failed' =>
-        'Could not reach Firebase. Check your internet connection.',
-      'too-many-requests' =>
+      'user_not_found' => 'Invalid username or password.',
+      'user_banned' => 'This account has been disabled.',
+      'over_request_rate_limit' =>
         'Too many sign-in attempts. Wait a moment and try again.',
-      'requires-recent-login' =>
+      'session_expired' || 'session_not_found' =>
         'For security, sign out and sign in again before making this change.',
-      'credential-already-in-use' ||
-      'account-exists-with-different-credential' =>
-        'That Google account is already connected to another Roostify account.',
-      _ => error.message ?? 'Firebase authentication failed.',
+      _ => error.message,
     };
   }
 
-  AppUser _upsertFirebaseProfile(String uid, Map<String, dynamic> data) {
+  /// Edge Function errors (create/delete/reset-password) come back as an
+  /// HTTP status with a JSON body `{"error": "message"}` — this unwraps that
+  /// on the expected path and falls back to [fallback] for anything else
+  /// (a network failure, an unexpected response shape, etc).
+  String _friendlyFunctionError(FunctionException error, String fallback) {
+    final details = error.details;
+    if (details is Map && details['error'] is String) {
+      return details['error'] as String;
+    }
+    return error.reasonPhrase ?? fallback;
+  }
+
+  /// [data] uses the `profiles` table's `snake_case` column names.
+  AppUser _upsertProfile(String uid, Map<String, dynamic> data) {
     final username = (data['username'] as String?)?.trim();
     final resolvedUsername = username == null || username.isEmpty
         ? 'user_${uid.substring(0, uid.length < 8 ? uid.length : 8)}'
@@ -714,7 +784,7 @@ class AppController extends ChangeNotifier {
       (user) => user.accountId == uid || user.username == resolvedUsername,
     );
     final previous = index < 0 ? null : _users[index];
-    final displayName = (data['displayName'] as String?)?.trim();
+    final displayName = (data['display_name'] as String?)?.trim();
     final user = AppUser(
       accountId: uid,
       username: resolvedUsername,
@@ -722,17 +792,17 @@ class AppController extends ChangeNotifier {
           ? resolvedUsername
           : displayName,
       email: data['email'] as String? ?? '',
-      contactNumber: data['contactNumber'] as String? ?? '',
+      contactNumber: data['contact_number'] as String? ?? '',
       address: data['address'] as String? ?? '',
-      facebookContact: data['facebookContact'] as String? ?? '',
-      farmName: data['farmName'] as String? ?? '',
-      shortBio: data['shortBio'] as String? ?? '',
+      facebookContact: data['facebook_contact'] as String? ?? '',
+      farmName: data['farm_name'] as String? ?? '',
+      shortBio: data['short_bio'] as String? ?? '',
       avatarPath: previous?.avatarPath,
       firstLoginAt: previous?.firstLoginAt,
       tempPasswordIssued: previous?.tempPasswordIssued ?? false,
       role: role,
       cameraAccessEnabled:
-          data['cameraAccessEnabled'] as bool? ?? role == UserRole.user,
+          data['camera_access_enabled'] as bool? ?? role == UserRole.user,
       monitor:
           previous?.monitor ??
           (role == UserRole.admin
@@ -753,18 +823,48 @@ class AppController extends ChangeNotifier {
     return user;
   }
 
-  Future<void> _loadFirebaseUsersForAdmin() async {
-    final profiles = await _firebase.allUserProfiles();
+  Future<void> _loadUsersForAdmin() async {
+    final profiles = await _supabase.allUserProfiles();
     final remoteIds = <String>{};
     for (final profile in profiles) {
-      final uid = profile['uid'] as String?;
+      final uid = profile['id'] as String?;
       if (uid == null || uid.isEmpty) continue;
       remoteIds.add(uid);
-      _upsertFirebaseProfile(uid, profile);
+      _upsertProfile(uid, profile);
     }
     _users.removeWhere((user) => !remoteIds.contains(user.accountId));
   }
 
+  /// True when temperature, humidity, or air quality is outside the
+  /// "normal" range - the same per-metric level computation
+  /// [MonitorSnapshot._environmentAlerts] uses to decide whether to raise an
+  /// alert, reused here so [AppUser.sensorReadingLog] tracks exactly the
+  /// readings that would actually be considered noteworthy.
+  bool _isNotableReading(Esp32SensorReading reading) {
+    final dhtNotable =
+        reading.dhtAvailable &&
+        (MonitorSnapshot.temperatureLevelFor(
+                  reading.temperatureC,
+                  humidity: reading.humidityPercent,
+                ) !=
+                SensorWarningLevel.normal ||
+            MonitorSnapshot.humidityLevelFor(
+                  reading.humidityPercent,
+                  temperature: reading.temperatureC,
+                ) !=
+                SensorWarningLevel.normal);
+    final airNotable =
+        reading.airAvailable &&
+        MonitorSnapshot.airLevelFor(reading.airQualityPpm) !=
+            SensorWarningLevel.normal;
+    return dhtNotable || airNotable;
+  }
+
+  /// Subscribes to `farm_status` for every farm user currently in memory -
+  /// just the signed-in farmer's own farm for a farmer session, or every
+  /// farm for an admin session (see the callers below). This is the only
+  /// place live sensor data reaches the app: the ESP32 posts straight to
+  /// Supabase over Wi-Fi, so there's nothing to listen to over Bluetooth.
   void _listenToFarmStatuses() {
     for (final subscription in _farmStatusSubscriptions.values) {
       unawaited(subscription.cancel());
@@ -772,124 +872,93 @@ class AppController extends ChangeNotifier {
     _farmStatusSubscriptions.clear();
 
     for (final user in farmUsers) {
-      _farmStatusSubscriptions[user.accountId] = _firebase
+      _farmStatusSubscriptions[user.accountId] = _supabase
           .watchLatestSensor(user.accountId)
-          .listen((snapshot) {
-            final data = snapshot.data();
-            if (data == null) return;
+          .listen((rows) {
+            if (rows.isEmpty) return;
+            final data = rows.first;
             final temperature = data['temperature'];
             final humidity = data['humidity'];
-            final airPpm = data['airPpm'];
+            final airPpm = data['air_ppm'];
             if (temperature is! num || humidity is! num || airPpm is! num) {
               return;
             }
-            final updatedAt = data['updatedAt'];
-            user.monitor = user.monitor.withEnvironmentReading(
-              Esp32SensorReading(
-                temperatureC: temperature.toDouble(),
-                humidityPercent: humidity.toDouble(),
-                airQualityPpm: airPpm.toInt(),
-                dhtAvailable: data['dhtAvailable'] as bool? ?? true,
-                airAvailable: data['airAvailable'] as bool? ?? true,
-                receivedAt: updatedAt is Timestamp
-                    ? updatedAt.toDate()
-                    : DateTime.now(),
-              ),
+            final updatedAt = data['updated_at'];
+            final previousAlerts = user.monitor.alerts;
+            final reading = Esp32SensorReading(
+              temperatureC: temperature.toDouble(),
+              humidityPercent: humidity.toDouble(),
+              airQualityPpm: airPpm.toInt(),
+              dhtAvailable: data['dht_available'] as bool? ?? true,
+              // The MQ135's raw-ADC-based availability heuristic
+              // (airRaw > 0 && airRaw < 4095, see the sketch) turned out to
+              // false-flag a genuinely working sensor - clean air can
+              // legitimately read near the bottom of that range. Until
+              // there's a more reliable way to detect a truly disconnected
+              // MQ135, the app just trusts every airPpm value it receives
+              // rather than gating it on what the firmware reported here.
+              airAvailable: true,
+              receivedAt: updatedAt is String
+                  ? DateTime.parse(updatedAt)
+                  : DateTime.now(),
             );
+            user.monitor = user.monitor.withEnvironmentReading(reading);
+
+            // Realtime can redeliver the same row (e.g. on reconnect)
+            // without a new reading actually having arrived - skip logging
+            // it again rather than showing a duplicate timestamp. Also skip
+            // anything that isn't actually notable: the log is meant to
+            // surface moments a threshold was crossed, not a redundant
+            // entry every ~2 seconds while everything's fine.
+            final log = user.sensorReadingLog;
+            if (_isNotableReading(reading) &&
+                (log.isEmpty || log.first.recordedAt != reading.receivedAt)) {
+              log.insert(0, SensorReadingLogEntry.fromReading(reading));
+              if (log.length > maxSensorReadingLogEntries) {
+                log.removeRange(maxSensorReadingLogEntries, log.length);
+              }
+            }
+
             notifyListeners();
+
+            // Notification preferences are per-device, not per-account, so
+            // only ever alert on the signed-in user's own farm - otherwise
+            // an admin watching every farm's status would be paged for
+            // every farmer's environment warnings.
+            if (user.accountId == _session?.user.accountId) {
+              for (final alert in user.monitor.alerts) {
+                final isNew = !previousAlerts.any(
+                  (old) =>
+                      old.title == alert.title &&
+                      old.category == alert.category,
+                );
+                if (isNew && alert.severity != AlertSeverity.info) {
+                  unawaited(
+                    _maybeEmitAlert(
+                      category: 'sensor_alerts',
+                      title: alert.title,
+                      message: alert.message,
+                      severity: alert.severity,
+                    ),
+                  );
+                }
+              }
+            }
           });
     }
   }
 
-  /// Overwrites [user]'s display name with the Google account's, but only
-  /// when the "Sync profile information" toggle on Connected Accounts is on
-  /// (defaults to on). When off, local profile edits are left alone.
-  Future<void> _applyGoogleProfileIfSyncEnabled(
-    AppUser user,
-    GoogleSignInAccount googleAccount,
-  ) async {
-    final prefs = await SharedPreferences.getInstance();
-    final syncProfile = prefs.getBool('roostify.sync.profile') ?? true;
-    if (!syncProfile) return;
-
-    final displayName = googleAccount.displayName?.trim();
-    if (displayName != null && displayName.isNotEmpty) {
-      user.displayName = displayName;
-      await _firebase.updateProfile(user);
-    }
-  }
-
+  /// This is only ever reached from an explicit "Log Out" action, so it
+  /// always fully signs out — a session persists across app restarts on its
+  /// own (see [_openSupabaseSession]), and this is what undoes that.
   Future<void> signOut() async {
-    final prefs = await SharedPreferences.getInstance();
-    final rememberedUsername = prefs.getString(_rememberUsernameKey);
-    final shouldKeepFirebaseSession =
-        rememberedUsername != null &&
-        rememberedUsername == _session?.user.username;
-    if (!shouldKeepFirebaseSession && _firebase.isReady) {
-      await _firebase.signOut();
-      await _googleSignIn.signOut();
-    }
+    await forgetThisDevice();
+    await _supabase.signOut();
     for (final subscription in _farmStatusSubscriptions.values) {
       await subscription.cancel();
     }
     _farmStatusSubscriptions.clear();
     _session = null;
-    notifyListeners();
-  }
-
-  /// Links the currently signed-in local/demo account to a Google account,
-  /// so its email and photo show up on the Profile tab. Mutates the active
-  /// [Session] in place (rather than replacing it) so the AppShell already
-  /// holding that Session reflects the change immediately.
-  Future<bool> linkGoogleAccount() async {
-    final session = _session;
-    if (session == null) {
-      lastError = 'Sign in before connecting a Google account.';
-      notifyListeners();
-      return false;
-    }
-
-    try {
-      final googleAccount = await _googleSignIn.signIn();
-      if (googleAccount == null) {
-        lastError = 'Google sign-in was cancelled.';
-        notifyListeners();
-        return false;
-      }
-
-      final credential = await _firebase.linkGoogleAccount(googleAccount);
-      await _applyGoogleProfileIfSyncEnabled(session.user, googleAccount);
-      session.email = credential.user?.email ?? googleAccount.email;
-      session.photoUrl = credential.user?.photoURL ?? googleAccount.photoUrl;
-      lastError = null;
-      notifyListeners();
-      return true;
-    } on FirebaseAuthException catch (error) {
-      lastError = _friendlyFirebaseAuthError(error);
-      notifyListeners();
-      return false;
-    } catch (_) {
-      lastError =
-          'Unable to connect Google. Check Firebase Google sign-in setup.';
-      notifyListeners();
-      return false;
-    }
-  }
-
-  /// Removes the Google identity from the active local account without
-  /// ending the app session.
-  Future<void> unlinkGoogleAccount() async {
-    final session = _session;
-    if (session == null) return;
-    try {
-      await _firebase.unlinkGoogleAccount();
-      await _googleSignIn.signOut();
-      session.email = _firebase.currentUser?.email;
-      session.photoUrl = _firebase.currentUser?.photoURL;
-      lastError = null;
-    } on FirebaseAuthException catch (error) {
-      lastError = _friendlyFirebaseAuthError(error);
-    }
     notifyListeners();
   }
 
@@ -923,10 +992,9 @@ class AppController extends ChangeNotifier {
 
     notifyListeners();
     unawaited(_persistAccounts());
-    if (_firebase.isReady &&
-        (_firebase.currentUser?.uid == user.accountId ||
-            _session?.user.isAdmin == true)) {
-      unawaited(_firebase.updateProfile(user));
+    if (_supabase.currentUser?.id == user.accountId ||
+        _session?.user.isAdmin == true) {
+      unawaited(_supabase.updateProfile(user));
     }
   }
 
@@ -1005,12 +1073,12 @@ class AppController extends ChangeNotifier {
 
     if (wantsPasswordChange) {
       try {
-        await _firebase.updatePassword(
+        await _supabase.updatePassword(
           currentPassword: currentPassword,
           newPassword: cleanPassword,
         );
-      } on FirebaseAuthException catch (error) {
-        return _friendlyFirebaseAuthError(error);
+      } on AuthException catch (error) {
+        return _friendlyAuthError(error);
       }
     }
     if (recoveryEmail != null) {
@@ -1019,10 +1087,9 @@ class AppController extends ChangeNotifier {
 
     notifyListeners();
     unawaited(_persistAccounts());
-    if (_firebase.isReady &&
-        (_firebase.currentUser?.uid == user.accountId ||
-            _session?.user.isAdmin == true)) {
-      unawaited(_firebase.updateProfile(user));
+    if (_supabase.currentUser?.id == user.accountId ||
+        _session?.user.isAdmin == true) {
+      unawaited(_supabase.updateProfile(user));
     }
     return null;
   }
@@ -1060,14 +1127,14 @@ class AppController extends ChangeNotifier {
       return false;
     }
 
-    if (!_firebase.isReady || _session?.user.isAdmin != true) {
-      lastError = 'Sign in as an administrator to create Firebase users.';
+    if (_session?.user.isAdmin != true) {
+      lastError = 'Sign in as an administrator to create users.';
       notifyListeners();
       return false;
     }
 
     try {
-      final result = await _firebase.createUser(
+      final result = await _supabase.createUser(
         username: cleanUsername,
         displayName: cleanDisplayName,
         email: email.trim(),
@@ -1080,17 +1147,17 @@ class AppController extends ChangeNotifier {
       );
       final uid = result['uid'] as String;
       final profile = Map<String, dynamic>.from(result['profile'] as Map);
-      final user = _upsertFirebaseProfile(uid, profile);
+      final user = _upsertProfile(uid, profile);
       user.tempPasswordIssued = true;
       lastError = null;
       notifyListeners();
       unawaited(_persistAccounts());
       _listenToFarmStatuses();
       return true;
-    } on FirebaseFunctionsException catch (error) {
-      lastError = error.message ?? 'Unable to create the Firebase user.';
-    } on FirebaseException catch (error) {
-      lastError = error.message ?? 'Unable to create the Firebase user.';
+    } on FunctionException catch (error) {
+      lastError = _friendlyFunctionError(error, 'Unable to create the user.');
+    } on PostgrestException catch (error) {
+      lastError = error.message;
     }
     notifyListeners();
     return false;
@@ -1100,9 +1167,9 @@ class AppController extends ChangeNotifier {
     final user = userByUsername(username);
     if (user == null || user.isAdmin) return false;
     try {
-      await _firebase.deleteUser(user.accountId);
-    } on FirebaseFunctionsException catch (error) {
-      lastError = error.message ?? 'Unable to remove the Firebase user.';
+      await _supabase.deleteUser(user.accountId);
+    } on FunctionException catch (error) {
+      lastError = _friendlyFunctionError(error, 'Unable to remove the user.');
       notifyListeners();
       return false;
     }
@@ -1127,11 +1194,9 @@ class AppController extends ChangeNotifier {
     user.cameraAccessEnabled = !user.cameraAccessEnabled;
     notifyListeners();
     unawaited(_persistAccounts());
-    if (_firebase.isReady) {
-      unawaited(
-        _firebase.updateCameraAccess(user.accountId, user.cameraAccessEnabled),
-      );
-    }
+    unawaited(
+      _supabase.updateCameraAccess(user.accountId, user.cameraAccessEnabled),
+    );
   }
 
   /// Issues [username] a new temporary password on the admin's behalf, no
@@ -1152,9 +1217,12 @@ class AppController extends ChangeNotifier {
     }
 
     try {
-      await _firebase.resetUserPassword(user.accountId, cleanPassword);
-    } on FirebaseFunctionsException catch (error) {
-      lastError = error.message ?? 'Unable to reset the Firebase password.';
+      await _supabase.resetUserPassword(user.accountId, cleanPassword);
+    } on FunctionException catch (error) {
+      lastError = _friendlyFunctionError(
+        error,
+        'Unable to reset the password.',
+      );
       notifyListeners();
       return false;
     }
@@ -1324,6 +1392,7 @@ class AppController extends ChangeNotifier {
     }
 
     stream.inspection = CctvInspectionResult.error(message);
+    notifyListeners();
   }
 
   /// Tracks actual player connectivity separately from snapshot/YOLO health.
@@ -1349,6 +1418,63 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  /// Actively checks how many of a user's configured cameras are currently
+  /// reachable, independent of whether a [LiveFeedCard] happens to be
+  /// mounted (which is the only thing that otherwise keeps
+  /// [LiveCctvStream.isOnline] fresh). Used by the dashboard's CCTV summary
+  /// so it reports real-time reachability rather than just a saved count.
+  Future<int> countReachableCctvStreams(String username) async {
+    final user = userByUsername(username);
+    final streams = user?.liveCctvStreams ?? const <LiveCctvStream>[];
+    if (streams.isEmpty) return 0;
+
+    final results = await Future.wait(streams.map(_probeStreamReachable));
+    return results.where((reachable) => reachable).length;
+  }
+
+  Future<bool> _probeStreamReachable(LiveCctvStream stream) async {
+    if (kIsWeb) return stream.isOnline;
+
+    final uri = Uri.tryParse(stream.streamUrl);
+    if (uri == null || uri.host.isEmpty) return stream.isOnline;
+
+    // A V380 Cloud camera has no directly dialable host/port — reaching it
+    // requires the full cloud handshake in v380_cloud_bridge.dart, which is
+    // too heavy for a lightweight dashboard check. If the on-device bridge
+    // session is already running (started by a live view, but kept alive in
+    // the background after it closes), its live status is a cheap read and
+    // far fresher than stream.isOnline, which only ever reflects whatever was
+    // true while that live view happened to be open. Only fall back to
+    // stream.isOnline when the camera hasn't been opened at all this run.
+    if (stream.deliveryProtocol == VideoDeliveryProtocol.v380Cloud) {
+      final knownOnline = V380CloudBridgeRegistry.instance.isKnownOnline(
+        stream.streamUrl,
+      );
+      return knownOnline ?? stream.isOnline;
+    }
+
+    final port = uri.hasPort ? uri.port : _defaultPortForScheme(uri.scheme);
+    try {
+      final socket = await Socket.connect(
+        uri.host,
+        port,
+        timeout: const Duration(seconds: 3),
+      );
+      socket.destroy();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  int _defaultPortForScheme(String scheme) => switch (scheme.toLowerCase()) {
+    'rtsp' => 554,
+    'rtsps' => 322,
+    'rtmp' || 'rtmps' => 1935,
+    'https' => 443,
+    _ => 80,
+  };
+
   Future<CctvInspectionResult?> inspectCctvFrame(
     String username,
     String streamId,
@@ -1361,6 +1487,7 @@ class AppController extends ChangeNotifier {
     }
 
     stream.inspection = CctvInspectionResult.inspecting();
+    notifyListeners();
 
     try {
       final rawResult = await _yoloDetector.inspectFrame(frameBytes);
@@ -1378,6 +1505,7 @@ class AppController extends ChangeNotifier {
       }
 
       currentStream.inspection = result;
+      notifyListeners();
       return result;
     } catch (error) {
       markCctvInspectionError(
@@ -1479,43 +1607,6 @@ class AppController extends ChangeNotifier {
           ? 'The on-device YOLOv8 model found ${result.detectionCount} rooster${result.detectionCount == 1 ? '' : 's'} in the phone camera frame.'
           : 'The live YOLOv8 model did not find a rooster in this phone camera frame.',
     );
-  }
-
-  void _applyEsp32Reading(String username, Esp32SensorReading reading) {
-    final user = userByUsername(username);
-    if (user == null || user.isAdmin) return;
-
-    final previousAlerts = user.monitor.alerts;
-    final updatedMonitor = user.monitor.withEnvironmentReading(reading);
-    user.monitor = updatedMonitor;
-    notifyListeners();
-
-    if (_firebase.isReady && _firebase.currentUser?.uid == user.accountId) {
-      unawaited(
-        _firebase
-            .saveSensorReading(ownerUid: user.accountId, reading: reading)
-            .catchError((Object error) {
-              lastError =
-                  'Could not sync the sensor reading to Firebase: $error';
-            }),
-      );
-    }
-
-    for (final alert in updatedMonitor.alerts) {
-      final isNew = !previousAlerts.any(
-        (old) => old.title == alert.title && old.category == alert.category,
-      );
-      if (isNew && alert.severity != AlertSeverity.info) {
-        unawaited(
-          _maybeEmitAlert(
-            category: 'sensor_alerts',
-            title: alert.title,
-            message: alert.message,
-            severity: alert.severity,
-          ),
-        );
-      }
-    }
   }
 
   SupportThread? threadForUser(String username) {
@@ -1632,6 +1723,7 @@ class AppController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _liveStatusTicker?.cancel();
     for (final subscription in _farmStatusSubscriptions.values) {
       unawaited(subscription.cancel());
     }

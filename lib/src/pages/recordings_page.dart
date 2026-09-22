@@ -1,15 +1,35 @@
 part of '../../main.dart';
 
 class RecordingsPage extends StatefulWidget {
-  const RecordingsPage({super.key, required this.currentUser});
+  const RecordingsPage({
+    super.key,
+    required this.currentUser,
+    required this.controller,
+  });
 
   /// Recordings are scoped to this viewer: a regular user only ever sees
   /// (and can only delete) their own clips; an admin sees every user's
   /// clips, each tagged with its owner.
   final AppUser currentUser;
 
+  /// Needed to run on-device AI detection while a recording (or a picked
+  /// device video) plays back.
+  final AppController controller;
+
   @override
   State<RecordingsPage> createState() => _RecordingsPageState();
+}
+
+/// FijkPlayer (and therefore recording/device-video playback and AI
+/// detection over it) is only wired up for Android and iOS builds.
+bool _supportsRecordingPlayback() {
+  if (kIsWeb) {
+    return false;
+  }
+  return switch (defaultTargetPlatform) {
+    TargetPlatform.android || TargetPlatform.iOS => true,
+    _ => false,
+  };
 }
 
 class _RecordingsPageState extends State<RecordingsPage> {
@@ -132,7 +152,55 @@ class _RecordingsPageState extends State<RecordingsPage> {
   void _openRecording(RecordingFile recording) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => RecordingPlayerPage(recording: recording),
+        builder: (_) => RecordingPlayerPage(
+          recording: recording,
+          controller: widget.controller,
+          viewer: widget.currentUser,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _browseDeviceVideo() async {
+    final XFile? picked;
+    try {
+      picked = await ImagePicker().pickVideo(source: ImageSource.gallery);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not open the device video picker: $error'),
+        ),
+      );
+      return;
+    }
+    if (picked == null || !mounted) return;
+
+    final file = File(picked.path);
+    int sizeBytes = 0;
+    DateTime modifiedAt = DateTime.now();
+    try {
+      final stat = await file.stat();
+      sizeBytes = stat.size;
+      modifiedAt = stat.modified;
+    } catch (_) {
+      // Fall back to the defaults above if the file can't be stat'd.
+    }
+
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => RecordingPlayerPage(
+          recording: RecordingFile(
+            path: picked!.path,
+            name: picked.name,
+            sizeBytes: sizeBytes,
+            modifiedAt: modifiedAt,
+            ownerUsername: widget.currentUser.username,
+          ),
+          controller: widget.controller,
+          viewer: widget.currentUser,
+        ),
       ),
     );
   }
@@ -148,6 +216,12 @@ class _RecordingsPageState extends State<RecordingsPage> {
           icon: const Icon(Icons.close_rounded),
         ),
         actions: [
+          if (_supportsRecordingPlayback())
+            IconButton(
+              tooltip: 'Scan a video from this device',
+              onPressed: _browseDeviceVideo,
+              icon: const Icon(Icons.video_file_outlined),
+            ),
           IconButton(
             tooltip: 'Refresh',
             onPressed: _reload,
@@ -522,9 +596,22 @@ class _RecordingTile extends StatelessWidget {
 }
 
 class RecordingPlayerPage extends StatefulWidget {
-  const RecordingPlayerPage({super.key, required this.recording});
+  const RecordingPlayerPage({
+    super.key,
+    required this.recording,
+    required this.controller,
+    required this.viewer,
+  });
 
   final RecordingFile recording;
+
+  /// Owns the on-device YOLO detector used for AI scanning this playback.
+  final AppController controller;
+
+  /// The signed-in account requesting playback; only used to attribute AI
+  /// scan requests, not to restrict which file can be opened (the caller
+  /// already scoped that).
+  final AppUser viewer;
 
   @override
   State<RecordingPlayerPage> createState() => _RecordingPlayerPageState();
@@ -534,15 +621,16 @@ class _RecordingPlayerPageState extends State<RecordingPlayerPage> {
   FijkPlayer? _player;
   String? _errorMessage;
 
-  bool get _supportsFijkPlayer {
-    if (kIsWeb) {
-      return false;
-    }
-    return switch (defaultTargetPlatform) {
-      TargetPlatform.android || TargetPlatform.iOS => true,
-      _ => false,
-    };
-  }
+  Timer? _inspectionTimer;
+  bool _aiScanningEnabled = false;
+  bool _inspectionRunning = false;
+  int _consecutiveInspectionFailures = 0;
+  List<ChickenDetection> _detections = const [];
+  String? _aiStatusMessage;
+
+  static const _inspectionFailureLimit = 3;
+
+  bool get _supportsFijkPlayer => _supportsRecordingPlayback();
 
   @override
   void initState() {
@@ -556,22 +644,201 @@ class _RecordingPlayerPageState extends State<RecordingPlayerPage> {
 
   Future<void> _openRecording(FijkPlayer player) async {
     try {
+      final options = FijkOption()..setHostOption('enable-snapshot', 1);
+      await player.applyOptions(options);
       await player.setDataSource(widget.recording.path, autoPlay: true);
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _errorMessage = 'Could not open this recording: $error';
+        _errorMessage = 'Could not open this video: $error';
       });
+    }
+  }
+
+  void _toggleAiScanning() {
+    final enabling = !_aiScanningEnabled;
+    setState(() {
+      _aiScanningEnabled = enabling;
+      _consecutiveInspectionFailures = 0;
+      if (!enabling) {
+        _detections = const [];
+        _aiStatusMessage = null;
+      } else {
+        _aiStatusMessage = 'Starting AI detection...';
+      }
+    });
+    _inspectionTimer?.cancel();
+    _inspectionTimer = null;
+    final player = _player;
+    if (enabling && player != null) {
+      _scheduleNextInspection(player, delay: Duration.zero);
+    }
+  }
+
+  void _scheduleNextInspection(FijkPlayer player, {Duration? delay}) {
+    _inspectionTimer?.cancel();
+    _inspectionTimer = Timer(delay ?? _defaultInspectionInterval(), () {
+      _inspectionTimer = null;
+      if (!_aiScanningEnabled || !mounted) return;
+      unawaited(_captureInspectionFrame(player));
+    });
+  }
+
+  Future<void> _captureInspectionFrame(FijkPlayer player) async {
+    if (_inspectionRunning || !_aiScanningEnabled) return;
+
+    _inspectionRunning = true;
+    try {
+      final frameBytes = await player.takeSnapShot().timeout(
+        const Duration(seconds: 4),
+      );
+      if (!_aiScanningEnabled || !mounted) return;
+      if (frameBytes.isEmpty) {
+        throw StateError('The video snapshot was empty.');
+      }
+
+      final result = await widget.controller.inspectManualFrame(
+        widget.viewer.username,
+        frameBytes,
+      );
+      if (!_aiScanningEnabled || !mounted) return;
+
+      _consecutiveInspectionFailures = 0;
+      setState(() {
+        _detections = List.of(result.detections);
+        _aiStatusMessage = result.detected
+            ? '${result.detectionCount} rooster${result.detectionCount == 1 ? '' : 's'} detected · ${result.condition.name}'
+            : 'No rooster detected in this frame.';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      _consecutiveInspectionFailures += 1;
+      if (_consecutiveInspectionFailures >= _inspectionFailureLimit) {
+        setState(() {
+          _aiScanningEnabled = false;
+          _detections = const [];
+          _aiStatusMessage =
+              'AI scanning was turned off after repeated frame-capture failures.';
+        });
+      }
+    } finally {
+      _inspectionRunning = false;
+      if (_aiScanningEnabled && mounted) {
+        _scheduleNextInspection(player);
+      }
     }
   }
 
   @override
   void dispose() {
+    _inspectionTimer?.cancel();
     final player = _player;
     if (player != null) {
       unawaited(player.release().catchError((_) {}));
     }
     super.dispose();
+  }
+
+  Widget _detectionOverlay(Rect videoRect) {
+    return Positioned.fromRect(
+      rect: videoRect,
+      child: IgnorePointer(
+        child: CustomPaint(
+          painter: ChickenDetectionPainter(detections: _detections),
+        ),
+      ),
+    );
+  }
+
+  Widget _statusBanner({double? maxWidth}) {
+    return Container(
+      constraints: maxWidth == null ? null : BoxConstraints(maxWidth: maxWidth),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xB3000000),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        _aiStatusMessage!,
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+          fontSize: 13,
+        ),
+      ),
+    );
+  }
+
+  // Draws on top of fijkplayer_plus's own default panel (play/pause, seek
+  // bar, position/duration, fullscreen toggle) instead of replacing it —
+  // an earlier version passed a panelBuilder that only drew AI-scan UI,
+  // which silently dropped the seek bar since panelBuilder fully replaces
+  // the default panel rather than extending it. This same panelBuilder
+  // covers both the embedded view and the separate fullscreen route.
+  Widget _panelBuilder(
+    FijkPlayer player,
+    FijkData data,
+    BuildContext context,
+    Size viewSize,
+    Rect texturePos,
+  ) {
+    // Matches how _DefaultFijkPanel itself sizes: the whole viewport in
+    // fullscreen (fsFit may still letterbox the actual video inside it),
+    // otherwise the exact rect the plugin rendered the video into.
+    final videoRect = player.value.fullScreen
+        ? Rect.fromLTWH(0, 0, viewSize.width, viewSize.height)
+        : texturePos;
+
+    // panelBuilder's return value is inserted as an unpositioned child of
+    // fijkplayer_plus's own Stack, laid out with loose constraints. A Stack
+    // whose children are all Positioned (as below) would then collapse to
+    // zero size, so pin it to the real viewport first.
+    return SizedBox.fromSize(
+      size: viewSize,
+      child: Stack(
+        clipBehavior: Clip.hardEdge,
+        children: [
+          defaultFijkPanelBuilder(player, data, context, viewSize, texturePos),
+          if (_aiScanningEnabled && _detections.isNotEmpty)
+            _detectionOverlay(videoRect),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: SafeArea(
+              bottom: false,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: const Color(0x66000000),
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: IconButton(
+                  tooltip: _aiScanningEnabled
+                      ? 'Turn off AI detection'
+                      : 'Turn on AI detection',
+                  onPressed: _toggleAiScanning,
+                  icon: Icon(
+                    _aiScanningEnabled
+                        ? Icons.visibility_rounded
+                        : Icons.visibility_outlined,
+                    color: _aiScanningEnabled ? _appAccent : Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (_aiStatusMessage != null)
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 52,
+              child: Center(
+                child: _statusBanner(maxWidth: videoRect.width - 24),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -583,6 +850,21 @@ class _RecordingPlayerPageState extends State<RecordingPlayerPage> {
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         title: Text(widget.recording.name, overflow: TextOverflow.ellipsis),
+        actions: [
+          if (_supportsFijkPlayer && player != null && _errorMessage == null)
+            IconButton(
+              tooltip: _aiScanningEnabled
+                  ? 'Turn off AI detection'
+                  : 'Turn on AI detection',
+              onPressed: _toggleAiScanning,
+              icon: Icon(
+                _aiScanningEnabled
+                    ? Icons.visibility_rounded
+                    : Icons.visibility_outlined,
+                color: _aiScanningEnabled ? _appAccent : Colors.white,
+              ),
+            ),
+        ],
       ),
       body: Center(
         child: _errorMessage != null
@@ -601,7 +883,10 @@ class _RecordingPlayerPageState extends State<RecordingPlayerPage> {
             ? FijkView(
                 player: player,
                 fit: FijkFit.contain,
+                fsFit: FijkFit.contain,
+                fs: true,
                 color: Colors.black,
+                panelBuilder: _panelBuilder,
               )
             : const Padding(
                 padding: EdgeInsets.all(24),

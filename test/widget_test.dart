@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  testWidgets('app opens login and shows Google sign-in', (tester) async {
+  testWidgets('app opens login', (tester) async {
     SharedPreferences.setMockInitialValues({});
     debugDefaultTargetPlatformOverride = TargetPlatform.linux;
     try {
@@ -22,8 +22,12 @@ void main() {
         find.text('Monitor your rooster, anytime, anywhere.'),
         findsOneWidget,
       );
-      expect(find.text('Continue with Google'), findsOneWidget);
     } finally {
+      // RoosterWatchApp starts a real periodic timer (AppController's live-
+      // status ticker) that flutter_test's fake-async zone requires to be
+      // cancelled before the test ends. Unmounting explicitly - rather than
+      // just letting the test function return - disposes it synchronously.
+      await tester.pumpWidget(const SizedBox.shrink());
       debugDefaultTargetPlatformOverride = null;
     }
   });

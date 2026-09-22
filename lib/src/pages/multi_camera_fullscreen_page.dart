@@ -124,9 +124,6 @@ class _LiveMosaicTileState extends State<_LiveMosaicTile> {
   }
 
   Future<void> _start() async {
-    if (widget.stream.deliveryProtocol == VideoDeliveryProtocol.v380Cloud) {
-      return;
-    }
     final player = FijkPlayer();
     _player = player;
     try {
@@ -137,7 +134,11 @@ class _LiveMosaicTileState extends State<_LiveMosaicTile> {
         ..setFormatOption('max_delay', 2000 * 1000)
         ..setFormatOption('stimeout', 5000000)
         ..setFormatOption('reconnect', 1);
-      if (widget.stream.deliveryProtocol == VideoDeliveryProtocol.rtsp) {
+      // The on-device V380 engine's local RTSP server only ever speaks
+      // TCP-interleaved RTP (see V380LocalRtspServer), same as a real RTSP
+      // camera forced to tcp transport here.
+      if (widget.stream.deliveryProtocol == VideoDeliveryProtocol.rtsp ||
+          widget.stream.deliveryProtocol == VideoDeliveryProtocol.v380Cloud) {
         options.setFormatOption('rtsp_transport', 'tcp');
       }
       await player.applyOptions(options);
@@ -179,12 +180,7 @@ class _LiveMosaicTileState extends State<_LiveMosaicTile> {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          if (widget.stream.deliveryProtocol == VideoDeliveryProtocol.v380Cloud)
-            WhepVideoView(
-              sourceUrl: widget.stream.streamUrl,
-              fit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
-            )
-          else if (player != null)
+          if (player != null)
             FijkView(
               player: player,
               fit: FijkFit.contain,

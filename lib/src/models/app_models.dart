@@ -32,6 +32,7 @@ class AppUser {
     required this.cameraAccessEnabled,
     required this.monitor,
     required this.cctvs,
+    List<SensorReadingLogEntry>? sensorReadingLog,
     this.contactNumber = '',
     this.address = '',
     this.facebookContact = '',
@@ -44,7 +45,8 @@ class AppUser {
     String? accountId,
     List<LiveCctvStream>? liveCctvStreams,
   }) : accountId = accountId ?? username,
-       liveCctvStreams = liveCctvStreams ?? [];
+       liveCctvStreams = liveCctvStreams ?? [],
+       sensorReadingLog = sensorReadingLog ?? [];
 
   // Stable identity used to match this account against persisted data across
   // restarts, independent of [username] (which the user/admin can change).
@@ -65,6 +67,15 @@ class AppUser {
   MonitorSnapshot monitor;
   final List<CctvFeed> cctvs;
   final List<LiveCctvStream> liveCctvStreams;
+
+  /// Every *notable* reading received this session (temperature, humidity,
+  /// or air quality outside the normal range - see
+  /// [AppController._isNotableReading]), newest first, capped at
+  /// [maxSensorReadingLogEntries] - an in-memory rolling window for the
+  /// dashboard's history view, not persisted (cleared on app restart). Not
+  /// throttled the way `farm_sensor_readings` is server-side, since this
+  /// tracks what the app actually saw arrive, not a sampled audit trail.
+  final List<SensorReadingLogEntry> sensorReadingLog;
   // Set the moment this account first signs in, so a temp password issued by
   // an admin can be locked for a grace period (see tempPasswordIssued)
   // without also restricting long-lived seeded/demo accounts.
@@ -147,12 +158,14 @@ String? v380CloudCameraValidationError(String value) {
   }
   if (int.tryParse(uri.host) case final deviceId?
       when deviceId > 0 && deviceId <= 0x7fffffff) {
-    if (uri.userInfo.isEmpty) return null;
     final separator = uri.userInfo.indexOf(':');
     final encodedUsername = separator < 0
         ? uri.userInfo
         : uri.userInfo.substring(0, separator);
     if (encodedUsername.isEmpty) return 'Enter the V380 camera username.';
+    // A blank password is valid - some V380 cameras are configured with
+    // none, and the app connects with exactly what's entered here (no
+    // backend to fall back to a configured default).
     return null;
   }
   return 'Enter a valid numeric V380 device ID printed on the camera.';
@@ -277,6 +290,43 @@ String cctvStreamDisplayLabel(int index, int totalStreams) {
   return totalStreams > 1 ? 'CCTV ${index + 1}' : 'CCTV';
 }
 
+/// Cap on [AppUser.sensorReadingLog] so an always-connected sensor posting
+/// every ~2s doesn't grow the in-memory log without bound over a long
+/// session - about 50 minutes of history at that cadence.
+const maxSensorReadingLogEntries = 1500;
+
+/// One entry in [AppUser.sensorReadingLog]: a snapshot of a single reading
+/// as the app received it, independent of [MonitorSnapshot] (which only ever
+/// holds the latest reading).
+class SensorReadingLogEntry {
+  const SensorReadingLogEntry({
+    required this.temperature,
+    required this.humidity,
+    required this.airPpm,
+    required this.dhtAvailable,
+    required this.airAvailable,
+    required this.recordedAt,
+  });
+
+  factory SensorReadingLogEntry.fromReading(Esp32SensorReading reading) {
+    return SensorReadingLogEntry(
+      temperature: reading.temperatureC,
+      humidity: reading.humidityPercent,
+      airPpm: reading.airQualityPpm,
+      dhtAvailable: reading.dhtAvailable,
+      airAvailable: reading.airAvailable,
+      recordedAt: reading.receivedAt,
+    );
+  }
+
+  final double temperature;
+  final double humidity;
+  final int airPpm;
+  final bool dhtAvailable;
+  final bool airAvailable;
+  final DateTime recordedAt;
+}
+
 class Session {
   Session({required this.user, this.email, this.photoUrl});
 
@@ -304,6 +354,7 @@ class MonitorSnapshot {
     required this.alerts,
     this.dhtAvailable = true,
     this.airAvailable = true,
+    this.lastUpdatedAt,
   });
 
   final double temperature;
@@ -327,6 +378,31 @@ class MonitorSnapshot {
   /// Same as [dhtAvailable] but for the MQ135 air-quality sensor. Mirrors
   /// [Esp32SensorReading.airAvailable].
   final bool airAvailable;
+
+  /// When the ESP32 last posted a reading to Postgres for this farm, or
+  /// null when no reading has ever arrived (seed/demo data, or a device
+  /// that hasn't been set up yet). Drives [isLive] instead of any Bluetooth
+  /// connection state, since readings now travel over Wi-Fi -> Supabase.
+  final DateTime? lastUpdatedAt;
+
+  // About 7 missed uploads' worth of slack at the firmware's 2s cadence -
+  // tolerates the occasional dropped packet or a slow TLS handshake without
+  // flickering, while still flagging a genuinely offline sensor far faster
+  // than the original 2-minute threshold did.
+  static const Duration _liveThreshold = Duration(seconds: 15);
+
+  /// True once a reading has arrived and it's recent enough that the ESP32
+  /// is presumed to still be posting (it uploads roughly every 2 seconds).
+  bool get isLive =>
+      lastUpdatedAt != null &&
+      DateTime.now().difference(lastUpdatedAt!) < _liveThreshold;
+
+  /// [alerts] as they should actually be shown: once the ESP32 stops
+  /// posting, whatever warnings were last computed from it are no longer
+  /// meaningful (the farm isn't actually in that state right now, the sensor
+  /// is just silent), so this resets to empty instead of leaving a stale
+  /// "3 active warnings" badge up indefinitely.
+  List<AlertItem> get activeAlerts => isLive ? alerts : const [];
 
   SensorWarningLevel get temperatureLevel =>
       temperatureLevelFor(temperature, humidity: humidity);
@@ -363,6 +439,7 @@ class MonitorSnapshot {
       alerts: _environmentAlerts(reading),
       dhtAvailable: reading.dhtAvailable,
       airAvailable: reading.airAvailable,
+      lastUpdatedAt: reading.receivedAt,
     );
   }
 
@@ -485,7 +562,12 @@ class MonitorSnapshot {
     );
     final airLevel = airLevelFor(reading.airQualityPpm);
 
-    if (temperatureLevel != SensorWarningLevel.normal) {
+    // A disconnected DHT11 carries its last known value forward (see
+    // _mergeWithLastKnown) so the rest of the app has *something* to show —
+    // but that stale value must not keep raising fresh severity alerts once
+    // the sensor is no longer actually reporting it. The "not responding"
+    // alert below covers that case instead.
+    if (reading.dhtAvailable && temperatureLevel != SensorWarningLevel.normal) {
       final temperature = reading.temperatureC.toStringAsFixed(1);
       alerts.add(
         AlertItem(
@@ -499,7 +581,7 @@ class MonitorSnapshot {
       );
     }
 
-    if (humidityLevel != SensorWarningLevel.normal) {
+    if (reading.dhtAvailable && humidityLevel != SensorWarningLevel.normal) {
       final humidity = reading.humidityPercent.toStringAsFixed(0);
       alerts.add(
         AlertItem(
@@ -514,8 +596,9 @@ class MonitorSnapshot {
     }
 
     final dangerousHeatHumidity =
-        (reading.temperatureC >= 30 && reading.humidityPercent >= 80) ||
-        (reading.temperatureC >= 28 && reading.humidityPercent >= 90);
+        reading.dhtAvailable &&
+        ((reading.temperatureC >= 30 && reading.humidityPercent >= 80) ||
+            (reading.temperatureC >= 28 && reading.humidityPercent >= 90));
     if (dangerousHeatHumidity) {
       final temperature = reading.temperatureC.toStringAsFixed(1);
       final humidity = reading.humidityPercent.toStringAsFixed(0);
@@ -531,7 +614,7 @@ class MonitorSnapshot {
       );
     }
 
-    if (airLevel != SensorWarningLevel.normal) {
+    if (reading.airAvailable && airLevel != SensorWarningLevel.normal) {
       alerts.add(
         AlertItem(
           title: 'Air pollution ${airLevel.label.toLowerCase()}',
@@ -574,7 +657,7 @@ class MonitorSnapshot {
       alerts.add(
         AlertItem(
           title: 'Environment stable',
-          message: 'Live ESP32 readings are within the rooster comfort range.',
+          message: 'Live sensor readings are within the rooster comfort range.',
           severity: AlertSeverity.info,
           category: 'System',
           time: time,

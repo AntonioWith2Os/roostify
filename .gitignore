@@ -173,3 +173,7 @@ app.*.symbols
 .agents/rules/personal-*
 .agents/skills/personal-*
 /.agent-shell/
+
+# Supabase CLI local state (project link cache, never contains secrets we
+# want to commit, but no reason to track it)
+supabase/.temp/

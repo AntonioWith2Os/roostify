@@ -144,10 +144,17 @@ class _RedesignedGuidesHome extends StatelessWidget {
           IconButton(
             tooltip: 'View alerts',
             onPressed: () {
-              final user = controller.userByUsername(session.user.username)!;
               Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                  builder: (_) => AlertsPage(alerts: user.monitor.alerts),
+                  builder: (_) => AlertsPage(
+                    controller: controller,
+                    alertsOf: () =>
+                        controller
+                            .userByUsername(session.user.username)
+                            ?.monitor
+                            .activeAlerts ??
+                        const [],
+                  ),
                 ),
               );
             },
@@ -983,9 +990,7 @@ class _SensorRedesignGuidePage extends StatelessWidget {
   final AppController controller;
   @override
   Widget build(BuildContext context) {
-    final connected =
-        controller.sensorConnectionStatus ==
-        Esp32SensorConnectionStatus.connected;
+    final connected = controller.sensorOnline;
     return _GuideScaffold(
       title: 'Sensor Guide',
       subtitle: 'What each sensor monitors and why it matters.',
@@ -993,10 +998,10 @@ class _SensorRedesignGuidePage extends StatelessWidget {
       children: [
         _GuideInfoRow(
           icon: Icons.memory_rounded,
-          title: connected ? 'ESP32 Connected' : 'ESP32 Offline',
+          title: connected ? 'Sensor Connected' : 'Sensor Offline',
           text: connected
-              ? 'Your ESP32 is online and streaming sensor data.'
-              : 'Connect the ESP32 from the Dashboard to stream live data.',
+              ? 'Your environmental sensor is online and streaming data.'
+              : 'Set up the sensor\'s Wi-Fi from the Dashboard to start streaming live data.',
           color: connected ? _guideGreen : _guideRed,
         ),
         const SizedBox(height: 12),
@@ -1018,7 +1023,7 @@ class _SensorRedesignGuidePage extends StatelessWidget {
         ),
         const _FeatureRow(
           Icons.memory_outlined,
-          'ESP32 Module',
+          'Sensor Module',
           'Sends sensor data to the app in real time. • MCU',
           color: _guideBlue,
         ),

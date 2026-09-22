@@ -17,11 +17,17 @@ class _RoosterWatchAppState extends State<RoosterWatchApp> {
   StreamSubscription<AppAlertEvent>? _alertSubscription;
   late AppThemePreference _themePreference;
   late Locale _locale;
+  // Remembered-session restoration runs concurrently with the startup intro
+  // and, for a local/offline account, can resolve in milliseconds — well
+  // before the intro is done playing. _restoreRememberedSession awaits this
+  // before it ever navigates, so a fast restore can't cut the intro short.
+  final _startupFinished = Completer<void>();
 
   @override
   void initState() {
     super.initState();
     _controller = AppController(cameras: widget.cameras);
+    _controller.startLiveStatusTicking();
     _themePreference = _controller.themePreference;
     _locale = _controller.languageLocale;
     // Listen narrowly instead of wrapping MaterialApp in an AnimatedBuilder
@@ -59,6 +65,8 @@ class _RoosterWatchAppState extends State<RoosterWatchApp> {
   Future<void> _restoreRememberedSession() async {
     final session = await _controller.restoreRememberedSession();
     if (!mounted || session == null) return;
+    await _startupFinished.future;
+    if (!mounted) return;
     _navigatorKey.currentState?.pushAndRemoveUntil(
       MaterialPageRoute<void>(
         builder: (_) => AppShell(controller: _controller, session: session),
@@ -68,6 +76,9 @@ class _RoosterWatchAppState extends State<RoosterWatchApp> {
   }
 
   void _finishStartup() {
+    if (!_startupFinished.isCompleted) {
+      _startupFinished.complete();
+    }
     if (!_showStartup) return;
     setState(() => _showStartup = false);
   }

@@ -98,9 +98,7 @@ void main() {
     expect(stream.inspection.state, CctvInspectionState.error);
   });
 
-  testWidgets('CCTV viewer exposes AI scanning as an opt-in control', (
-    tester,
-  ) async {
+  testWidgets('CCTV viewer runs AI scanning by default', (tester) async {
     SharedPreferences.setMockInitialValues({});
     debugDefaultTargetPlatformOverride = TargetPlatform.linux;
     final controller = AppController(cameras: const []);
@@ -120,7 +118,7 @@ void main() {
       );
       await tester.pump();
 
-      expect(find.byTooltip('Enable AI scanning'), findsOneWidget);
+      expect(find.byTooltip('Disable AI scanning'), findsOneWidget);
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }

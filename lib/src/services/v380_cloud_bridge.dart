@@ -1,13 +1,5 @@
 part of '../../main.dart';
 
-const _configuredV380BackendUrl = String.fromEnvironment(
-  'V380_BACKEND_URL',
-  defaultValue: 'https://api.roostify.com',
-);
-const _configuredV380BackendApiKey = String.fromEnvironment(
-  'V380_BACKEND_API_KEY',
-);
-
 /// The camera-side settings encoded by a `v380://` source URL.
 class V380CloudCameraConfig {
   const V380CloudCameraConfig({
@@ -37,20 +29,22 @@ class V380CloudCameraConfig {
   }
 }
 
-/// Connects V380 camera entries to the long-lived C# decoder backend.
+/// Connects V380 cloud camera entries entirely on-device - no Roostify
+/// backend is involved. The app keeps the existing `v380://` source format,
+/// but locating the camera on V380's own cloud relay ([V380CloudDispatch]),
+/// speaking the V380 protocol ([V380ProtocolClient]), and re-serving the
+/// decoded stream ([V380LocalRtspServer]) all now happen inside this process.
 ///
-/// The app keeps the existing `v380://` source format, but proprietary relay
-/// discovery and decoding now happen in `cs_tmp/v380connectorbackend`. The
-/// backend returns public WebRTC/WHEP and optional RTSP delivery URLs. The
-/// Hostinger deployment keeps RTSP private and uses WebRTC for mobile video.
+/// `resolve()`/`resolveWebRtc()` both return a loopback `rtsp` URL (host
+/// `127.0.0.1`, an ephemeral port) once the on-device session is up, so every
+/// existing player call site (`FijkPlayer.setDataSource`) keeps working
+/// unchanged.
 class V380CloudBridgeRegistry {
-  V380CloudBridgeRegistry._({V380BackendClient? backend})
-    : _backend = backend ?? V380BackendClient.fromEnvironment();
+  V380CloudBridgeRegistry._();
 
   static final instance = V380CloudBridgeRegistry._();
 
-  final V380BackendClient _backend;
-  final Map<String, _V380BackendCameraSession> _sessions = {};
+  final Map<String, _V380OnDeviceCameraSession> _sessions = {};
 
   Future<String> resolve(String sourceUrl) async {
     if (Uri.tryParse(sourceUrl)?.scheme.toLowerCase() != 'v380') {
@@ -59,8 +53,7 @@ class V380CloudBridgeRegistry {
 
     final session = _sessions.putIfAbsent(
       sourceUrl,
-      () => _V380BackendCameraSession(
-        backend: _backend,
+      () => _V380OnDeviceCameraSession(
         config: V380CloudCameraConfig.parse(sourceUrl),
       ),
     );
@@ -70,61 +63,50 @@ class V380CloudBridgeRegistry {
       if (identical(_sessions[sourceUrl], session)) {
         _sessions.remove(sourceUrl);
       }
+      unawaited(session.dispose());
       rethrow;
     }
   }
 
-  Future<String> resolveWebRtc(String sourceUrl) async {
-    if (Uri.tryParse(sourceUrl)?.scheme.toLowerCase() != 'v380') {
-      return sourceUrl;
-    }
-
-    final session = _sessions.putIfAbsent(
-      sourceUrl,
-      () => _V380BackendCameraSession(
-        backend: _backend,
-        config: V380CloudCameraConfig.parse(sourceUrl),
-      ),
-    );
-    try {
-      return (await session.waitUntilOnline()).webRtcPlaybackUrl(
-        _backend.baseUri,
-      );
-    } catch (_) {
-      if (identical(_sessions[sourceUrl], session)) {
-        _sessions.remove(sourceUrl);
-      }
-      rethrow;
-    }
-  }
+  /// No separate WebRTC/WHEP delivery exists on-device - this resolves the
+  /// same local RTSP URL as [resolve].
+  Future<String> resolveWebRtc(String sourceUrl) => resolve(sourceUrl);
 
   Future<void> stop(String sourceUrl) async {
     final session = _sessions.remove(sourceUrl);
     if (session == null) return;
     try {
-      await session.disconnect();
+      await session.dispose();
     } catch (_) {
-      // Removing the local camera entry must still succeed if the backend is
-      // temporarily unavailable or already discarded the session.
+      // Removing the local camera entry must still succeed even if the
+      // on-device session was already gone or failed to tear down cleanly.
     }
   }
 
   Future<String?> statusFor(String sourceUrl) async {
     final session = _sessions[sourceUrl];
     if (session == null) return null;
-    try {
-      return await session.refreshStatus();
-    } catch (error) {
-      return _friendlyV380BackendError(error);
-    }
+    return session.userMessage;
   }
 
-  Future<void> closeAll() {
-    // Camera sessions belong to the long-lived backend, not to one app
-    // process. Explicit camera removal still calls [stop], but closing the app
-    // must not interrupt other viewers using the same backend stream.
+  /// Whether the on-device bridge session for [sourceUrl] currently reports
+  /// itself online, straight from its live connection state - independent of
+  /// whether a [LiveFeedCard] happens to be mounted for it, since the session
+  /// keeps running/reconnecting in the background once started. Null means no
+  /// session has been started for this camera yet this run (genuinely
+  /// unknown, not confirmed offline).
+  bool? isKnownOnline(String sourceUrl) {
+    final session = _sessions[sourceUrl];
+    if (session == null) return null;
+    return session._status == V380ConnectionState.online;
+  }
+
+  Future<void> closeAll() async {
+    final sessions = _sessions.values.toList();
     _sessions.clear();
-    return Future<void>.value();
+    await Future.wait(
+      sessions.map((session) => session.dispose().catchError((_) {})),
+    );
   }
 }
 
@@ -136,264 +118,151 @@ Future<String> resolveCameraWebRtcUrl(String sourceUrl) {
   return V380CloudBridgeRegistry.instance.resolveWebRtc(sourceUrl);
 }
 
-class _V380BackendCameraSession {
-  _V380BackendCameraSession({required this.backend, required this.config});
+class _V380OnDeviceCameraSession {
+  _V380OnDeviceCameraSession({required this.config});
 
-  final V380BackendClient backend;
   final V380CloudCameraConfig config;
+  static const _dispatch = V380CloudDispatch();
+
+  V380LocalRtspServer? _rtspServer;
+  V380ProtocolClient? _protocolClient;
+  StreamSubscription<V380Frame>? _frameSub;
+  StreamSubscription<(V380ConnectionState, String?)>? _stateSub;
+
   Future<String>? _pendingConnect;
-  Future<V380BackendCameraStatus>? _pendingStatus;
+  V380ConnectionState _status = V380ConnectionState.connecting;
+  String? _lastError;
+  bool _disposed = false;
+
+  String get _streamPath => '/camera/${config.deviceId}';
 
   Future<String> connect() {
     final pending = _pendingConnect;
     if (pending != null) return pending;
 
     late final Future<String> operation;
-    operation = backend
-        .connectCamera(config)
-        .then((status) => status.playbackUrl(backend.baseUri))
-        .whenComplete(() {
-          if (identical(_pendingConnect, operation)) {
-            _pendingConnect = null;
-          }
-        });
+    operation = _connect().whenComplete(() {
+      if (identical(_pendingConnect, operation)) {
+        _pendingConnect = null;
+      }
+    });
     _pendingConnect = operation;
     return operation;
   }
 
-  Future<V380BackendCameraStatus> connectStatus() {
-    final pending = _pendingStatus;
-    if (pending != null) return pending;
+  Future<String> _connect() async {
+    if (_protocolClient != null && _rtspServer != null) {
+      // A session is already starting/started for this camera - reuse it.
+      if (_status == V380ConnectionState.online) return _playbackUrl();
+      await _waitUntilOnline();
+      return _playbackUrl();
+    }
 
-    late final Future<V380BackendCameraStatus> operation;
-    operation = backend.connectCamera(config).whenComplete(() {
-      if (identical(_pendingStatus, operation)) {
-        _pendingStatus = null;
+    _status = V380ConnectionState.connecting;
+    _lastError = null;
+
+    final relayIp = await _dispatch.resolveRelayIp(config.deviceId);
+    if (_disposed)
+      throw const V380BackendException('The camera session was stopped.');
+    if (relayIp == null) {
+      _status = V380ConnectionState.offline;
+      _lastError = 'No reachable V380 cloud relay was found for this camera.';
+      throw V380BackendException(_lastError!);
+    }
+
+    final rtspServer = V380LocalRtspServer(streamPath: _streamPath);
+    await rtspServer.start();
+    _rtspServer = rtspServer;
+
+    final client = V380ProtocolClient(
+      initialIp: relayIp,
+      resolveIp: () => _dispatch.resolveRelayIp(config.deviceId),
+      deviceId: config.deviceId,
+      username: config.username.isEmpty ? 'admin' : config.username,
+      password: config.password,
+    );
+    _protocolClient = client;
+
+    _frameSub = client.frames.listen((frame) {
+      if (frame.isVideo) {
+        rtspServer.pushVideo(frame);
+      } else {
+        rtspServer.pushAudio(frame);
       }
     });
-    _pendingStatus = operation;
-    return operation;
+    _stateSub = client.connectionState.listen((event) {
+      _status = event.$1;
+      // Every reconnect loop in V380ProtocolClient.run() starts by notifying
+      // (connecting, null) again, which would otherwise wipe out the
+      // specific reason the *previous* attempt failed right before
+      // _waitUntilOnline's deadline expires - leaving only the generic "did
+      // not become ready" message instead of whatever actually went wrong.
+      if (event.$2 != null) _lastError = event.$2;
+    });
+
+    unawaited(client.run());
+
+    await _waitUntilOnline();
+    return _playbackUrl();
   }
 
-  Future<V380BackendCameraStatus> waitUntilOnline() async {
-    var status = await connectStatus();
+  Future<void> _waitUntilOnline() async {
     final deadline = DateTime.now().add(const Duration(seconds: 30));
-    while (status.status != 'online') {
-      if (status.status == 'offline') {
+    while (_status != V380ConnectionState.online) {
+      if (_disposed) {
+        throw const V380BackendException('The camera session was stopped.');
+      }
+      if (_status == V380ConnectionState.authenticationFailed) {
         throw V380BackendException(
-          status.lastError?.trim().isNotEmpty == true
-              ? status.lastError!.trim()
-              : 'The V380 camera is offline.',
+          _lastError?.trim().isNotEmpty == true
+              ? _lastError!.trim()
+              : 'The camera rejected the device ID or credentials.',
         );
       }
       if (DateTime.now().isAfter(deadline)) {
-        throw const V380BackendException(
-          'The V380 camera did not become ready within 30 seconds.',
+        throw V380BackendException(
+          _lastError?.trim().isNotEmpty == true
+              ? _lastError!.trim()
+              : 'The V380 camera did not become ready within 30 seconds.',
         );
       }
-      await Future<void>.delayed(const Duration(seconds: 1));
-      status = await backend.cameraStatus(config.deviceId);
+      await Future<void>.delayed(const Duration(milliseconds: 250));
     }
-    return status;
   }
 
-  Future<String> refreshStatus() async {
-    final status = await backend.cameraStatus(config.deviceId);
-    return status.userMessage;
-  }
-
-  Future<void> disconnect() async {
-    await backend.disconnectCamera(config.deviceId);
-  }
-}
-
-class V380BackendCameraStatus {
-  const V380BackendCameraStatus({
-    required this.cameraId,
-    required this.status,
-    required this.rtspUrl,
-    required this.webRtcUrl,
-    required this.lastError,
-  });
-
-  final String cameraId;
-  final String status;
-  final String? rtspUrl;
-  final String? webRtcUrl;
-  final String? lastError;
-
-  factory V380BackendCameraStatus.fromJson(Map<String, dynamic> json) {
-    final cameraId = json['cameraId'];
-    final status = json['status'];
-    if (cameraId is! String || cameraId.isEmpty || status is! String) {
-      throw const FormatException(
-        'The V380 decoder returned an invalid camera status.',
-      );
-    }
-    return V380BackendCameraStatus(
-      cameraId: cameraId,
-      status: status.toLowerCase(),
-      rtspUrl: json['rtspUrl'] as String?,
-      webRtcUrl: json['webRtcUrl'] as String?,
-      lastError: json['lastError'] as String?,
-    );
-  }
-
-  String playbackUrl(Uri backendUri) {
-    final value = rtspUrl?.trim() ?? '';
-    final uri = Uri.tryParse(value);
-    if (uri == null ||
-        uri.host.isEmpty ||
-        !const {'rtsp', 'rtsps'}.contains(uri.scheme.toLowerCase())) {
-      throw const FormatException(
-        'The V380 decoder did not return a valid RTSP playback URL.',
-      );
-    }
-
-    // The backend defaults to localhost for desktop development. When the API
-    // is reached through another host (for example 10.0.2.2 on an Android
-    // emulator), that API host is also the reachable MediaMTX host.
-    if (_isLoopbackHost(uri.host) && !_isLoopbackHost(backendUri.host)) {
-      return uri.replace(host: backendUri.host).toString();
-    }
-    return uri.toString();
-  }
-
-  String webRtcPlaybackUrl(Uri backendUri) {
-    final value = webRtcUrl?.trim() ?? '';
-    final uri = Uri.tryParse(value);
-    if (uri == null ||
-        uri.host.isEmpty ||
-        !const {'http', 'https'}.contains(uri.scheme.toLowerCase()) ||
-        !uri.path.endsWith('/whep')) {
-      throw const FormatException(
-        'The V380 decoder did not return a valid WebRTC/WHEP playback URL.',
-      );
-    }
-
-    if (_isLoopbackHost(uri.host) && !_isLoopbackHost(backendUri.host)) {
-      return uri.replace(host: backendUri.host).toString();
-    }
-    return uri.toString();
-  }
+  String _playbackUrl() => 'rtsp://127.0.0.1:${_rtspServer!.port}$_streamPath';
 
   String get userMessage {
-    final detail = lastError?.trim();
-    return switch (status) {
-      'online' =>
-        'V380 camera $cameraId is streaming through the decoder backend.',
-      'connecting' =>
-        'The decoder backend is connecting to V380 camera $cameraId…',
-      'reconnecting' =>
+    final detail = _lastError?.trim();
+    return switch (_status) {
+      V380ConnectionState.online =>
+        'V380 camera ${config.deviceId} is streaming directly from this device.',
+      V380ConnectionState.connecting =>
+        'Locating V380 camera ${config.deviceId} on the V380 cloud…',
+      V380ConnectionState.reconnecting =>
         detail?.isNotEmpty == true
-            ? 'The decoder backend is reconnecting: $detail'
-            : 'The decoder backend is reconnecting to V380 camera $cameraId…',
-      'stopping' => 'The decoder backend is stopping V380 camera $cameraId.',
-      'offline' =>
+            ? 'Reconnecting to V380 camera ${config.deviceId}: $detail'
+            : 'Reconnecting to V380 camera ${config.deviceId}…',
+      V380ConnectionState.authenticationFailed =>
         detail?.isNotEmpty == true
-            ? 'V380 camera $cameraId is offline: $detail'
-            : 'V380 camera $cameraId is offline.',
-      _ => 'V380 camera $cameraId has backend status “$status”.',
+            ? 'V380 camera ${config.deviceId} rejected the connection: $detail'
+            : 'V380 camera ${config.deviceId} rejected the connection.',
+      V380ConnectionState.offline =>
+        detail?.isNotEmpty == true
+            ? 'V380 camera ${config.deviceId} is offline: $detail'
+            : 'V380 camera ${config.deviceId} is offline.',
     };
   }
-}
 
-class V380BackendClient {
-  V380BackendClient({required String baseUrl, String apiKey = ''})
-    : baseUri = _parseBaseUri(baseUrl),
-      _apiKey = apiKey;
-
-  factory V380BackendClient.fromEnvironment() => V380BackendClient(
-    baseUrl: _configuredV380BackendUrl,
-    apiKey: _configuredV380BackendApiKey,
-  );
-
-  final Uri baseUri;
-  final String _apiKey;
-
-  Future<V380BackendCameraStatus> connectCamera(
-    V380CloudCameraConfig config,
-  ) async {
-    final response = await _request(
-      'POST',
-      '/api/cameras/connect',
-      body: {
-        'cameraId': config.deviceId.toString(),
-        if (config.username.isNotEmpty) 'username': config.username,
-        if (config.password.isNotEmpty) 'password': config.password,
-        'source': 'cloud',
-      },
-    );
-    return V380BackendCameraStatus.fromJson(response);
-  }
-
-  Future<V380BackendCameraStatus> cameraStatus(int deviceId) async {
-    final response = await _request(
-      'GET',
-      '/api/cameras/${Uri.encodeComponent(deviceId.toString())}/status',
-    );
-    return V380BackendCameraStatus.fromJson(response);
-  }
-
-  Future<void> disconnectCamera(int deviceId) async {
-    await _request(
-      'POST',
-      '/api/cameras/${Uri.encodeComponent(deviceId.toString())}/disconnect',
-      allowEmptyResponse: true,
-    );
-  }
-
-  Future<Map<String, dynamic>> _request(
-    String method,
-    String route, {
-    Map<String, dynamic>? body,
-    bool allowEmptyResponse = false,
-  }) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
-    final endpoint = Uri.parse(
-      '${baseUri.toString().replaceFirst(RegExp(r'/$'), '')}$route',
-    );
-    try {
-      final request = await client.openUrl(method, endpoint);
-      request.headers.set(HttpHeaders.acceptHeader, ContentType.json.mimeType);
-      if (_apiKey.isNotEmpty) {
-        request.headers.set('X-API-Key', _apiKey);
-      }
-      if (body != null) {
-        request.headers.contentType = ContentType.json;
-        request.write(jsonEncode(body));
-      }
-
-      final response = await request.close().timeout(
-        const Duration(seconds: 12),
-      );
-      final responseBody = await utf8.decoder.bind(response).join();
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw V380BackendException(
-          _backendFailureMessage(response.statusCode, responseBody),
-        );
-      }
-      if (responseBody.trim().isEmpty && allowEmptyResponse) {
-        return const {};
-      }
-      final decoded = jsonDecode(responseBody);
-      if (decoded is! Map<String, dynamic>) {
-        throw const FormatException(
-          'The V380 decoder returned an invalid JSON response.',
-        );
-      }
-      return decoded;
-    } on TimeoutException {
-      throw const V380BackendException(
-        'The V380 decoder backend did not respond in time.',
-      );
-    } on SocketException catch (error) {
-      throw V380BackendException(
-        'Cannot reach the V380 decoder backend at ${baseUri.host}:${baseUri.port}: ${error.message}',
-      );
-    } finally {
-      client.close(force: true);
-    }
+  Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+    _status = V380ConnectionState.offline;
+    await _frameSub?.cancel();
+    await _stateSub?.cancel();
+    _protocolClient?.stop();
+    await _protocolClient?.dispose();
+    await _rtspServer?.stop();
   }
 }
 
@@ -404,51 +273,4 @@ class V380BackendException implements Exception {
 
   @override
   String toString() => message;
-}
-
-Uri _parseBaseUri(String value) {
-  final uri = Uri.tryParse(value.trim());
-  if (uri == null ||
-      uri.host.isEmpty ||
-      !const {'http', 'https'}.contains(uri.scheme.toLowerCase())) {
-    throw const FormatException(
-      'V380_BACKEND_URL must be an absolute HTTP or HTTPS URL.',
-    );
-  }
-  return uri.replace(
-    path: uri.path.replaceFirst(RegExp(r'/$'), ''),
-    query: null,
-    fragment: null,
-  );
-}
-
-bool _isLoopbackHost(String host) {
-  final normalized = host.toLowerCase();
-  return normalized == 'localhost' ||
-      normalized == '127.0.0.1' ||
-      normalized == '::1';
-}
-
-String _backendFailureMessage(int statusCode, String responseBody) {
-  String? detail;
-  try {
-    final decoded = jsonDecode(responseBody);
-    if (decoded is Map<String, dynamic>) {
-      detail = decoded['error'] as String?;
-    }
-  } catch (_) {
-    // Fall back to a status-only message for non-JSON proxy responses.
-  }
-  if (detail?.trim().isNotEmpty == true) return detail!.trim();
-  return switch (statusCode) {
-    401 || 403 => 'The V380 decoder backend rejected the API key.',
-    404 => 'The V380 camera session was not found by the decoder backend.',
-    _ => 'The V380 decoder backend returned HTTP $statusCode.',
-  };
-}
-
-String _friendlyV380BackendError(Object error) {
-  if (error is V380BackendException) return error.message;
-  if (error is FormatException) return error.message;
-  return 'V380 decoder backend request failed: $error';
 }

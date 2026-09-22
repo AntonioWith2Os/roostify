@@ -19,7 +19,9 @@ Roostify mobile app <---------------HTTPS WebRTC/WHEP---------------+
 
 V380 camera --local RTSP over farm Wi-Fi--> Roostify mobile app
 
-ESP32 -----------------------> Firebase <---------------- Roostify app
+DHT11 + MQ135 --> ESP32 --Wi-Fi--> Supabase <--Wi-Fi/HTTPS-- Roostify app
+                    |
+                    +--BLE (setup only)--> Roostify app
 ```
 
 The boundary is intentional:
@@ -40,8 +42,14 @@ The boundary is intentional:
   the phone can reach. Its playback URL can be HLS/HTTP, RTSP, or RTMP.
 - The app decodes the delivered stream, captures frames, and runs the bundled
   `assets/best_float32.tflite` model on the device.
-- Firebase remains for authentication, profiles, ESP32 readings, alerts, and
-  application data—not continuous CCTV transport.
+- Supabase remains for authentication, profiles, ESP32 readings, alerts, and
+  application data—not continuous CCTV transport. See `SUPABASE_SETUP.md`.
+- The ESP32 posts DHT11/MQ135 readings straight to Supabase over its own
+  Wi-Fi connection (see `ino_tmp/sketch_sep19a.ino` and the
+  `ingest-sensor-reading` Edge Function); the phone only ever reads Postgres,
+  live via Supabase Realtime. Bluetooth (BLE) is used solely to configure
+  that Wi-Fi connection and the owning account, and to reset it ("forget
+  Wi-Fi") - it never carries live sensor data.
 
 The gateway's `ROOSTIFY_OUTPUT_URL` is normally an ingest/publishing URL. Do
 not paste it into the app unless the media server explicitly uses that same URL

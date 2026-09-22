@@ -348,7 +348,9 @@ class OnDeviceYoloDetector {
     }
   }
 
-  _YoloModelMetadata _metadataForInterpreter(YoloInterpreterHandle interpreter) {
+  _YoloModelMetadata _metadataForInterpreter(
+    YoloInterpreterHandle interpreter,
+  ) {
     final existing = _modelMetadata;
     if (existing != null) {
       return existing;

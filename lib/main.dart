@@ -13,25 +13,20 @@ import 'package:fijkplayer_plus/fijkplayer_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:ffmpeg_kit_flutter_new_min_gpl/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new_min_gpl/ffmpeg_session.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:cloud_functions/cloud_functions.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/services.dart';
 import 'package:gal/gal.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:pointycastle/export.dart' as pc;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:xml/xml.dart';
 import 'package:youtube_player_iframe/youtube_player_iframe.dart';
 
-import 'firebase_options.dart';
 import 'src/services/yolo/yolo_interpreter.dart';
 
 part 'src/app_constants.dart';
@@ -46,14 +41,17 @@ part 'src/services/on_device_yolo_detector.dart';
 part 'src/widgets/landing_widgets.dart';
 part 'src/services/camera_stream_helpers.dart';
 part 'src/services/rtsp_camera_scanner.dart';
+part 'src/services/v380_frame_data.dart';
+part 'src/services/v380_cloud_dispatch.dart';
+part 'src/services/v380_protocol_client.dart';
+part 'src/services/v380_local_rtsp_server.dart';
 part 'src/services/v380_cloud_bridge.dart';
-part 'src/widgets/whep_video_view.dart';
 part 'src/widgets/cctv_connection_panel.dart';
 part 'src/widgets/v380_ptz_control_panel.dart';
 part 'src/services/onvif_ptz_client.dart';
 part 'src/services/rtsp_recorder_service.dart';
 part 'src/services/recording_server_service.dart';
-part 'src/services/firebase_backend_service.dart';
+part 'src/services/supabase_backend_service.dart';
 part 'src/pages/recordings_page.dart';
 part 'src/pages/multi_camera_fullscreen_page.dart';
 part 'src/widgets/live_feed_card.dart';
@@ -63,7 +61,21 @@ part 'src/utils/time_labels.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+  // Override at build/run time with --dart-define=SUPABASE_URL=...
+  // --dart-define=SUPABASE_ANON_KEY=... to point at a different project.
+  // The anon/publishable key is meant to ship in the client - access is
+  // enforced server-side by Postgres RLS, not by keeping this secret.
+  await Supabase.initialize(
+    url: const String.fromEnvironment(
+      'SUPABASE_URL',
+      defaultValue: 'https://jzeybmiwmavgasnxcdaw.supabase.co',
+    ),
+    publishableKey: const String.fromEnvironment(
+      'SUPABASE_ANON_KEY',
+      defaultValue: 'sb_publishable_i-PaTfRoWUFqQz5MdgqOmg_uJXguUsR',
+    ),
+  );
 
   List<CameraDescription> cameras = const [];
   try {

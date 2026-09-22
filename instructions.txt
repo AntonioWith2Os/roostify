@@ -2,3 +2,9 @@ flutter run
 flutter run \
   --dart-define=V380_BACKEND_URL=https://api.roostify.com \
   --dart-define=V380_BACKEND_API_KEY=YOUR_GENERATED_KEY
+
+# To point at a different Supabase project than the one baked into
+# lib/main.dart's defaults (see SUPABASE_SETUP.md):
+flutter run \
+  --dart-define=SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co \
+  --dart-define=SUPABASE_ANON_KEY=YOUR_ANON_KEY
