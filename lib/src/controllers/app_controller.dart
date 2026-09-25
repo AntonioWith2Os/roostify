@@ -4,6 +4,11 @@ class AppController extends ChangeNotifier {
   static const _requiredCctvHits = 2;
   static const _emptyCctvFramesBeforeClear = 2;
   static const maxLiveCctvStreams = 4;
+  // The model has no memory of previous frames, so it flags "looking down"
+  // as abnormal on every single frame regardless of how long it has lasted.
+  // A rooster foraging briefly is normal; only a posture held continuously
+  // past this threshold is treated as a real abnormal-behavior signal.
+  static const _sustainedAbnormalThreshold = Duration(minutes: 5);
 
   AppController({required this.cameras})
     : _users = [
@@ -140,6 +145,9 @@ class AppController extends ChangeNotifier {
   _farmStatusSubscriptions = {};
   final Map<String, CctvInspectionResult> _cctvCandidates = {};
   final Map<String, int> _cctvCandidateHits = {};
+  final PostureDurationTracker _postureDurationTracker = PostureDurationTracker(
+    sustainedAbnormalThreshold: _sustainedAbnormalThreshold,
+  );
   final Map<String, int> _cctvEmptyFrames = {};
   final StreamController<AppAlertEvent> _alertController =
       StreamController<AppAlertEvent>.broadcast();
@@ -1523,32 +1531,105 @@ class AppController extends ChangeNotifier {
     CctvInspectionResult result,
   ) {
     final key = '$username::$streamId';
-    if (!result.detected) {
+    final gated = _applyPostureDurationGate(key, result);
+
+    if (!gated.detected) {
       _cctvCandidates.remove(key);
       _cctvCandidateHits.remove(key);
       final emptyFrames = (_cctvEmptyFrames[key] ?? 0) + 1;
       _cctvEmptyFrames[key] = emptyFrames;
       if (emptyFrames >= _emptyCctvFramesBeforeClear) {
-        return result;
+        return gated;
       }
       final user = userByUsername(username);
       final stream = user == null ? null : _liveStreamById(user, streamId);
-      return stream?.inspection ?? result;
+      return stream?.inspection ?? gated;
     }
 
     _cctvEmptyFrames[key] = 0;
     final candidate = _cctvCandidates[key];
     final hits =
         candidate != null &&
-            _sameDetectedRooster(candidate.detections, result.detections)
+            _sameDetectedRooster(candidate.detections, gated.detections)
         ? (_cctvCandidateHits[key] ?? 1) + 1
         : 1;
 
-    _cctvCandidates[key] = result;
+    _cctvCandidates[key] = gated;
     _cctvCandidateHits[key] = hits;
     return hits >= _requiredCctvHits
-        ? result
+        ? gated
         : CctvInspectionResult.inspecting();
+  }
+
+  /// Reclassifies [result] with [PostureDurationTracker], so a posture the
+  /// model flags as abnormal only surfaces as abnormal once it has persisted
+  /// for [_sustainedAbnormalThreshold]; shorter streaks read as normal. Fires
+  /// a one-shot alert the moment a streak first crosses that threshold.
+  CctvInspectionResult _applyPostureDurationGate(
+    String key,
+    CctvInspectionResult result,
+  ) {
+    if (!result.detected) {
+      _postureDurationTracker.clear(key);
+      return result;
+    }
+
+    final effectiveCondition = _postureDurationTracker.evaluate(
+      key,
+      result.condition,
+    );
+
+    if (_postureDurationTracker.consumeSustainedAlert(
+      key,
+      effectiveCondition,
+    )) {
+      unawaited(
+        _maybeEmitAlert(
+          category: 'sustained_abnormal_posture',
+          title: 'Sustained abnormal posture detected',
+          message:
+              '${result.resultLabel} has held an abnormal posture for over '
+              '${_sustainedAbnormalThreshold.inMinutes} minutes.',
+          severity: AlertSeverity.warning,
+        ),
+      );
+    }
+
+    if (effectiveCondition == result.condition) {
+      return result;
+    }
+
+    final gatedDetections = result.detections
+        .map(
+          (detection) => detection.condition == HealthState.abnormal
+              ? ChickenDetection(
+                  box: detection.box,
+                  label: detection.label,
+                  confidence: detection.confidence,
+                  condition: effectiveCondition,
+                )
+              : detection,
+        )
+        .toList(growable: false);
+
+    final abnormalCount = gatedDetections
+        .where((detection) => detection.condition == HealthState.abnormal)
+        .length;
+    final resultLabel = abnormalCount > 0
+        ? '$abnormalCount abnormal rooster${abnormalCount == 1 ? '' : 's'}'
+        : '${gatedDetections.length} normal rooster${gatedDetections.length == 1 ? '' : 's'}';
+
+    return CctvInspectionResult(
+      state: result.state,
+      resultLabel: resultLabel,
+      confidenceLabel: result.confidenceLabel,
+      message: result.message,
+      inspectedAtLabel: result.inspectedAtLabel,
+      condition: effectiveCondition,
+      detected: result.detected,
+      detectionCount: result.detectionCount,
+      detections: gatedDetections,
+    );
   }
 
   void _clearCctvFilter(String username, String streamId) {
@@ -1556,12 +1637,14 @@ class AppController extends ChangeNotifier {
     _cctvCandidates.remove(key);
     _cctvCandidateHits.remove(key);
     _cctvEmptyFrames.remove(key);
+    _postureDurationTracker.clear(key);
   }
 
   void _clearCctvFiltersForUser(String username) {
     final prefix = '$username::';
     _cctvCandidates.removeWhere((key, _) => key.startsWith(prefix));
     _cctvCandidateHits.removeWhere((key, _) => key.startsWith(prefix));
+    _postureDurationTracker.clearWhere((k) => k.startsWith(prefix));
     _cctvEmptyFrames.removeWhere((key, _) => key.startsWith(prefix));
   }
 

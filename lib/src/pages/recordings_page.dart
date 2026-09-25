@@ -849,22 +849,17 @@ class _RecordingPlayerPageState extends State<RecordingPlayerPage> {
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
+        // The app-wide AppBarTheme sets an explicit titleTextStyle color
+        // (dark text, for the normal light/dark surfaces), which otherwise
+        // wins over `foregroundColor` above and renders unreadably dark on
+        // this AppBar's black background.
+        titleTextStyle: const TextStyle(
+          color: Colors.white,
+          fontSize: 18,
+          fontWeight: FontWeight.w800,
+          letterSpacing: -0.45,
+        ),
         title: Text(widget.recording.name, overflow: TextOverflow.ellipsis),
-        actions: [
-          if (_supportsFijkPlayer && player != null && _errorMessage == null)
-            IconButton(
-              tooltip: _aiScanningEnabled
-                  ? 'Turn off AI detection'
-                  : 'Turn on AI detection',
-              onPressed: _toggleAiScanning,
-              icon: Icon(
-                _aiScanningEnabled
-                    ? Icons.visibility_rounded
-                    : Icons.visibility_outlined,
-                color: _aiScanningEnabled ? _appAccent : Colors.white,
-              ),
-            ),
-        ],
       ),
       body: Center(
         child: _errorMessage != null

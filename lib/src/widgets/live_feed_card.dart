@@ -171,7 +171,12 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
   static const _errorRecoveryDelay = Duration(seconds: 5);
   static const _stablePlaybackResetDelay = Duration(minutes: 2);
   static const _inspectionWarmupDelay = Duration(seconds: 3);
-  static const _inspectionFailureLimit = 1;
+  // A single dropped snapshot or a worker respawn (the YOLO worker isolate
+  // discards and respawns itself on the next call after a crash/timeout —
+  // see OnDeviceYoloDetector) must not be enough to kill scanning outright;
+  // only a run of genuinely persistent failures should turn it off, matching
+  // the tolerance _RecordingPlayerPageState already uses.
+  static const _inspectionFailureLimit = 3;
   static const _maxAutomaticRecoveryAttempts = 4;
   // Once automatic recovery exhausts every playback profile without success,
   // keep trying at this slower cadence instead of giving up for good — a
@@ -624,7 +629,7 @@ class _LiveFeedCardState extends State<LiveFeedCard> {
       _consecutiveInspectionFailures += 1;
       if (_consecutiveInspectionFailures >= _inspectionFailureLimit) {
         await _turnOffAiAfterFailure(
-          'AI scanning was turned off after a frame-capture failure. Live playback remains active.',
+          'AI scanning was turned off after repeated frame-capture failures. Live playback remains active.',
           restartPlayback: true,
         );
       }

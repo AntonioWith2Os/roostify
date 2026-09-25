@@ -5813,6 +5813,13 @@ const _notificationOptions = [
     Color(0xFFFF5A3D),
   ),
   _NotificationOption(
+    'sustained_abnormal_posture',
+    'Sustained Abnormal Posture',
+    'Alert when a rooster holds an abnormal posture for several minutes',
+    Icons.warning_amber_rounded,
+    Color(0xFFFF5A3D),
+  ),
+  _NotificationOption(
     'recording_updates',
     'Recording Updates',
     'Saved clips and storage reminders',
@@ -7238,7 +7245,11 @@ class _ManualCameraPageState extends State<ManualCameraPage> {
   }
 
   Future<void> _pickFromGallery() async {
-    if (_analyzing) return;
+    // Opening the picker is UI-only and safe even while an auto-scan
+    // capture/inference is mid-flight; bailing out here used to make a tap
+    // silently do nothing whenever it landed during that window (roughly
+    // every 10-12s), which felt like the button needed a long press to
+    // "catch" a free moment.
     _autoScanTimer?.cancel();
     final XFile? picked;
     try {
