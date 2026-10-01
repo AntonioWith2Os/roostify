@@ -32,6 +32,13 @@ bool _supportsRecordingPlayback() {
   };
 }
 
+String _formattedRecordingDate(DateTime value) {
+  final local = value.toLocal();
+  final month = local.month.toString().padLeft(2, '0');
+  final day = local.day.toString().padLeft(2, '0');
+  return '${local.year}-$month-$day ${_timeLabelFor(local)}';
+}
+
 class _RecordingsPageState extends State<RecordingsPage> {
   late Future<List<RecordingFile>> _recordingsFuture;
   _RecordingFilter _filter = _RecordingFilter.today;
@@ -459,13 +466,6 @@ class _RecordingTile extends StatelessWidget {
   final VoidCallback onFavorite;
   final VoidCallback onShare;
 
-  String _formattedDate(DateTime value) {
-    final local = value.toLocal();
-    final month = local.month.toString().padLeft(2, '0');
-    final day = local.day.toString().padLeft(2, '0');
-    return '${local.year}-$month-$day ${_timeLabelFor(local)}';
-  }
-
   @override
   Widget build(BuildContext context) {
     final colors = context.appColors;
@@ -508,7 +508,7 @@ class _RecordingTile extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '${_formattedDate(recording.modifiedAt)} · ${recording.sizeLabel}',
+                      '${_formattedRecordingDate(recording.modifiedAt)} · ${recording.sizeLabel}',
                       style: TextStyle(color: colors.mutedText, fontSize: 13),
                     ),
                     if (showOwner) ...[
@@ -625,8 +625,7 @@ class _RecordingPlayerPageState extends State<RecordingPlayerPage> {
   bool _aiScanningEnabled = false;
   bool _inspectionRunning = false;
   int _consecutiveInspectionFailures = 0;
-  List<ChickenDetection> _detections = const [];
-  String? _aiStatusMessage;
+  CctvInspectionResult _inspection = _recordingAiOffInspection();
 
   static const _inspectionFailureLimit = 3;
 
@@ -660,12 +659,9 @@ class _RecordingPlayerPageState extends State<RecordingPlayerPage> {
     setState(() {
       _aiScanningEnabled = enabling;
       _consecutiveInspectionFailures = 0;
-      if (!enabling) {
-        _detections = const [];
-        _aiStatusMessage = null;
-      } else {
-        _aiStatusMessage = 'Starting AI detection...';
-      }
+      _inspection = enabling
+          ? _recordingCapturingInspection()
+          : _recordingAiOffInspection();
     });
     _inspectionTimer?.cancel();
     _inspectionTimer = null;
@@ -688,6 +684,9 @@ class _RecordingPlayerPageState extends State<RecordingPlayerPage> {
     if (_inspectionRunning || !_aiScanningEnabled) return;
 
     _inspectionRunning = true;
+    if (mounted) {
+      setState(() => _inspection = _recordingCapturingInspection());
+    }
     try {
       final frameBytes = await player.takeSnapShot().timeout(
         const Duration(seconds: 4),
@@ -697,6 +696,9 @@ class _RecordingPlayerPageState extends State<RecordingPlayerPage> {
         throw StateError('The video snapshot was empty.');
       }
 
+      if (mounted) {
+        setState(() => _inspection = _recordingInspectingInspection());
+      }
       final result = await widget.controller.inspectManualFrame(
         widget.viewer.username,
         frameBytes,
@@ -705,10 +707,7 @@ class _RecordingPlayerPageState extends State<RecordingPlayerPage> {
 
       _consecutiveInspectionFailures = 0;
       setState(() {
-        _detections = List.of(result.detections);
-        _aiStatusMessage = result.detected
-            ? '${result.detectionCount} rooster${result.detectionCount == 1 ? '' : 's'} detected · ${result.condition.name}'
-            : 'No rooster detected in this frame.';
+        _inspection = _recordingInspectionFrom(result);
       });
     } catch (error) {
       if (!mounted) return;
@@ -716,9 +715,9 @@ class _RecordingPlayerPageState extends State<RecordingPlayerPage> {
       if (_consecutiveInspectionFailures >= _inspectionFailureLimit) {
         setState(() {
           _aiScanningEnabled = false;
-          _detections = const [];
-          _aiStatusMessage =
-              'AI scanning was turned off after repeated frame-capture failures.';
+          _inspection = _recordingErrorInspection(
+            'AI scanning was turned off after repeated frame-capture failures.',
+          );
         });
       }
     } finally {
@@ -744,30 +743,20 @@ class _RecordingPlayerPageState extends State<RecordingPlayerPage> {
       rect: videoRect,
       child: IgnorePointer(
         child: CustomPaint(
-          painter: ChickenDetectionPainter(detections: _detections),
+          painter: ChickenDetectionPainter(detections: _inspection.detections),
         ),
       ),
     );
   }
 
-  Widget _statusBanner({double? maxWidth}) {
-    return Container(
-      constraints: maxWidth == null ? null : BoxConstraints(maxWidth: maxWidth),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: const Color(0xB3000000),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Text(
-        _aiStatusMessage!,
-        textAlign: TextAlign.center,
-        style: const TextStyle(
-          color: Colors.white,
-          fontWeight: FontWeight.w700,
-          fontSize: 13,
-        ),
-      ),
-    );
+  String get _fullscreenAiStatus {
+    if (!_aiScanningEnabled) {
+      return _inspection.resultLabel;
+    }
+    if (_inspectionRunning) {
+      return 'AI is checking the current frame…';
+    }
+    return _inspection.resultLabel;
   }
 
   // Draws on top of fijkplayer_plus's own default panel (play/pause, seek
@@ -775,7 +764,8 @@ class _RecordingPlayerPageState extends State<RecordingPlayerPage> {
   // an earlier version passed a panelBuilder that only drew AI-scan UI,
   // which silently dropped the seek bar since panelBuilder fully replaces
   // the default panel rather than extending it. This same panelBuilder
-  // covers both the embedded view and the separate fullscreen route.
+  // covers both the embedded view and the separate fullscreen route, mirroring
+  // the CCTV live feed's fullscreen overlay (name tag, AI toggle, status chip).
   Widget _panelBuilder(
     FijkPlayer player,
     FijkData data,
@@ -789,6 +779,7 @@ class _RecordingPlayerPageState extends State<RecordingPlayerPage> {
     final videoRect = player.value.fullScreen
         ? Rect.fromLTWH(0, 0, viewSize.width, viewSize.height)
         : texturePos;
+    final compactControls = viewSize.width < 600;
 
     // panelBuilder's return value is inserted as an unpositioned child of
     // fijkplayer_plus's own Stack, laid out with loose constraints. A Stack
@@ -800,40 +791,83 @@ class _RecordingPlayerPageState extends State<RecordingPlayerPage> {
         clipBehavior: Clip.hardEdge,
         children: [
           defaultFijkPanelBuilder(player, data, context, viewSize, texturePos),
-          if (_aiScanningEnabled && _detections.isNotEmpty)
+          if (_aiScanningEnabled && _inspection.detections.isNotEmpty)
             _detectionOverlay(videoRect),
           Positioned(
             top: 8,
+            left: 8,
             right: 8,
             child: SafeArea(
               bottom: false,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: const Color(0x66000000),
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                child: IconButton(
-                  tooltip: _aiScanningEnabled
-                      ? 'Turn off AI detection'
-                      : 'Turn on AI detection',
-                  onPressed: _toggleAiScanning,
-                  icon: Icon(
-                    _aiScanningEnabled
-                        ? Icons.visibility_rounded
-                        : Icons.visibility_outlined,
-                    color: _aiScanningEnabled ? _appAccent : Colors.white,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  if (player.value.fullScreen && !compactControls)
+                    Flexible(
+                      child: SeverityTag(
+                        label: widget.recording.name,
+                        color: _appAccent,
+                      ),
+                    )
+                  else
+                    const SizedBox.shrink(),
+                  _LiveFeedAiToggle(
+                    enabled: _aiScanningEnabled,
+                    compact: true,
+                    onPressed: _toggleAiScanning,
                   ),
-                ),
+                ],
               ),
             ),
           ),
-          if (_aiStatusMessage != null)
+          if (player.value.fullScreen)
             Positioned(
               left: 16,
               right: 16,
-              bottom: 52,
-              child: Center(
-                child: _statusBanner(maxWidth: videoRect.width - 24),
+              bottom: 16,
+              child: SafeArea(
+                top: false,
+                child: Align(
+                  alignment: Alignment.bottomLeft,
+                  child: Container(
+                    constraints: BoxConstraints(maxWidth: viewSize.width * .7),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 9,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.62),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _aiScanningEnabled
+                              ? Icons.auto_awesome
+                              : Icons.visibility_outlined,
+                          color: _aiScanningEnabled
+                              ? const Color(0xFFFFCE67)
+                              : Colors.white70,
+                          size: 17,
+                        ),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            _fullscreenAiStatus,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ),
             ),
         ],
@@ -844,56 +878,347 @@ class _RecordingPlayerPageState extends State<RecordingPlayerPage> {
   @override
   Widget build(BuildContext context) {
     final player = _player;
+    final colors = context.appColors;
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: colors.background,
       appBar: AppBar(
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        // The app-wide AppBarTheme sets an explicit titleTextStyle color
-        // (dark text, for the normal light/dark surfaces), which otherwise
-        // wins over `foregroundColor` above and renders unreadably dark on
-        // this AppBar's black background.
-        titleTextStyle: const TextStyle(
-          color: Colors.white,
-          fontSize: 18,
-          fontWeight: FontWeight.w800,
-          letterSpacing: -0.45,
-        ),
-        title: Text(widget.recording.name, overflow: TextOverflow.ellipsis),
-      ),
-      body: Center(
-        child: _errorMessage != null
-            ? Padding(
-                padding: const EdgeInsets.all(24),
-                child: Text(
-                  _errorMessage!,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Colors.white70,
+        backgroundColor: colors.background,
+        surfaceTintColor: Colors.transparent,
+        titleSpacing: 4,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.recording.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            Row(
+              children: [
+                Icon(
+                  Icons.videocam_outlined,
+                  color: colors.mutedText,
+                  size: 14,
+                ),
+                const SizedBox(width: 5),
+                Text(
+                  '${_formattedRecordingDate(widget.recording.modifiedAt)} · ${widget.recording.sizeLabel}',
+                  style: TextStyle(
+                    color: colors.mutedText,
+                    fontSize: 13,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-              )
-            : _supportsFijkPlayer && player != null
-            ? FijkView(
-                player: player,
-                fit: FijkFit.contain,
-                fsFit: FijkFit.contain,
-                fs: true,
-                color: Colors.black,
-                panelBuilder: _panelBuilder,
-              )
-            : const Padding(
-                padding: EdgeInsets.all(24),
-                child: Text(
-                  'Local video playback is enabled for Android and iOS builds.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontWeight: FontWeight.w700,
+              ],
+            ),
+          ],
+        ),
+      ),
+      // Video on top, detection results below — the same split-screen shape
+      // as the CCTV live viewer (see _CctvViewerPage), so scanning a
+      // recording feels like the same tool as watching it live.
+      body: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            AspectRatio(
+              aspectRatio: 16 / 10,
+              child: Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Color(0xFF2B365F), Color(0xFF151B31)],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
                   ),
+                ),
+                child: _errorMessage != null
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Text(
+                            _errorMessage!,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      )
+                    : _supportsFijkPlayer && player != null
+                    ? FijkView(
+                        player: player,
+                        fit: FijkFit.contain,
+                        fsFit: FijkFit.contain,
+                        fs: true,
+                        color: Colors.black,
+                        panelBuilder: _panelBuilder,
+                      )
+                    : const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(24),
+                          child: Text(
+                            'Local video playback is enabled for Android and iOS builds.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+              ),
+            ),
+            Expanded(
+              child: _RecordingDetectionPanel(
+                recording: widget.recording,
+                inspection: _inspection,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+CctvInspectionResult _recordingAiOffInspection() => const CctvInspectionResult(
+  state: CctvInspectionState.idle,
+  resultLabel: 'AI detection is off',
+  confidenceLabel: '-',
+  message: 'Turn on AI detection to scan this recording for roosters.',
+  inspectedAtLabel: '-',
+  condition: HealthState.normal,
+  detected: false,
+);
+
+CctvInspectionResult _recordingCapturingInspection() =>
+    const CctvInspectionResult(
+      state: CctvInspectionState.capturing,
+      resultLabel: 'Capturing frame',
+      confidenceLabel: '-',
+      message: 'A frame from this recording is being prepared for inspection.',
+      inspectedAtLabel: '-',
+      condition: HealthState.normal,
+      detected: false,
+    );
+
+CctvInspectionResult _recordingInspectingInspection() =>
+    const CctvInspectionResult(
+      state: CctvInspectionState.inspecting,
+      resultLabel: 'Running YOLOv8',
+      confidenceLabel: '-',
+      message: 'The captured frame is being inspected on this device.',
+      inspectedAtLabel: '-',
+      condition: HealthState.normal,
+      detected: false,
+    );
+
+CctvInspectionResult _recordingErrorInspection(String message) =>
+    CctvInspectionResult(
+      state: CctvInspectionState.error,
+      resultLabel: 'Inspection failed',
+      confidenceLabel: '-',
+      message: message,
+      inspectedAtLabel: _timestampLabel(),
+      condition: HealthState.abnormal,
+      detected: false,
+    );
+
+CctvInspectionResult _recordingInspectionFrom(ManualScanResult result) {
+  final detectionCount = result.detectionCount;
+  final resultLabel = !result.detected
+      ? 'No rooster detected'
+      : (result.condition == HealthState.abnormal
+            ? '$detectionCount abnormal rooster${detectionCount == 1 ? '' : 's'}'
+            : '$detectionCount normal rooster${detectionCount == 1 ? '' : 's'}');
+  return CctvInspectionResult(
+    state: CctvInspectionState.completed,
+    resultLabel: resultLabel,
+    confidenceLabel: result.confidenceLabel,
+    message: result.note,
+    inspectedAtLabel: _timestampLabel(),
+    condition: result.condition,
+    detected: result.detected,
+    detectionCount: detectionCount,
+    detections: result.detections,
+  );
+}
+
+/// The recorded-clip counterpart to the CCTV live viewer's
+/// `_CctvViewerDetailsPanel`: a persistent lower panel that keeps detection
+/// results and clip metadata readable without covering the video.
+class _RecordingDetectionPanel extends StatelessWidget {
+  const _RecordingDetectionPanel({
+    required this.recording,
+    required this.inspection,
+  });
+
+  final RecordingFile recording;
+  final CctvInspectionResult inspection;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.appColors;
+    final detectionCount = inspection.detectionCount;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        border: Border(top: BorderSide(color: colors.border)),
+      ),
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: colors.border,
+                borderRadius: BorderRadius.circular(99),
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Recording detection',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
                 ),
               ),
+              SeverityTag(
+                label: inspection.state.label,
+                color: inspection.state.color,
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: _CctvViewerMetric(
+                  emoji: '🐔',
+                  label: 'Detected',
+                  value: detectionCount == null ? '—' : '$detectionCount',
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _CctvViewerMetric(
+                  icon: Icons.auto_graph_rounded,
+                  label: 'Confidence',
+                  value: inspection.confidenceLabel,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _CctvViewerMetric(
+                  icon: Icons.schedule_outlined,
+                  label: 'Last checked',
+                  value: inspection.inspectedAtLabel,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: inspection.condition.color.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: inspection.condition.color.withValues(alpha: 0.35),
+              ),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  inspection.detected
+                      ? Icons.health_and_safety_outlined
+                      : Icons.visibility_outlined,
+                  color: inspection.condition.color,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        inspection.resultLabel,
+                        style: const TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        inspection.message,
+                        style: TextStyle(
+                          color: colors.mutedText,
+                          fontSize: 13,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (inspection.detections.isNotEmpty) ...[
+            const SizedBox(height: 18),
+            Text(
+              'Current detections',
+              style: TextStyle(
+                color: colors.mutedText,
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final detection in inspection.detections)
+                  _CctvDetectionChip(detection: detection),
+              ],
+            ),
+          ],
+          const SizedBox(height: 22),
+          Text(
+            'Clip details',
+            style: TextStyle(
+              color: colors.mutedText,
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 9),
+          _CctvViewerDetailRow(
+            icon: Icons.calendar_today_outlined,
+            label: 'Recorded',
+            value: _formattedRecordingDate(recording.modifiedAt),
+          ),
+          const SizedBox(height: 10),
+          _CctvViewerDetailRow(
+            icon: Icons.sd_storage_outlined,
+            label: 'Size',
+            value: recording.sizeLabel,
+          ),
+          const SizedBox(height: 10),
+          _CctvViewerDetailRow(
+            icon: recording.isServerStored
+                ? Icons.cloud_done_outlined
+                : Icons.cloud_upload_outlined,
+            label: 'Storage',
+            value: recording.isServerStored
+                ? 'Uploaded to server'
+                : 'Pending upload',
+          ),
+        ],
       ),
     );
   }

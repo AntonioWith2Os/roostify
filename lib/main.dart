@@ -68,13 +68,10 @@ Future<void> main() async {
   // The anon/publishable key is meant to ship in the client - access is
   // enforced server-side by Postgres RLS, not by keeping this secret.
   await Supabase.initialize(
-    url: const String.fromEnvironment(
-      'SUPABASE_URL',
-      defaultValue: 'https://jzeybmiwmavgasnxcdaw.supabase.co',
-    ),
+    url: const String.fromEnvironment('SUPABASE_URL', defaultValue: 'hotel?'),
     publishableKey: const String.fromEnvironment(
       'SUPABASE_ANON_KEY',
-      defaultValue: 'sb_publishable_i-PaTfRoWUFqQz5MdgqOmg_uJXguUsR',
+      defaultValue: 'trivago',
     ),
   );
 
