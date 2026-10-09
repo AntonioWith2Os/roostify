@@ -404,11 +404,27 @@ class MonitorSnapshot {
   /// "3 active warnings" badge up indefinitely.
   List<AlertItem> get activeAlerts => isLive ? alerts : const [];
 
+  /// The temperature and humidity cards show the higher of their own reading
+  /// and an actual heat-and-humidity interaction. This prevents a deceptively
+  /// mild-looking card when 28 °C and 75% RH already create heat stress,
+  /// without marking the humidity card critical merely because temperature is
+  /// high while humidity itself is comfortable.
   SensorWarningLevel get temperatureLevel =>
-      temperatureLevelFor(temperature, humidity: humidity);
+      _highestLevel(temperatureLevelFor(temperature), interactionHeatLevel);
 
+  /// See [temperatureLevel]. [humidityLevelFor] still exposes the direct
+  /// relative-humidity band; this is the dashboard-card severity after the
+  /// combined heat rule has been applied.
   SensorWarningLevel get humidityLevel =>
-      humidityLevelFor(humidity, temperature: temperature);
+      _highestLevel(humidityLevelFor(humidity), interactionHeatLevel);
+
+  SensorWarningLevel get combinedHeatLevel =>
+      combinedHeatLevelFor(temperature, humidity);
+
+  SensorWarningLevel get interactionHeatLevel =>
+      _hasHeatHumidityInteraction(temperature, humidity)
+      ? combinedHeatLevel
+      : SensorWarningLevel.normal;
 
   SensorWarningLevel get airLevel => airLevelFor(airPpm);
 
@@ -447,19 +463,13 @@ class MonitorSnapshot {
     double value, {
     double? humidity,
   }) {
-    final humidHeat = humidity != null && humidity >= 80;
-    final severeHumidHeat = humidity != null && humidity >= 90;
-
+    // Base bands from the provided guidance: 18–26 normal, 27–29 caution,
+    // 30–31 warning, 32–34 danger, and >=35 critical. The combined rule is
+    // evaluated separately so it escalates both DHT cards consistently.
     if (value >= 35) return SensorWarningLevel.critical;
     if (value >= 32) return SensorWarningLevel.danger;
-    if (value >= 30) {
-      return humidHeat ? SensorWarningLevel.danger : SensorWarningLevel.warning;
-    }
-    if (value >= 27) {
-      return severeHumidHeat
-          ? SensorWarningLevel.warning
-          : SensorWarningLevel.caution;
-    }
+    if (value >= 30) return SensorWarningLevel.warning;
+    if (value >= 27) return SensorWarningLevel.caution;
     if (value >= 18) return SensorWarningLevel.normal;
     if (value >= 10) return SensorWarningLevel.caution;
     if (value >= 5) return SensorWarningLevel.danger;
@@ -470,16 +480,47 @@ class MonitorSnapshot {
     double value, {
     double? temperature,
   }) {
-    final hot = temperature != null && temperature >= 30;
-
+    // Provided relative-humidity bands: 45–70 normal, 71–79 caution, 80–89
+    // warning, and >=90 danger. Heat interaction is handled below instead of
+    // silently changing this direct humidity band.
     if (value >= 90) return SensorWarningLevel.danger;
-    if (value >= 80) {
-      return hot ? SensorWarningLevel.danger : SensorWarningLevel.warning;
-    }
+    if (value >= 80) return SensorWarningLevel.warning;
     if (value >= 71) return SensorWarningLevel.caution;
     if (value >= 45) return SensorWarningLevel.normal;
     return SensorWarningLevel.caution;
   }
+
+  /// Combined heat rule from the supplied guidance.
+  static SensorWarningLevel combinedHeatLevelFor(
+    double temperature,
+    double humidity,
+  ) {
+    if (temperature >= 35 || (temperature >= 32 && humidity >= 90)) {
+      return SensorWarningLevel.critical;
+    }
+    if (temperature >= 32 ||
+        (temperature >= 30 && humidity >= 80) ||
+        (temperature >= 28 && humidity >= 90)) {
+      return SensorWarningLevel.danger;
+    }
+    if (temperature >= 30 || (temperature >= 28 && humidity >= 75)) {
+      return SensorWarningLevel.warning;
+    }
+    if (temperature >= 27 || humidity >= 71) {
+      return SensorWarningLevel.caution;
+    }
+    return SensorWarningLevel.normal;
+  }
+
+  static SensorWarningLevel _highestLevel(
+    SensorWarningLevel first,
+    SensorWarningLevel second,
+  ) => first.index >= second.index ? first : second;
+
+  static bool _hasHeatHumidityInteraction(
+    double temperature,
+    double humidity,
+  ) => temperature >= 28 && humidity >= 75;
 
   static SensorWarningLevel airLevelFor(int value) {
     if (value >= 50) return SensorWarningLevel.critical;
@@ -490,21 +531,21 @@ class MonitorSnapshot {
   }
 
   static String _temperatureStatus(double value, {double? humidity}) {
-    final humidHeat = humidity != null && humidity >= 80;
-    final severeHumidHeat = humidity != null && humidity >= 90;
+    final combinedLevel = humidity == null
+        ? SensorWarningLevel.normal
+        : combinedHeatLevelFor(value, humidity);
+    final directLevel = temperatureLevelFor(value);
+
+    if (humidity != null &&
+        _hasHeatHumidityInteraction(value, humidity) &&
+        combinedLevel.index > directLevel.index) {
+      return _combinedHeatStatus(combinedLevel);
+    }
 
     if (value >= 35) return 'Emergency heat condition';
     if (value >= 32) return 'Dangerous; strong cooling needed';
-    if (value >= 30) {
-      return humidHeat
-          ? 'Heat stress danger with high humidity'
-          : 'Heat stress likely, especially if humid';
-    }
-    if (value >= 27) {
-      return severeHumidHeat
-          ? 'Heat risk raised by very high humidity'
-          : 'Start prevention: shade, water, airflow';
-    }
+    if (value >= 30) return 'Heat stress likely, especially if humid';
+    if (value >= 27) return 'Start prevention: shade, water, airflow';
     if (value >= 18) return 'Good / comfortable';
     if (value >= 10) return 'Below ideal; add safe warmth';
     if (value >= 5) return 'Cold stress risk; warm the area';
@@ -512,21 +553,33 @@ class MonitorSnapshot {
   }
 
   static String _humidityStatus(double value, {double? temperature}) {
-    final warm = temperature != null && temperature >= 28;
-    final hot = temperature != null && temperature >= 30;
+    final combinedLevel = temperature == null
+        ? SensorWarningLevel.normal
+        : combinedHeatLevelFor(temperature, value);
+    final directLevel = humidityLevelFor(value);
 
-    if (value >= 90) {
-      return hot
-          ? 'Very poor cooling with heat'
-          : 'Very poor cooling condition';
+    if (temperature != null &&
+        _hasHeatHumidityInteraction(temperature, value) &&
+        combinedLevel.index > directLevel.index) {
+      return _combinedHeatStatus(combinedLevel);
     }
-    if (value >= 80) {
-      return warm ? 'Risky with current heat' : 'Risky; improve ventilation';
-    }
+
+    if (value >= 90) return 'Very poor cooling condition';
+    if (value >= 80) return 'Risky; improve ventilation';
     if (value >= 71) return 'Watch closely; improve ventilation';
     if (value >= 45) return 'Good range';
     if (value < 40) return 'Dry/dust risk';
     return 'Slightly dry; watch dust';
+  }
+
+  static String _combinedHeatStatus(SensorWarningLevel level) {
+    return switch (level) {
+      SensorWarningLevel.critical => 'Emergency heat-and-humidity condition',
+      SensorWarningLevel.danger => 'Heat stress danger with high humidity',
+      SensorWarningLevel.warning => 'Heat stress risk increased by humidity',
+      SensorWarningLevel.caution ||
+      SensorWarningLevel.normal => 'Watch temperature and humidity together',
+    };
   }
 
   static String _airStatus(int value) {
@@ -552,13 +605,11 @@ class MonitorSnapshot {
   static List<AlertItem> _environmentAlerts(Esp32SensorReading reading) {
     final alerts = <AlertItem>[];
     final time = _timeLabelFor(reading.receivedAt);
-    final temperatureLevel = temperatureLevelFor(
+    final temperatureLevel = temperatureLevelFor(reading.temperatureC);
+    final humidityLevel = humidityLevelFor(reading.humidityPercent);
+    final combinedHeatLevel = combinedHeatLevelFor(
       reading.temperatureC,
-      humidity: reading.humidityPercent,
-    );
-    final humidityLevel = humidityLevelFor(
       reading.humidityPercent,
-      temperature: reading.temperatureC,
     );
     final airLevel = airLevelFor(reading.airQualityPpm);
 
@@ -595,19 +646,22 @@ class MonitorSnapshot {
       );
     }
 
-    final dangerousHeatHumidity =
+    final heatHumidityWarning =
         reading.dhtAvailable &&
-        ((reading.temperatureC >= 30 && reading.humidityPercent >= 80) ||
-            (reading.temperatureC >= 28 && reading.humidityPercent >= 90));
-    if (dangerousHeatHumidity) {
+        _hasHeatHumidityInteraction(
+          reading.temperatureC,
+          reading.humidityPercent,
+        ) &&
+        combinedHeatLevel.index >= SensorWarningLevel.warning.index;
+    if (heatHumidityWarning) {
       final temperature = reading.temperatureC.toStringAsFixed(1);
       final humidity = reading.humidityPercent.toStringAsFixed(0);
       alerts.add(
         AlertItem(
-          title: 'Heat and humidity danger',
+          title: 'Heat and humidity ${combinedHeatLevel.label.toLowerCase()}',
           message:
-              'The coop reached $temperature °C with $humidity% humidity. High humidity makes cooling harder; improve airflow and cool the pen immediately.',
-          severity: AlertSeverity.danger,
+              'The coop reached $temperature °C with $humidity% humidity. ${_combinedHeatStatus(combinedHeatLevel)}. Improve airflow and provide cool drinking water.',
+          severity: _alertSeverityFor(combinedHeatLevel),
           category: 'Environment',
           time: time,
         ),

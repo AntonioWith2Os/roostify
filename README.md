@@ -41,7 +41,7 @@ The boundary is intentional:
 - The video server converts or exposes the ingest as a playback endpoint that
   the phone can reach. Its playback URL can be HLS/HTTP, RTSP, or RTMP.
 - The app decodes the delivered stream, captures frames, and runs the bundled
-  `assets/best_float32.tflite` model on the device.
+  `assets/best.tflite` model on the device.
 - Supabase remains for authentication, profiles, ESP32 readings, alerts, and
   application data—not continuous CCTV transport. See `SUPABASE_SETUP.md`.
 - The ESP32 posts DHT11/MQ135 readings straight to Supabase over its own

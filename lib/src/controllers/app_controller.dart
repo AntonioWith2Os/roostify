@@ -844,11 +844,10 @@ class AppController extends ChangeNotifier {
     _users.removeWhere((user) => !remoteIds.contains(user.accountId));
   }
 
-  /// True when temperature, humidity, or air quality is outside the
-  /// "normal" range - the same per-metric level computation
-  /// [MonitorSnapshot._environmentAlerts] uses to decide whether to raise an
-  /// alert, reused here so [AppUser.sensorReadingLog] tracks exactly the
-  /// readings that would actually be considered noteworthy.
+  /// True when temperature, humidity, their combined heat risk, or air
+  /// quality is outside the "normal" range. This mirrors the warning
+  /// computations used by [MonitorSnapshot] so the reading log only retains
+  /// events the farmer would actually need to notice.
   bool _isNotableReading(Esp32SensorReading reading) {
     final dhtNotable =
         reading.dhtAvailable &&
@@ -860,6 +859,11 @@ class AppController extends ChangeNotifier {
             MonitorSnapshot.humidityLevelFor(
                   reading.humidityPercent,
                   temperature: reading.temperatureC,
+                ) !=
+                SensorWarningLevel.normal ||
+            MonitorSnapshot.combinedHeatLevelFor(
+                  reading.temperatureC,
+                  reading.humidityPercent,
                 ) !=
                 SensorWarningLevel.normal);
     final airNotable =

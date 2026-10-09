@@ -7,7 +7,7 @@ part of '../main.dart';
 /// only receives the video server's delivery endpoint.
 const _exampleCloudPlaybackUrl =
     'https://video.example.org/live/roostify/index.m3u8';
-const _localYoloModelAsset = 'assets/best_float32.tflite';
+const _localYoloModelAsset = 'assets/best.tflite';
 
 /// Brand accent used across the whole UI (vivid Roostify orange).
 const _appAccent = Color(0xFFFF4D16);

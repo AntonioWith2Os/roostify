@@ -4503,7 +4503,8 @@ class _FunctionalSensorsGuide extends StatelessWidget {
               ('Normal', '18 - 26 °C', 'Good / comfortable'),
               ('Caution', '27 - 29 °C', 'Shade, water, and airflow'),
               ('Warning', '30 - 31 °C', 'Heat stress likely'),
-              ('Danger', '32 °C+', 'Strong cooling needed'),
+              ('Danger', '32 - 34 °C', 'Strong cooling needed'),
+              ('Critical', '35 °C+', 'Emergency heat condition'),
             ],
           ),
           const SizedBox(height: 10),
@@ -4846,27 +4847,27 @@ const _sensorWarningGuides = [
     entries: [
       (
         SensorWarningLevel.normal,
-        '18 - 27 °C',
+        '18 - 26 °C',
         'Comfortable range for roosters.',
       ),
       (
         SensorWarningLevel.caution,
-        '27 - 30 °C or 10 - 18 °C',
+        '27 - 29 °C or 10 - 17 °C',
         'Start prevention: shade, fresh water, and airflow when warm; add safe warmth when cool.',
       ),
       (
         SensorWarningLevel.warning,
-        '30 - 32 °C',
+        '30 - 31 °C',
         'Heat stress is likely, especially when humid. Cool the pen and watch the birds.',
       ),
       (
         SensorWarningLevel.danger,
-        '32 - 35 °C or 5 - 10 °C',
+        '32 - 34 °C or 5 - 9 °C',
         'Dangerous heat needs strong cooling now; cold this low risks cold stress, so warm the area.',
       ),
       (
         SensorWarningLevel.critical,
-        'Above 35 °C or below 5 °C',
+        '35 °C+ or below 5 °C',
         'Emergency condition. Act immediately to cool or warm the coop and check every bird.',
       ),
     ],
@@ -4877,22 +4878,22 @@ const _sensorWarningGuides = [
     entries: [
       (
         SensorWarningLevel.normal,
-        '45 - 71%',
+        '45 - 70%',
         'Good range for comfort and dust control.',
       ),
       (
         SensorWarningLevel.caution,
-        '71 - 80% or below 45%',
+        '71 - 79% or below 45%',
         'Watch closely and improve ventilation; very dry air raises dust risk.',
       ),
       (
         SensorWarningLevel.warning,
-        '80 - 90%',
+        '80 - 89%',
         'Risky, especially in heat. Improve airflow so the birds can cool themselves.',
       ),
       (
         SensorWarningLevel.danger,
-        'Above 90%, or above 80% with 30 °C+ heat',
+        '90%+',
         'Cooling barely works in this humidity. Ventilate aggressively and cool the pen.',
       ),
     ],
