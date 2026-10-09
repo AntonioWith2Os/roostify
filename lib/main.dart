@@ -39,6 +39,7 @@ part 'src/controllers/app_controller.dart';
 part 'src/models/app_models.dart';
 part 'src/services/on_device_yolo_detector.dart';
 part 'src/services/posture_duration_tracker.dart';
+part 'src/services/rooster_tracker.dart';
 part 'src/widgets/landing_widgets.dart';
 part 'src/services/camera_stream_helpers.dart';
 part 'src/services/rtsp_camera_scanner.dart';
