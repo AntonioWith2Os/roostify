@@ -83,8 +83,9 @@ class ChickenDetectionPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     for (final detection in detections) {
-      final color = detection.condition == HealthState.abnormal
-          ? _appAccent
+      final isAbnormal = detection.label.toLowerCase().contains('abnormal');
+      final color = isAbnormal
+          ? const Color(0xFFFF5B6E)
           : const Color(0xFF43E39C);
       final rect = Rect.fromLTRB(
         detection.box.left * size.width,
