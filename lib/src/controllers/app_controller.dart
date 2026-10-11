@@ -170,7 +170,6 @@ class AppController extends ChangeNotifier {
   static const _rememberRoleKey = 'roostify.remember.role';
   static const _accountsPrefKey = 'roostify.accounts';
   static const _supportThreadsPrefKey = 'roostify.support_threads';
-  static const _tempPasswordLockDays = 7;
 
   List<AppUser> get farmUsers =>
       List.unmodifiable(_users.where((user) => !user.isAdmin));
@@ -403,6 +402,12 @@ class AppController extends ChangeNotifier {
     // role/detail changes made elsewhere.
     final cachedUser = userByUsername(username);
     if (cachedUser != null && cachedUser.role == role) {
+      try {
+        await _syncTemporaryPasswordPolicy(cachedUser);
+      } on FunctionException {
+        await _supabase.signOut();
+        return null;
+      }
       lastError = null;
       _session = Session(user: cachedUser, email: supabaseUser.email);
       notifyListeners();
@@ -419,6 +424,13 @@ class AppController extends ChangeNotifier {
       if (data == null) return null;
       final user = _upsertProfile(supabaseUser.id, data);
       if (user.username != username || user.role != role) return null;
+
+      try {
+        await _syncTemporaryPasswordPolicy(user);
+      } on FunctionException {
+        await _supabase.signOut();
+        return null;
+      }
 
       lastError = null;
       _session = Session(
@@ -716,12 +728,18 @@ class AppController extends ChangeNotifier {
         await _loadUsersForAdmin();
       }
       _listenToFarmStatuses();
-      return _openSupabaseSession(
+      return await _openSupabaseSession(
         userByUsername(user.username) ?? user,
         supabaseUser,
       );
     } on AuthException catch (error) {
       lastError = _friendlyAuthError(error);
+    } on FunctionException catch (error) {
+      await _supabase.signOut();
+      lastError = _friendlyFunctionError(
+        error,
+        'Unable to start the temporary-password lock.',
+      );
     } on PostgrestException catch (error) {
       lastError = error.message;
     } catch (_) {
@@ -731,18 +749,24 @@ class AppController extends ChangeNotifier {
     return null;
   }
 
-  Session _openSupabaseSession(AppUser user, User supabaseUser) {
+  Future<Session> _openSupabaseSession(AppUser user, User supabaseUser) async {
+    await _syncTemporaryPasswordPolicy(user);
     lastError = null;
     _session = Session(user: user, email: supabaseUser.email);
     // Stay signed in across app restarts by default, the same as any other
     // mobile app — no separate opt-in needed. Explicit sign-out clears this.
     unawaited(rememberThisDevice(user.username, user.role));
-    if (user.firstLoginAt == null) {
-      user.firstLoginAt = DateTime.now();
-      unawaited(_persistAccounts());
-    }
     notifyListeners();
     return _session!;
+  }
+
+  /// Records the first completed login for an account issued a temporary
+  /// password. Supabase owns the timestamp and the unlock date, so the timer
+  /// is identical on every device and cannot be reset by a phone clock.
+  Future<void> _syncTemporaryPasswordPolicy(AppUser user) async {
+    if (user.isAdmin) return;
+    final policy = await _supabase.recordTemporaryPasswordFirstLogin();
+    user.applyTemporaryPasswordPolicy(policy);
   }
 
   String _roleMismatchMessage(UserRole expectedRole) {
@@ -807,8 +831,6 @@ class AppController extends ChangeNotifier {
       farmName: data['farm_name'] as String? ?? '',
       shortBio: data['short_bio'] as String? ?? '',
       avatarPath: previous?.avatarPath,
-      firstLoginAt: previous?.firstLoginAt,
-      tempPasswordIssued: previous?.tempPasswordIssued ?? false,
       role: role,
       cameraAccessEnabled:
           data['camera_access_enabled'] as bool? ?? role == UserRole.user,
@@ -824,6 +846,7 @@ class AppController extends ChangeNotifier {
       cctvs: previous?.cctvs ?? const [],
       liveCctvStreams: previous?.liveCctvStreams,
     );
+    user.applyTemporaryPasswordPolicy(data);
     if (index < 0) {
       _users.add(user);
     } else {
@@ -844,33 +867,33 @@ class AppController extends ChangeNotifier {
     _users.removeWhere((user) => !remoteIds.contains(user.accountId));
   }
 
+  /// Pulls the latest server-owned account policy fields when an administrator
+  /// opens the user list. This keeps first-login lock state accurate across
+  /// phones instead of relying on the admin device's local cache.
+  Future<void> refreshAdminUsers() async {
+    if (_session?.user.isAdmin != true) return;
+    try {
+      await _loadUsersForAdmin();
+      _listenToFarmStatuses();
+      notifyListeners();
+    } on PostgrestException {
+      // Keep the last known list if the dashboard is temporarily offline.
+    }
+  }
+
   /// True when temperature, humidity, their combined heat risk, or air
   /// quality is outside the "normal" range. This mirrors the warning
   /// computations used by [MonitorSnapshot] so the reading log only retains
   /// events the farmer would actually need to notice.
   bool _isNotableReading(Esp32SensorReading reading) {
-    final dhtNotable =
-        reading.dhtAvailable &&
-        (MonitorSnapshot.temperatureLevelFor(
-                  reading.temperatureC,
-                  humidity: reading.humidityPercent,
-                ) !=
-                SensorWarningLevel.normal ||
-            MonitorSnapshot.humidityLevelFor(
-                  reading.humidityPercent,
-                  temperature: reading.temperatureC,
-                ) !=
-                SensorWarningLevel.normal ||
-            MonitorSnapshot.combinedHeatLevelFor(
-                  reading.temperatureC,
-                  reading.humidityPercent,
-                ) !=
-                SensorWarningLevel.normal);
-    final airNotable =
-        reading.airAvailable &&
-        MonitorSnapshot.airLevelFor(reading.airQualityPpm) !=
-            SensorWarningLevel.normal;
-    return dhtNotable || airNotable;
+    return MonitorSnapshot.finalEnvironmentLevelFor(
+          temperature: reading.temperatureC,
+          humidity: reading.humidityPercent,
+          airPpm: reading.airQualityPpm,
+          dhtAvailable: reading.dhtAvailable,
+          airAvailable: reading.airAvailable,
+        ) !=
+        SensorWarningLevel.normal;
   }
 
   /// Subscribes to `farm_status` for every farm user currently in memory -
@@ -1046,6 +1069,9 @@ class AppController extends ChangeNotifier {
     if (user == null) {
       return 'Account not found.';
     }
+    if (_session?.user.accountId != user.accountId) {
+      return 'You can only change your own credentials.';
+    }
 
     final cleanUsername = newUsername?.trim();
     final cleanPassword = newPassword?.trim();
@@ -1060,21 +1086,6 @@ class AppController extends ChangeNotifier {
       return 'Enter a new username or password to update.';
     }
 
-    if (wantsPasswordChange &&
-        user.tempPasswordIssued &&
-        user.firstLoginAt != null) {
-      final unlocksAt = user.firstLoginAt!.add(
-        const Duration(days: _tempPasswordLockDays),
-      );
-      if (DateTime.now().isBefore(unlocksAt)) {
-        final unlocksLabel =
-            '${unlocksAt.month}/${unlocksAt.day}/${unlocksAt.year}';
-        return 'Your temporary password can be changed starting '
-            '$unlocksLabel ($_tempPasswordLockDays days after your first '
-            'login).';
-      }
-    }
-
     if (wantsUsernameChange &&
         _users.any((other) => other.username == cleanUsername)) {
       return 'That username is already taken.';
@@ -1086,12 +1097,13 @@ class AppController extends ChangeNotifier {
 
     if (wantsPasswordChange) {
       try {
-        await _supabase.updatePassword(
+        final policy = await _supabase.changePassword(
           currentPassword: currentPassword,
           newPassword: cleanPassword,
         );
-      } on AuthException catch (error) {
-        return _friendlyAuthError(error);
+        user.applyTemporaryPasswordPolicy(policy);
+      } on FunctionException catch (error) {
+        return _friendlyFunctionError(error, 'Unable to change the password.');
       }
     }
     if (recoveryEmail != null) {
@@ -1160,8 +1172,7 @@ class AppController extends ChangeNotifier {
       );
       final uid = result['uid'] as String;
       final profile = Map<String, dynamic>.from(result['profile'] as Map);
-      final user = _upsertProfile(uid, profile);
-      user.tempPasswordIssued = true;
+      _upsertProfile(uid, profile);
       lastError = null;
       notifyListeners();
       unawaited(_persistAccounts());
@@ -1212,9 +1223,8 @@ class AppController extends ChangeNotifier {
     );
   }
 
-  /// Issues [username] a new temporary password on the admin's behalf, no
-  /// current-password check required. Restarts the 7-day temp-password
-  /// grace period tracked by [AppUser.firstLoginAt].
+  /// Issues [username] a new temporary password on the admin's behalf. The
+  /// server starts its seven-day period when that user next logs in.
   Future<bool> adminResetPassword(String username, String newPassword) async {
     final user = userByUsername(username);
     final cleanPassword = newPassword.trim();
@@ -1230,7 +1240,11 @@ class AppController extends ChangeNotifier {
     }
 
     try {
-      await _supabase.resetUserPassword(user.accountId, cleanPassword);
+      final policy = await _supabase.resetUserPassword(
+        user.accountId,
+        cleanPassword,
+      );
+      user.applyTemporaryPasswordPolicy(policy);
     } on FunctionException catch (error) {
       lastError = _friendlyFunctionError(
         error,
@@ -1239,8 +1253,6 @@ class AppController extends ChangeNotifier {
       notifyListeners();
       return false;
     }
-    user.tempPasswordIssued = true;
-    user.firstLoginAt = null;
     lastError = null;
     notifyListeners();
     unawaited(_persistAccounts());

@@ -40,8 +40,11 @@ class AppUser {
     this.farmName = '',
     this.shortBio = '',
     this.avatarPath,
-    this.firstLoginAt,
-    this.tempPasswordIssued = false,
+    this.accountCreatedAt,
+    this.temporaryPasswordIssuedAt,
+    this.temporaryPasswordFirstLoginAt,
+    this.passwordChangeAvailableAt,
+    this.temporaryPasswordChangedAt,
     String? accountId,
     List<LiveCctvStream>? liveCctvStreams,
   }) : accountId = accountId ?? username,
@@ -76,13 +79,43 @@ class AppUser {
   /// throttled the way `farm_sensor_readings` is server-side, since this
   /// tracks what the app actually saw arrive, not a sampled audit trail.
   final List<SensorReadingLogEntry> sensorReadingLog;
-  // Set the moment this account first signs in, so a temp password issued by
-  // an admin can be locked for a grace period (see tempPasswordIssued)
-  // without also restricting long-lived seeded/demo accounts.
-  DateTime? firstLoginAt;
-  // True only for accounts created through the admin "Add User" flow, whose
-  // password is a temporary one the admin chose.
-  bool tempPasswordIssued;
+
+  /// Password-lock state comes only from the Supabase profile. It must never
+  /// be calculated from, or trusted from, device-local persistence: a new
+  /// phone has no local account cache but must receive the same lock.
+  DateTime? accountCreatedAt;
+  DateTime? temporaryPasswordIssuedAt;
+  DateTime? temporaryPasswordFirstLoginAt;
+  DateTime? passwordChangeAvailableAt;
+  DateTime? temporaryPasswordChangedAt;
+
+  bool get hasPendingTemporaryPassword =>
+      temporaryPasswordIssuedAt != null && temporaryPasswordChangedAt == null;
+
+  bool isTemporaryPasswordLocked(DateTime now) =>
+      hasPendingTemporaryPassword &&
+      passwordChangeAvailableAt != null &&
+      now.isBefore(passwordChangeAvailableAt!);
+
+  /// A compact, live label for the admin list and profile security screen.
+  /// `null` means this account has no temporary-password policy to show.
+  String? temporaryPasswordStatusLabel(DateTime now) {
+    if (!hasPendingTemporaryPassword) return null;
+    if (temporaryPasswordFirstLoginAt == null ||
+        passwordChangeAvailableAt == null) {
+      return 'Waiting for first login';
+    }
+    if (!now.isBefore(passwordChangeAvailableAt!)) {
+      return 'Password change available';
+    }
+
+    final remaining = passwordChangeAvailableAt!.difference(now);
+    final days = remaining.inDays;
+    final hours = remaining.inHours.remainder(24);
+    if (days > 0) return '${days}d ${hours}h remaining';
+    if (remaining.inHours > 0) return '${remaining.inHours}h remaining';
+    return 'Less than 1h remaining';
+  }
 
   bool get isAdmin => role == UserRole.admin;
 
@@ -103,8 +136,6 @@ class AppUser {
     'farmName': farmName,
     'shortBio': shortBio,
     'avatarPath': avatarPath,
-    'firstLoginAt': firstLoginAt?.toIso8601String(),
-    'tempPasswordIssued': tempPasswordIssued,
   };
 
   /// Applies persisted account fields on top of this user (a freshly seeded
@@ -121,10 +152,35 @@ class AppUser {
     farmName = json['farmName'] as String? ?? farmName;
     shortBio = json['shortBio'] as String? ?? shortBio;
     avatarPath = json['avatarPath'] as String?;
-    final firstLogin = json['firstLoginAt'] as String?;
-    firstLoginAt = firstLogin == null ? null : DateTime.tryParse(firstLogin);
-    tempPasswordIssued =
-        json['tempPasswordIssued'] as bool? ?? tempPasswordIssued;
+  }
+
+  /// Applies the server-owned temporary-password policy returned by a profile
+  /// query or the first-login/password-change Edge Functions.
+  void applyTemporaryPasswordPolicy(Map<String, dynamic> json) {
+    DateTime? parse(String camelCase, String snakeCase) {
+      final value = json.containsKey(camelCase)
+          ? json[camelCase]
+          : json[snakeCase];
+      return value is String ? DateTime.tryParse(value) : null;
+    }
+
+    accountCreatedAt = parse('accountCreatedAt', 'created_at');
+    temporaryPasswordIssuedAt = parse(
+      'temporaryPasswordIssuedAt',
+      'temporary_password_issued_at',
+    );
+    temporaryPasswordFirstLoginAt = parse(
+      'temporaryPasswordFirstLoginAt',
+      'temporary_password_first_login_at',
+    );
+    passwordChangeAvailableAt = parse(
+      'passwordChangeAvailableAt',
+      'password_change_available_at',
+    );
+    temporaryPasswordChangedAt = parse(
+      'temporaryPasswordChangedAt',
+      'temporary_password_changed_at',
+    );
   }
 }
 
@@ -428,6 +484,19 @@ class MonitorSnapshot {
 
   SensorWarningLevel get airLevel => airLevelFor(airPpm);
 
+  /// The single environment alert level presented to the farmer. It follows
+  /// the supplied final-alert rule: take the highest risk from temperature,
+  /// humidity, combined heat, and air quality; when both combined heat and
+  /// air quality are warning-level or higher, increase that result one level
+  /// (without going beyond critical).
+  SensorWarningLevel get finalEnvironmentLevel => finalEnvironmentLevelFor(
+    temperature: temperature,
+    humidity: humidity,
+    airPpm: airPpm,
+    dhtAvailable: dhtAvailable,
+    airAvailable: airAvailable,
+  );
+
   // A live reading always yields at least one alert (falling back to an
   // "Environment stable" info entry when nothing's wrong), so once real
   // ESP32 data starts flowing it fully replaces whatever was here before —
@@ -530,6 +599,44 @@ class MonitorSnapshot {
     return SensorWarningLevel.normal;
   }
 
+  static SensorWarningLevel finalEnvironmentLevelFor({
+    required double temperature,
+    required double humidity,
+    required int airPpm,
+    bool dhtAvailable = true,
+    bool airAvailable = true,
+  }) {
+    var finalLevel = SensorWarningLevel.normal;
+    final combinedHeatLevel = combinedHeatLevelFor(temperature, humidity);
+    final airLevel = airLevelFor(airPpm);
+
+    // Failed sensors retain their last known numeric value, but that value
+    // must not determine a fresh farm-risk alert. The dedicated system alert
+    // communicates that the unavailable sensor needs attention.
+    if (dhtAvailable) {
+      finalLevel = _highestLevel(finalLevel, temperatureLevelFor(temperature));
+      finalLevel = _highestLevel(finalLevel, humidityLevelFor(humidity));
+      finalLevel = _highestLevel(finalLevel, combinedHeatLevel);
+    }
+    if (airAvailable) {
+      finalLevel = _highestLevel(finalLevel, airLevel);
+    }
+
+    final hasCompoundingHeatAndAirRisk =
+        dhtAvailable &&
+        airAvailable &&
+        combinedHeatLevel.index >= SensorWarningLevel.warning.index &&
+        airLevel.index >= SensorWarningLevel.warning.index;
+    return hasCompoundingHeatAndAirRisk
+        ? _nextWarningLevel(finalLevel)
+        : finalLevel;
+  }
+
+  static SensorWarningLevel _nextWarningLevel(SensorWarningLevel level) {
+    if (level == SensorWarningLevel.critical) return level;
+    return SensorWarningLevel.values[level.index + 1];
+  }
+
   static String _temperatureStatus(double value, {double? humidity}) {
     final combinedLevel = humidity == null
         ? SensorWarningLevel.normal
@@ -602,80 +709,38 @@ class MonitorSnapshot {
     };
   }
 
+  static String _finalAlertMessage(SensorWarningLevel level) {
+    return switch (level) {
+      SensorWarningLevel.caution =>
+        'Rooster area is getting warm. Check water and airflow.',
+      SensorWarningLevel.warning =>
+        'Heat stress risk detected. Add ventilation, shade, and cool drinking water.',
+      SensorWarningLevel.danger =>
+        'Dangerous rooster environment. Reduce heat immediately and check roosters for panting.',
+      SensorWarningLevel.critical =>
+        'Emergency condition. Move roosters to cooler ventilated area if possible.',
+      SensorWarningLevel.normal =>
+        'Live sensor readings are within the rooster comfort range.',
+    };
+  }
+
   static List<AlertItem> _environmentAlerts(Esp32SensorReading reading) {
     final alerts = <AlertItem>[];
     final time = _timeLabelFor(reading.receivedAt);
-    final temperatureLevel = temperatureLevelFor(reading.temperatureC);
-    final humidityLevel = humidityLevelFor(reading.humidityPercent);
-    final combinedHeatLevel = combinedHeatLevelFor(
-      reading.temperatureC,
-      reading.humidityPercent,
+    final finalLevel = finalEnvironmentLevelFor(
+      temperature: reading.temperatureC,
+      humidity: reading.humidityPercent,
+      airPpm: reading.airQualityPpm,
+      dhtAvailable: reading.dhtAvailable,
+      airAvailable: reading.airAvailable,
     );
-    final airLevel = airLevelFor(reading.airQualityPpm);
-
-    // A disconnected DHT11 carries its last known value forward (see
-    // _mergeWithLastKnown) so the rest of the app has *something* to show —
-    // but that stale value must not keep raising fresh severity alerts once
-    // the sensor is no longer actually reporting it. The "not responding"
-    // alert below covers that case instead.
-    if (reading.dhtAvailable && temperatureLevel != SensorWarningLevel.normal) {
-      final temperature = reading.temperatureC.toStringAsFixed(1);
+    if (finalLevel != SensorWarningLevel.normal) {
       alerts.add(
         AlertItem(
-          title: 'Temperature ${temperatureLevel.label.toLowerCase()}',
-          message:
-              'Temperature is $temperature °C. ${_temperatureStatus(reading.temperatureC, humidity: reading.humidityPercent)}.',
-          severity: _alertSeverityFor(temperatureLevel),
-          category: 'Temperature',
-          time: time,
-        ),
-      );
-    }
-
-    if (reading.dhtAvailable && humidityLevel != SensorWarningLevel.normal) {
-      final humidity = reading.humidityPercent.toStringAsFixed(0);
-      alerts.add(
-        AlertItem(
-          title: 'Humidity ${humidityLevel.label.toLowerCase()}',
-          message:
-              'Humidity is $humidity%. ${_humidityStatus(reading.humidityPercent, temperature: reading.temperatureC)}.',
-          severity: _alertSeverityFor(humidityLevel),
-          category: 'Humidity',
-          time: time,
-        ),
-      );
-    }
-
-    final heatHumidityWarning =
-        reading.dhtAvailable &&
-        _hasHeatHumidityInteraction(
-          reading.temperatureC,
-          reading.humidityPercent,
-        ) &&
-        combinedHeatLevel.index >= SensorWarningLevel.warning.index;
-    if (heatHumidityWarning) {
-      final temperature = reading.temperatureC.toStringAsFixed(1);
-      final humidity = reading.humidityPercent.toStringAsFixed(0);
-      alerts.add(
-        AlertItem(
-          title: 'Heat and humidity ${combinedHeatLevel.label.toLowerCase()}',
-          message:
-              'The coop reached $temperature °C with $humidity% humidity. ${_combinedHeatStatus(combinedHeatLevel)}. Improve airflow and provide cool drinking water.',
-          severity: _alertSeverityFor(combinedHeatLevel),
+          title: 'Rooster environment ${finalLevel.label.toLowerCase()}',
+          message: _finalAlertMessage(finalLevel),
+          severity: _alertSeverityFor(finalLevel),
           category: 'Environment',
-          time: time,
-        ),
-      );
-    }
-
-    if (reading.airAvailable && airLevel != SensorWarningLevel.normal) {
-      alerts.add(
-        AlertItem(
-          title: 'Air pollution ${airLevel.label.toLowerCase()}',
-          message:
-              'Ammonia reading is ${reading.airQualityPpm} ppm. ${_airStatus(reading.airQualityPpm)}.',
-          severity: _alertSeverityFor(airLevel),
-          category: 'Air Pollution',
           time: time,
         ),
       );
@@ -711,7 +776,7 @@ class MonitorSnapshot {
       alerts.add(
         AlertItem(
           title: 'Environment stable',
-          message: 'Live sensor readings are within the rooster comfort range.',
+          message: _finalAlertMessage(SensorWarningLevel.normal),
           severity: AlertSeverity.info,
           category: 'System',
           time: time,

@@ -12,22 +12,32 @@ export function serviceRoleClient(): SupabaseClient {
   return createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 }
 
+// Verifies the caller's user JWT and returns the authenticated Auth user.
+export async function requireAuthenticatedUser(req: Request) {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) {
+    throw new HttpError(401, "Sign in before continuing.");
+  }
+
+  const anonClient = createClient(
+    SUPABASE_URL,
+    Deno.env.get("SUPABASE_ANON_KEY")!,
+    {
+      global: { headers: { Authorization: authHeader } },
+    },
+  );
+  const { data: { user }, error } = await anonClient.auth.getUser();
+  if (error || !user) {
+    throw new HttpError(401, "Sign in before continuing.");
+  }
+  return user;
+}
+
 // Verifies the caller's JWT (from the Authorization header Supabase passes
 // through automatically on `functions.invoke`) belongs to a signed-in admin.
 // Returns the caller's own uid on success.
 export async function requireAdmin(req: Request): Promise<string> {
-  const authHeader = req.headers.get("Authorization");
-  if (!authHeader) {
-    throw new HttpError(401, "Sign in as an administrator.");
-  }
-
-  const anonClient = createClient(SUPABASE_URL, Deno.env.get("SUPABASE_ANON_KEY")!, {
-    global: { headers: { Authorization: authHeader } },
-  });
-  const { data: { user }, error } = await anonClient.auth.getUser();
-  if (error || !user) {
-    throw new HttpError(401, "Sign in as an administrator.");
-  }
+  const user = await requireAuthenticatedUser(req);
 
   const admin = serviceRoleClient();
   const { data: profile } = await admin

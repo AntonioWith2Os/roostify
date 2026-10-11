@@ -128,4 +128,107 @@ void main() {
       },
     );
   });
+
+  group('final environment alert rule', () {
+    test(
+      'uses the highest available temperature, humidity, heat, or air risk',
+      () {
+        expect(
+          MonitorSnapshot.finalEnvironmentLevelFor(
+            temperature: 27,
+            humidity: 60,
+            airPpm: 0,
+          ),
+          SensorWarningLevel.caution,
+        );
+        expect(
+          MonitorSnapshot.finalEnvironmentLevelFor(
+            temperature: 25,
+            humidity: 65,
+            airPpm: 25,
+          ),
+          SensorWarningLevel.danger,
+        );
+      },
+    );
+
+    test('raises one level when heat and air are both warning or higher', () {
+      expect(
+        MonitorSnapshot.finalEnvironmentLevelFor(
+          temperature: 28,
+          humidity: 75,
+          airPpm: 20,
+        ),
+        SensorWarningLevel.danger,
+      );
+      expect(
+        MonitorSnapshot.finalEnvironmentLevelFor(
+          temperature: 32,
+          humidity: 90,
+          airPpm: 50,
+        ),
+        SensorWarningLevel.critical,
+      );
+    });
+
+    test('does not use stale values from unavailable sensors', () {
+      expect(
+        MonitorSnapshot.finalEnvironmentLevelFor(
+          temperature: 35,
+          humidity: 90,
+          airPpm: 50,
+          dhtAvailable: false,
+          airAvailable: false,
+        ),
+        SensorWarningLevel.normal,
+      );
+    });
+
+    test('uses each prescribed farmer message for the final alert', () {
+      MonitorSnapshot monitorFor({
+        required double temperature,
+        required double humidity,
+        required int airPpm,
+      }) {
+        return MonitorSnapshot.empty().withEnvironmentReading(
+          Esp32SensorReading(
+            temperatureC: temperature,
+            humidityPercent: humidity,
+            airQualityPpm: airPpm,
+            receivedAt: DateTime(2026, 10, 9),
+          ),
+        );
+      }
+
+      final caution = monitorFor(temperature: 27, humidity: 60, airPpm: 0);
+      expect(caution.finalEnvironmentLevel, SensorWarningLevel.caution);
+      expect(
+        caution.alerts.single.message,
+        'Rooster area is getting warm. Check water and airflow.',
+      );
+
+      final warning = monitorFor(temperature: 30, humidity: 60, airPpm: 0);
+      expect(warning.finalEnvironmentLevel, SensorWarningLevel.warning);
+      expect(
+        warning.alerts.single.message,
+        'Heat stress risk detected. Add ventilation, shade, and cool drinking water.',
+      );
+
+      final danger = monitorFor(temperature: 28, humidity: 75, airPpm: 20);
+      expect(danger.finalEnvironmentLevel, SensorWarningLevel.danger);
+      expect(danger.alerts, hasLength(1));
+      expect(danger.alerts.single.title, 'Rooster environment danger');
+      expect(
+        danger.alerts.single.message,
+        'Dangerous rooster environment. Reduce heat immediately and check roosters for panting.',
+      );
+
+      final critical = monitorFor(temperature: 35, humidity: 60, airPpm: 0);
+      expect(critical.finalEnvironmentLevel, SensorWarningLevel.critical);
+      expect(
+        critical.alerts.single.message,
+        'Emergency condition. Move roosters to cooler ventilated area if possible.',
+      );
+    });
+  });
 }

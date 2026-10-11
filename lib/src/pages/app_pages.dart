@@ -6716,6 +6716,9 @@ class _CredentialsEditPageState extends State<CredentialsEditPage> {
 
   @override
   Widget build(BuildContext context) {
+    final temporaryPasswordStatus = widget.user.temporaryPasswordStatusLabel(
+      DateTime.now(),
+    );
     return Scaffold(
       appBar: AppBar(
         title: const Text('Username & Password'),
@@ -6740,6 +6743,38 @@ class _CredentialsEditPageState extends State<CredentialsEditPage> {
             controller: _usernameController,
             readOnly: true,
           ),
+          if (temporaryPasswordStatus != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(13),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE5A326).withValues(alpha: .09),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: const Color(0xFFE5A326).withValues(alpha: .35),
+                ),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(
+                    Icons.lock_clock_outlined,
+                    color: Color(0xFFE5A326),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      temporaryPasswordStatus == 'Password change available'
+                          ? 'Your temporary password may now be changed.'
+                          : 'Temporary password lock: $temporaryPasswordStatus. The seven-day period starts at your first login.',
+                      style: const TextStyle(height: 1.35),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
           _ProfileFormField(
             icon: Icons.lock_outline_rounded,
             label: 'Current Password',
@@ -6957,7 +6992,11 @@ class _AdminPageHeader extends StatelessWidget {
 /// while this page is already open shows up immediately, instead of only
 /// reflecting whatever was active the moment the alert bell was tapped.
 class AlertsPage extends StatelessWidget {
-  const AlertsPage({super.key, required this.controller, required this.alertsOf});
+  const AlertsPage({
+    super.key,
+    required this.controller,
+    required this.alertsOf,
+  });
 
   final AppController controller;
   final List<AlertItem> Function() alertsOf;
@@ -6970,9 +7009,7 @@ class AlertsPage extends StatelessWidget {
         appBar: AppBar(title: const Text('Warning Alerts')),
         body: ListView(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-          children: alertsOf()
-              .map((alert) => AlertCard(alert: alert))
-              .toList(),
+          children: alertsOf().map((alert) => AlertCard(alert: alert)).toList(),
         ),
       ),
     );
@@ -7062,7 +7099,10 @@ class _SensorReadingLogRow extends StatelessWidget {
           ),
           Text(
             entry.airAvailable ? '${entry.airPpm} ppm' : 'MQ135 offline',
-            style: TextStyle(color: colors.mutedText, fontWeight: FontWeight.w700),
+            style: TextStyle(
+              color: colors.mutedText,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ],
       ),

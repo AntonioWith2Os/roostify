@@ -430,6 +430,12 @@ class _NewAdminUsersState extends State<_NewAdminUsers> {
   String? _error;
 
   @override
+  void initState() {
+    super.initState();
+    unawaited(widget.controller.refreshAdminUsers());
+  }
+
+  @override
   void dispose() {
     search.dispose();
     _name.dispose();
@@ -619,7 +625,7 @@ class _NewAdminUsersState extends State<_NewAdminUsers> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Password is locked for 7 days.\nUser can change password after the lock period.',
+                      'The temporary-password lock starts at the user\'s first login and lasts 7 days.',
                       style: TextStyle(
                         fontSize: 12,
                         height: 1.35,
@@ -937,7 +943,7 @@ class _UserCreatedDialog extends StatelessWidget {
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'The temporary password is locked for 7 days. Share these credentials securely with the new user.',
+                      'The temporary-password lock starts when this user first logs in and lasts 7 days. Share these credentials securely.',
                       style: TextStyle(fontSize: 12, height: 1.35),
                     ),
                   ),
@@ -1396,6 +1402,9 @@ class _UserRow extends StatelessWidget {
   final AppController controller;
   @override
   Widget build(BuildContext context) {
+    final temporaryPasswordStatus = user.temporaryPasswordStatusLabel(
+      DateTime.now(),
+    );
     final active = user.cameraAccessEnabled;
     final cctvCount = user.liveCctvStreams.isEmpty
         ? user.cctvs.length
@@ -1514,7 +1523,7 @@ class _UserRow extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 8),
-                if (user.tempPasswordIssued)
+                if (temporaryPasswordStatus != null)
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 7,
@@ -1527,9 +1536,12 @@ class _UserRow extends StatelessWidget {
                         color: const Color(0xFF388CE8).withValues(alpha: .25),
                       ),
                     ),
-                    child: const Text(
-                      '7 days remaining',
-                      style: TextStyle(fontSize: 10, color: Color(0xFF66A8F0)),
+                    child: Text(
+                      temporaryPasswordStatus,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        color: Color(0xFF66A8F0),
+                      ),
                     ),
                   ),
               ],
@@ -1764,16 +1776,23 @@ class _UserActions extends StatelessWidget {
                     _UserInfoRow(
                       icon: Icons.calendar_today_outlined,
                       label: 'Account Created',
-                      value: user.firstLoginAt == null
-                          ? 'Account active'
-                          : _shortDate(user.firstLoginAt!),
+                      value: user.accountCreatedAt == null
+                          ? 'Not recorded'
+                          : _shortDate(user.accountCreatedAt!),
                     ),
                     _UserInfoRow(
                       icon: Icons.schedule_outlined,
-                      label: 'Last Login',
-                      value: user.firstLoginAt == null
+                      label: 'Temporary Password Lock',
+                      value:
+                          user.temporaryPasswordStatusLabel(DateTime.now()) ??
+                          'No temporary password lock',
+                    ),
+                    _UserInfoRow(
+                      icon: Icons.login_outlined,
+                      label: 'First Login After Issue',
+                      value: user.temporaryPasswordFirstLoginAt == null
                           ? 'Not recorded'
-                          : _shortDate(user.firstLoginAt!),
+                          : _shortDate(user.temporaryPasswordFirstLoginAt!),
                     ),
                     _UserInfoRow(
                       icon: Icons.description_outlined,

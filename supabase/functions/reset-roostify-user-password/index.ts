@@ -9,21 +9,32 @@ import {
 } from "../_shared/http.ts";
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
   if (req.method !== "POST") return errorResponse(405, "Method not allowed");
 
   try {
     const callerId = await requireAdmin(req);
 
-    const data = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+    const data = (await req.json().catch(() => ({}))) as Record<
+      string,
+      unknown
+    >;
     const uid = validatedUid(data);
     const temporaryPassword = requiredString(data, "temporaryPassword", 128);
 
     if (uid === callerId) {
-      throw new HttpError(400, "Use the profile security page to change your own password.");
+      throw new HttpError(
+        400,
+        "Use the profile security page to change your own password.",
+      );
     }
     if (temporaryPassword.length < 8) {
-      throw new HttpError(400, "Temporary password must contain at least 8 characters.");
+      throw new HttpError(
+        400,
+        "Temporary password must contain at least 8 characters.",
+      );
     }
 
     const admin = serviceRoleClient();
@@ -37,27 +48,72 @@ Deno.serve(async (req) => {
       throw new HttpError(400, "Only standard users can be reset.");
     }
 
-    const { error: updateAuthErr } = await admin.auth.admin.updateUserById(uid, {
-      password: temporaryPassword,
-    });
+    const { error: updateAuthErr } = await admin.auth.admin.updateUserById(
+      uid,
+      {
+        password: temporaryPassword,
+      },
+    );
     if (updateAuthErr) {
-      console.error("reset-roostify-user-password: updateUserById failed", updateAuthErr);
+      console.error(
+        "reset-roostify-user-password: updateUserById failed",
+        updateAuthErr,
+      );
       throw new HttpError(500, "The password could not be reset.");
     }
 
-    // The profiles_enforce_update_rules trigger sets updated_at itself.
+    // The profiles_enforce_update_rules trigger sets updated_at itself. A
+    // reset is a fresh temporary-password issuance, so the seven-day period
+    // starts only when the user next completes a login.
+    const resetAt = new Date().toISOString();
     const { error: updateProfileErr } = await admin
       .from("profiles")
-      .update({ password_reset_at: new Date().toISOString() })
+      .update({
+        password_reset_at: resetAt,
+        temporary_password_issued_at: resetAt,
+        temporary_password_first_login_at: null,
+        password_change_available_at: null,
+        temporary_password_changed_at: null,
+      })
       .eq("id", uid);
     if (updateProfileErr) {
-      console.error("reset-roostify-user-password: profile update failed", updateProfileErr);
+      console.error(
+        "reset-roostify-user-password: profile update failed",
+        updateProfileErr,
+      );
       throw new HttpError(500, "The password could not be reset.");
     }
 
-    return jsonResponse(200, { ok: true });
+    const { data: policy, error: policyErr } = await admin
+      .from("profiles")
+      .select(
+        "created_at, temporary_password_issued_at, temporary_password_first_login_at, password_change_available_at, temporary_password_changed_at",
+      )
+      .eq("id", uid)
+      .maybeSingle();
+    if (policyErr || !policy) {
+      console.error(
+        "reset-roostify-user-password: policy read failed",
+        policyErr,
+      );
+      throw new HttpError(
+        500,
+        "The password was reset, but its lock state could not be loaded.",
+      );
+    }
+
+    return jsonResponse(200, {
+      ok: true,
+      accountCreatedAt: policy.created_at,
+      temporaryPasswordIssuedAt: policy.temporary_password_issued_at,
+      temporaryPasswordFirstLoginAt: policy.temporary_password_first_login_at,
+      passwordChangeAvailableAt: policy.password_change_available_at,
+      temporaryPasswordChangedAt: policy.temporary_password_changed_at,
+    });
   } catch (error) {
-    if (error instanceof HttpError) return errorResponse(error.status, error.message);
+    if (error instanceof HttpError) {
+      return errorResponse(error.status, error.message);
+    }
     console.error("reset-roostify-user-password: unexpected error", error);
     return errorResponse(500, "The password could not be reset.");
   }

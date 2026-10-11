@@ -63,6 +63,7 @@ Deno.serve(async (req) => {
       throw new HttpError(500, "The account could not be created.");
     }
 
+    const temporaryPasswordIssuedAt = new Date().toISOString();
     const profile = {
       id: created.user.id,
       username,
@@ -75,6 +76,10 @@ Deno.serve(async (req) => {
       facebook_contact: "",
       farm_name: farmName,
       short_bio: "",
+      temporary_password_issued_at: temporaryPasswordIssuedAt,
+      temporary_password_first_login_at: null,
+      password_change_available_at: null,
+      temporary_password_changed_at: null,
     };
 
     const { data: savedProfile, error: insertErr } = await admin

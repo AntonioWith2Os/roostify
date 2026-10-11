@@ -2,9 +2,9 @@
 
 The app runs entirely on Supabase: Postgres holds profiles and farm sensor
 data, Supabase Auth handles sign-in, and Edge Functions cover the
-privileged admin actions (create/delete/reset-password user, and the
-ESP32's sensor-ingestion endpoint). There is no Firebase project involved
-anymore.
+privileged account actions (create/delete/reset-password user, first-login
+temporary-password locking, and password changes) and the ESP32's
+sensor-ingestion endpoint. There is no Firebase project involved anymore.
 
 ## 1. Create the project
 
@@ -19,9 +19,9 @@ From **Project Settings → API**, copy:
 
 ## 2. Apply the schema
 
-The schema lives at `supabase/migrations/0001_init.sql` and creates
-`profiles`, `farm_status`, `farm_sensor_readings`, their Row Level Security
-policies, and enables Realtime on `farm_status`.
+The migrations create `profiles`, `farm_status`, `farm_sensor_readings`,
+their Row Level Security policies, the server-owned temporary-password lock
+timestamps, and Realtime on `farm_status`.
 
 ```bash
 npx -y supabase@latest login          # opens a browser to authenticate
@@ -41,6 +41,8 @@ npx -y supabase@latest secrets set DEVICE_INGEST_KEY=<the value above> \
 npx -y supabase@latest functions deploy create-roostify-user --project-ref <ref>
 npx -y supabase@latest functions deploy delete-roostify-user --project-ref <ref>
 npx -y supabase@latest functions deploy reset-roostify-user-password --project-ref <ref>
+npx -y supabase@latest functions deploy record-temporary-password-first-login --project-ref <ref>
+npx -y supabase@latest functions deploy change-roostify-password --project-ref <ref>
 npx -y supabase@latest functions deploy ingest-sensor-reading --no-verify-jwt --project-ref <ref>
 ```
 
@@ -91,6 +93,10 @@ only to point at a different Supabase project (e.g. your own fork).
 - Add User, Remove User, and Reset Password call the Edge Functions above
   (using the Postgres service role) so the active admin session is
   preserved and Row Level Security is never a blocker for those actions.
+- For an admin-issued temporary password, the first completed app login is
+  written by Supabase using server time. The server then permits a replacement
+  only after seven days; the mobile app displays the same server-issued
+  countdown on every device.
 - The ESP32 posts directly to `ingest-sensor-reading` over Wi-Fi — the app
   never relays sensor data itself, it only reads `farm_status` live via
   Supabase Realtime. Each update replaces `farm_status`; history is sampled

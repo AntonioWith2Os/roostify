@@ -63,23 +63,27 @@ class SupabaseBackendService {
         .eq('id', uid);
   }
 
-  Future<void> updatePassword({
+  /// Registers a temporary-password account's first app login with the
+  /// server. The function is idempotent and returns the authoritative policy
+  /// timestamps for this account.
+  Future<Map<String, dynamic>> recordTemporaryPasswordFirstLogin() async {
+    final response = await _client.functions.invoke(
+      'record-temporary-password-first-login',
+    );
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
+  /// Changes the signed-in user's password through the server-owned policy
+  /// check instead of trusting a device-local timer.
+  Future<Map<String, dynamic>> changePassword({
     required String currentPassword,
     required String newPassword,
   }) async {
-    final user = currentUser;
-    final email = user?.email;
-    if (user == null || email == null) {
-      throw const AuthException('Sign in again before changing your password.');
-    }
-    // Supabase has no separate reauthenticate call - verifying the current
-    // password by signing in again is the equivalent gate before allowing
-    // the change.
-    await _client.auth.signInWithPassword(
-      email: email,
-      password: currentPassword,
+    final response = await _client.functions.invoke(
+      'change-roostify-password',
+      body: {'currentPassword': currentPassword, 'newPassword': newPassword},
     );
-    await _client.auth.updateUser(UserAttributes(password: newPassword));
+    return Map<String, dynamic>.from(response.data as Map);
   }
 
   Future<Map<String, dynamic>> createUser({
@@ -110,11 +114,15 @@ class SupabaseBackendService {
     await _client.functions.invoke('delete-roostify-user', body: {'uid': uid});
   }
 
-  Future<void> resetUserPassword(String uid, String temporaryPassword) async {
-    await _client.functions.invoke(
+  Future<Map<String, dynamic>> resetUserPassword(
+    String uid,
+    String temporaryPassword,
+  ) async {
+    final response = await _client.functions.invoke(
       'reset-roostify-user-password',
       body: {'uid': uid, 'temporaryPassword': temporaryPassword},
     );
+    return Map<String, dynamic>.from(response.data as Map);
   }
 
   /// Latest environment reading for one farm, written by the ESP32 itself
