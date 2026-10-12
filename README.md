@@ -115,6 +115,24 @@ are enabled on Android and iOS. The edge-gateway and cloud-video-server path
 remains available for installations that keep camera credentials off mobile
 devices.
 
+## Web portal
+
+The web portal is a separate browser-first entry point. It does not modify the
+legacy `website/` directory.
+
+```bash
+flutter run -d chrome --target lib/web_main.dart
+flutter build web --target lib/web_main.dart --output build/roostify_web
+```
+
+The web interface includes the farm dashboard, browser-friendly camera
+management, manual-scan review, alerts, guides, support messaging, and profile
+preferences. It deliberately does not attempt direct BLE, RTSP, device-camera,
+or on-device-TFLite access because browsers do not provide those mobile-native
+capabilities. Publish camera streams through HTTPS HLS or WebRTC for browser
+playback, and connect the portal to the same Supabase-backed data services for
+production data.
+
 ## License
 
 All rights reserved. See [LICENSE](LICENSE).
